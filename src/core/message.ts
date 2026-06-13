@@ -1,0 +1,80 @@
+import type {
+  ArtifactId,
+  CheckpointId,
+  ContextPackId,
+  MemoryId,
+  MessageId,
+  RoleId,
+  SchemaVersion,
+  TaskId,
+  ThreadId,
+  Timestamp
+} from "./ids";
+
+export type AgentMessageType =
+  | "ask_help"
+  | "review_request"
+  | "proposal"
+  | "critique"
+  | "handoff"
+  | "status_update"
+  | "decision_request"
+  | "decision_response";
+
+export interface MessageRecipient {
+  agent_id?: string;
+  role_id?: RoleId;
+}
+
+export interface Message {
+  message_id: MessageId;
+  thread_id: ThreadId;
+  from_agent_id: string;
+  to: MessageRecipient[];
+  type: AgentMessageType;
+  payload: Record<string, unknown>;
+  artifact_refs?: ArtifactId[];
+  checkpoint_ref?: CheckpointId;
+  causal_event_id?: string;
+  requires_ack: boolean;
+  deadline_seconds?: number;
+  created_at: Timestamp;
+  schema_version: SchemaVersion;
+}
+
+export interface MessageRef {
+  message_id: MessageId;
+  thread_id: ThreadId;
+  schema_version: SchemaVersion;
+}
+
+export interface MemoryPolicy {
+  allow_in_driver_context: boolean;
+  allow_in_council_proposer: boolean;
+  allow_in_council_judge: boolean;
+  max_memory_items: number;
+}
+
+export interface RoleProfileRef {
+  role_id: RoleId;
+  persona_ref: string;
+  skill_refs: string[];
+  capability_tags: string[];
+  memory_policy: MemoryPolicy;
+  schema_version: SchemaVersion;
+}
+
+export interface MemoryRef {
+  memory_id: MemoryId;
+  kind: "experience" | "skill" | "persona" | "project" | "team";
+  uri: string;
+  summary?: string;
+  schema_version: SchemaVersion;
+}
+
+export interface ContextPackRef {
+  context_pack_id: ContextPackId;
+  uri: string;
+  task_id?: TaskId;
+  schema_version: SchemaVersion;
+}

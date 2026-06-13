@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "rootDir": ".",
+    "outDir": "dist",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "eslint.config.js", "prettier.config.js"]
+}
