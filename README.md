@@ -25,20 +25,18 @@ The first version uses mock implementations, but the objects, interfaces, event 
 
 This is intentionally a single-package TypeScript project. It does not use `packages/core`, `packages/runtime`, Nx, Turborepo, or a multi-package workspace. The v0 goal is to keep TypeScript project complexity low while the team proves the first end-to-end flow.
 
-The RFC files live beside this repository in `../RFC`. They are design inputs and should not be migrated into this repository's docs directory.
+The RFC files live beside this repository in `../RFC`. They are design inputs and should not be migrated into this repository.
 
 ```text
 src/
   core/         shared contracts only
   coordinator/  Direction C coordination layer (task state, checkpoint, stores)
+  council/      Direction C council contracts plus MockCouncil
   driver/       Direction A driver contract plus MockDriver
   memory/       Direction B context pack contract plus MockMemoryProvider
   hook/         Direction D.1 hook system
   gate/         Direction D.2 gate evaluation system
-  council/      Direction C council contracts plus MockCouncil
   examples/     runnable demos
-
-test/           module-level Vitest coverage
 ```
 
 ## Install And Run
@@ -100,7 +98,3 @@ Direction D.1 should work in `src/hook`.
 Direction D.2 should work in `src/gate`.
 
 Shared object changes belong in `src/core` and should be reviewed by the relevant consuming direction.
-
-## Next Specs
-
-See `SPEC-TODO.md` for the concrete spec deliverables each direction should add next. This repository does not contain empty placeholder spec files.
