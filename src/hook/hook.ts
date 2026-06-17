@@ -1,7 +1,14 @@
-import { SCHEMA_VERSION, createId, nowTimestamp, type Event } from "../core";
-import { DecisionAggregator, type GateDecision, type GateRequest, type GateResult, type GateRunner, MockAllowGate } from "../gate";
+import { SCHEMA_VERSION, createId, nowTimestamp, type Event } from '../core';
+import {
+  DecisionAggregator,
+  type GateDecision,
+  type GateRequest,
+  type GateResult,
+  type GateRunner,
+  MockAllowGate,
+} from '../gate';
 
-export type HookPoint = "task.completed" | "before_merge";
+export type HookPoint = 'task.completed' | 'before_merge';
 
 export interface HookEvent extends Event {
   event_type: HookPoint | (string & {});
@@ -54,9 +61,9 @@ export class HookEngine {
         matched: false,
         gate_requests: [],
         gate_results: [],
-        final_decision: "allow",
+        final_decision: 'allow',
         created_at: nowTimestamp(),
-        schema_version: SCHEMA_VERSION
+        schema_version: SCHEMA_VERSION,
       };
     }
 
@@ -78,7 +85,7 @@ export class HookEngine {
       gate_results: gateResults,
       final_decision: this.aggregator.aggregate(gateResults).decision,
       created_at: nowTimestamp(),
-      schema_version: SCHEMA_VERSION
+      schema_version: SCHEMA_VERSION,
     };
   }
 
@@ -96,9 +103,9 @@ export class HookEngine {
         event_type: event.event_type,
         task_id: event.task_id,
         run_id: event.run_id,
-        ...event.payload
+        ...event.payload,
       },
-      schema_version: SCHEMA_VERSION
+      schema_version: SCHEMA_VERSION,
     };
   }
 }
@@ -107,33 +114,33 @@ export function createDefaultHookEngine(): HookEngine {
   return new HookEngine({
     bindings: [
       {
-        hook_point: "task.completed",
-        gate_id: "mock-allow-gate",
+        hook_point: 'task.completed',
+        gate_id: 'mock-allow-gate',
         priority: 100,
         denying: true,
         timeout_ms: 30000,
-        schema_version: SCHEMA_VERSION
+        schema_version: SCHEMA_VERSION,
       },
       {
-        hook_point: "before_merge",
-        gate_id: "mock-allow-gate",
+        hook_point: 'before_merge',
+        gate_id: 'mock-allow-gate',
         priority: 100,
         denying: true,
         timeout_ms: 30000,
-        schema_version: SCHEMA_VERSION
-      }
+        schema_version: SCHEMA_VERSION,
+      },
     ],
-    gates: [new MockAllowGate("mock-allow-gate")]
+    gates: [new MockAllowGate('mock-allow-gate')],
   });
 }
 
 export function createHookEvent(
-  input: Omit<HookEvent, "event_id" | "created_at" | "schema_version">
+  input: Omit<HookEvent, 'event_id' | 'created_at' | 'schema_version'>,
 ): HookEvent {
   return {
     ...input,
-    event_id: createId("event"),
+    event_id: createId('event'),
     created_at: nowTimestamp(),
-    schema_version: SCHEMA_VERSION
+    schema_version: SCHEMA_VERSION,
   };
 }

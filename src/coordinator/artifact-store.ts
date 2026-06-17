@@ -1,4 +1,4 @@
-import type { ArtifactId, ArtifactRef } from "../core";
+import type { ArtifactId, ArtifactRef } from '../core';
 
 export class InMemoryArtifactStore {
   private readonly artifacts = new Map<ArtifactId, ArtifactRef>();

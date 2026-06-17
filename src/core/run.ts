@@ -5,18 +5,18 @@ import type {
   RunId,
   SchemaVersion,
   TaskId,
-  Timestamp
-} from "./ids";
+  Timestamp,
+} from './ids';
 
 export type RunStatus =
-  | "created"
-  | "running"
-  | "waiting_gate"
-  | "waiting_council"
-  | "merging"
-  | "completed"
-  | "failed"
-  | "cancelled";
+  | 'created'
+  | 'running'
+  | 'waiting_gate'
+  | 'waiting_council'
+  | 'merging'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
 
 export interface Run {
   run_id: RunId;
@@ -34,7 +34,7 @@ export interface AgentSession {
   session_id: DriverSessionId;
   run_id: RunId;
   task_id: TaskId;
-  status: "starting" | "running" | "interrupted" | "closed" | "failed";
+  status: 'starting' | 'running' | 'interrupted' | 'closed' | 'failed';
   created_at: Timestamp;
   updated_at: Timestamp;
   schema_version: SchemaVersion;

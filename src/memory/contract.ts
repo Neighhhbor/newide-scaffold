@@ -5,8 +5,8 @@ import type {
   RoleProfileRef,
   SchemaVersion,
   TaskId,
-  Timestamp
-} from "../core";
+  Timestamp,
+} from '../core';
 
 export interface ContextPack {
   context_pack_id: ContextPackId;

@@ -1,21 +1,21 @@
-import type { AgentId, RoleId, SchemaVersion, TaskId, Timestamp } from "./ids";
+import type { AgentId, RoleId, SchemaVersion, TaskId, Timestamp } from './ids';
 
-export type RiskLevel = "low" | "medium" | "high" | "critical";
+export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 
 export type TaskStatus =
-  | "created"
-  | "triaged"
-  | "ready"
-  | "claimed"
-  | "running"
-  | "waiting_help"
-  | "blocked"
-  | "escalated"
-  | "reviewing"
-  | "merging"
-  | "completed"
-  | "failed"
-  | "cancelled";
+  | 'created'
+  | 'triaged'
+  | 'ready'
+  | 'claimed'
+  | 'running'
+  | 'waiting_help'
+  | 'blocked'
+  | 'escalated'
+  | 'reviewing'
+  | 'merging'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
 
 export interface TaskBudget {
   max_tokens?: number;

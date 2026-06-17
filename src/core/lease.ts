@@ -1,7 +1,7 @@
-import type { LeaseId, SchemaVersion, Timestamp } from "./ids";
+import type { LeaseId, SchemaVersion, Timestamp } from './ids';
 
-export type LeaseScope = "read" | "write";
-export type LeaseStatus = "active" | "released" | "expired" | "conflicted";
+export type LeaseScope = 'read' | 'write';
+export type LeaseStatus = 'active' | 'released' | 'expired' | 'conflicted';
 
 export interface FileLease {
   lease_id: LeaseId;

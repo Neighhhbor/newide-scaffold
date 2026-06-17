@@ -1,17 +1,17 @@
-import type { ArtifactId, DriverRunResultId, SchemaVersion, TaskId, Timestamp } from "./ids";
+import type { ArtifactId, DriverRunResultId, SchemaVersion, TaskId, Timestamp } from './ids';
 
 export type ArtifactType =
-  | "patch"
-  | "diff"
-  | "test_log"
-  | "review"
-  | "decision_packet"
-  | "checkpoint"
-  | "context"
-  | "transcript"
-  | "driver_result"
-  | "audit"
-  | "merge_authorization";
+  | 'patch'
+  | 'diff'
+  | 'test_log'
+  | 'review'
+  | 'decision_packet'
+  | 'checkpoint'
+  | 'context'
+  | 'transcript'
+  | 'driver_result'
+  | 'audit'
+  | 'merge_authorization';
 
 export interface ArtifactRef {
   artifact_id: ArtifactId;

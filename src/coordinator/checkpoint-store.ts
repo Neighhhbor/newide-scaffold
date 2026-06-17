@@ -1,4 +1,4 @@
-import type { Checkpoint, CheckpointId } from "../core";
+import type { Checkpoint, CheckpointId } from '../core';
 
 export class InMemoryCheckpointStore {
   private readonly checkpoints = new Map<CheckpointId, Checkpoint>();

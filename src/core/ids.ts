@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = "v0" as const;
+export const SCHEMA_VERSION = 'v0' as const;
 
 export type SchemaVersion = typeof SCHEMA_VERSION;
 export type Timestamp = string;
@@ -34,5 +34,5 @@ export function nowTimestamp(): Timestamp {
 
 export function createId(prefix: string): string {
   sequence += 1;
-  return `${prefix}_${sequence.toString().padStart(4, "0")}`;
+  return `${prefix}_${sequence.toString().padStart(4, '0')}`;
 }

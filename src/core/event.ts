@@ -1,20 +1,20 @@
-import type { EventId, RunId, SchemaVersion, TaskId, Timestamp } from "./ids";
+import type { EventId, RunId, SchemaVersion, TaskId, Timestamp } from './ids';
 
 export type EventType =
-  | "task.created"
-  | "run.created"
-  | "driver.session_started"
-  | "memory.context_pack_built"
-  | "driver.run_result"
-  | "artifact.registered"
-  | "task.completed"
-  | "hook.matched"
-  | "gate.requested"
-  | "gate.result"
-  | "council.decision"
-  | "merge.authorization"
-  | "checkpoint.saved"
-  | "run.completed"
+  | 'task.created'
+  | 'run.created'
+  | 'driver.session_started'
+  | 'memory.context_pack_built'
+  | 'driver.run_result'
+  | 'artifact.registered'
+  | 'task.completed'
+  | 'hook.matched'
+  | 'gate.requested'
+  | 'gate.result'
+  | 'council.decision'
+  | 'merge.authorization'
+  | 'checkpoint.saved'
+  | 'run.completed'
   | (string & {});
 
 export interface Event {

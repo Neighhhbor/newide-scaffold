@@ -1,2 +1,2 @@
-export * from "./contract";
-export * from "./mock-memory";
+export * from './contract';
+export * from './mock-memory';

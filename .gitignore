@@ -1,4 +1,25 @@
+# deps & build
 node_modules/
 dist/
+build/
 coverage/
+*.tsbuildinfo
+.vite/
+
+# env & secrets —— 永远不要进仓
+.env
+.env.*
+!.env.example
+
+# 本地状态 / 会话转储 / 归档
+*.session.json
+my-session.json
+*.zip
+*.tar.gz
+*.log
+
+# editor & OS
 .DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json

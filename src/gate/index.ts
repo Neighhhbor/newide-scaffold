@@ -1,3 +1,3 @@
-export * from "./gate";
-export * from "./aggregator";
-export * from "./mock-gate";
+export * from './gate';
+export * from './aggregator';
+export * from './mock-gate';

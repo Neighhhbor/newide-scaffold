@@ -1,6 +1,6 @@
-import type { GateResultId, SchemaVersion, Timestamp } from "../core";
+import type { GateResultId, SchemaVersion, Timestamp } from '../core';
 
-export type GateDecision = "allow" | "deny" | "ask" | "defer";
+export type GateDecision = 'allow' | 'deny' | 'ask' | 'defer';
 
 export interface GateRequest {
   gate_id: string;
