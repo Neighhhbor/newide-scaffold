@@ -72,11 +72,11 @@ pnpm example:basic
 Cross-module imports should go through module entrypoints:
 
 ```ts
-import { Task, Event } from "../core";
-import { MockDriver } from "../driver";
-import { MockMemoryProvider } from "../memory";
-import { HookEngine } from "../hook";
-import { MockAllowGate } from "../gate";
+import { Task, Event } from '../core';
+import { MockDriver } from '../driver';
+import { MockMemoryProvider } from '../memory';
+import { HookEngine } from '../hook';
+import { MockAllowGate } from '../gate';
 ```
 
 Avoid importing another module's internal files directly. For example, prefer `../memory` over `../memory/mock-memory`.

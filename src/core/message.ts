@@ -8,18 +8,18 @@ import type {
   SchemaVersion,
   TaskId,
   ThreadId,
-  Timestamp
-} from "./ids";
+  Timestamp,
+} from './ids';
 
 export type AgentMessageType =
-  | "ask_help"
-  | "review_request"
-  | "proposal"
-  | "critique"
-  | "handoff"
-  | "status_update"
-  | "decision_request"
-  | "decision_response";
+  | 'ask_help'
+  | 'review_request'
+  | 'proposal'
+  | 'critique'
+  | 'handoff'
+  | 'status_update'
+  | 'decision_request'
+  | 'decision_response';
 
 export interface MessageRecipient {
   agent_id?: string;
@@ -66,7 +66,7 @@ export interface RoleProfileRef {
 
 export interface MemoryRef {
   memory_id: MemoryId;
-  kind: "experience" | "skill" | "persona" | "project" | "team";
+  kind: 'experience' | 'skill' | 'persona' | 'project' | 'team';
   uri: string;
   summary?: string;
   schema_version: SchemaVersion;

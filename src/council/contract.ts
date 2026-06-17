@@ -1,4 +1,4 @@
-import type { ArtifactId, RunId, SchemaVersion, TaskId, Timestamp } from "../core";
+import type { ArtifactId, RunId, SchemaVersion, TaskId, Timestamp } from '../core';
 
 export interface Proposal {
   proposal_id: string;
@@ -14,7 +14,7 @@ export interface Review {
   review_id: string;
   proposal_id: string;
   reviewer_id: string;
-  verdict: "approve" | "reject" | "needs_revision";
+  verdict: 'approve' | 'reject' | 'needs_revision';
   reason: string;
   created_at: Timestamp;
   schema_version: SchemaVersion;
@@ -34,7 +34,7 @@ export interface CouncilDecision {
   run_id: RunId;
   task_id: TaskId;
   selected_proposal_id?: string;
-  verdict: "accept" | "reject" | "defer";
+  verdict: 'accept' | 'reject' | 'defer';
   reason: string;
   evidence_refs: string[];
   created_at: Timestamp;
@@ -55,7 +55,7 @@ export interface CouncilProvider {
 
 export async function runCouncilRound(
   provider: CouncilProvider,
-  input: CouncilRoundInput
+  input: CouncilRoundInput,
 ): Promise<CouncilDecision> {
   return provider.runCouncilRound(input);
 }

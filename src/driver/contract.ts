@@ -6,8 +6,8 @@ import type {
   RunId,
   SchemaVersion,
   TaskId,
-  Timestamp
-} from "../core";
+  Timestamp,
+} from '../core';
 
 export interface DriverCapabilities {
   supports_acp_extension: boolean;
@@ -29,7 +29,7 @@ export interface DriverPrompt {
 export interface DriverToolEvent {
   tool_event_id: string;
   tool_name: string;
-  status: "pending" | "in_progress" | "completed" | "failed";
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
   summary: string;
   created_at: Timestamp;
   schema_version: SchemaVersion;
@@ -41,7 +41,7 @@ export interface DriverError {
   retryable: boolean;
 }
 
-export type DriverRunStatus = "succeeded" | "failed" | "cancelled" | "interrupted";
+export type DriverRunStatus = 'succeeded' | 'failed' | 'cancelled' | 'interrupted';
 
 export interface DriverRunResult {
   driver_run_result_id: string;

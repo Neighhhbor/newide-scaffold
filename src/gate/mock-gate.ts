@@ -1,20 +1,20 @@
-import { SCHEMA_VERSION, createId, nowTimestamp } from "../core";
-import type { GateDecision, GateRequest, GateResult, GateRunner } from "./gate";
+import { SCHEMA_VERSION, createId, nowTimestamp } from '../core';
+import type { GateDecision, GateRequest, GateResult, GateRunner } from './gate';
 
 export class MockAllowGate implements GateRunner {
   readonly gate_id: string;
 
-  constructor(gateId = "allow-gate") {
+  constructor(gateId = 'allow-gate') {
     this.gate_id = gateId;
   }
 
   async run(request: GateRequest): Promise<GateResult> {
     return buildGateResult(
       request,
-      "allow",
-      "Mock allow gate accepted the subject.",
+      'allow',
+      'Mock allow gate accepted the subject.',
       [],
-      "allowed"
+      'allowed',
     );
   }
 }
@@ -22,17 +22,17 @@ export class MockAllowGate implements GateRunner {
 export class MockDenyGate implements GateRunner {
   readonly gate_id: string;
 
-  constructor(gateId = "deny-gate") {
+  constructor(gateId = 'deny-gate') {
     this.gate_id = gateId;
   }
 
   async run(request: GateRequest): Promise<GateResult> {
     return buildGateResult(
       request,
-      "deny",
-      "Mock deny gate blocked the subject.",
-      ["fix"],
-      "blocked"
+      'deny',
+      'Mock deny gate blocked the subject.',
+      ['fix'],
+      'blocked',
     );
   }
 }
@@ -44,7 +44,7 @@ export interface CommandGateOptions {
 
 export class CommandGate implements GateRunner {
   readonly gate_id: string;
-  private readonly command: CommandGateOptions["command"];
+  private readonly command: CommandGateOptions['command'];
 
   constructor(options: CommandGateOptions) {
     this.gate_id = options.gate_id;
@@ -53,21 +53,21 @@ export class CommandGate implements GateRunner {
 
   async run(request: GateRequest): Promise<GateResult> {
     const commandResult = await this.command();
-    const decision: GateDecision = commandResult.exit_code === 0 ? "allow" : "deny";
+    const decision: GateDecision = commandResult.exit_code === 0 ? 'allow' : 'deny';
 
     return buildGateResult(
       request,
       decision,
       commandResult.exit_code === 0
-        ? "CommandGate command succeeded."
+        ? 'CommandGate command succeeded.'
         : `CommandGate command failed with exit code ${commandResult.exit_code}.`,
-      commandResult.exit_code === 0 ? [] : ["inspect-command-output"],
-      commandResult.exit_code === 0 ? "allowed" : "blocked",
+      commandResult.exit_code === 0 ? [] : ['inspect-command-output'],
+      commandResult.exit_code === 0 ? 'allowed' : 'blocked',
       {
         exit_code: commandResult.exit_code,
         stdout: commandResult.stdout,
-        stderr: commandResult.stderr
-      }
+        stderr: commandResult.stderr,
+      },
     );
   }
 }
@@ -78,9 +78,9 @@ function buildGateResult(
   reason: string,
   requiredActions: string[],
   targetState: string,
-  auditMetadata?: Record<string, unknown>
+  auditMetadata?: Record<string, unknown>,
 ): GateResult {
-  const gateResultId = createId("gate_result");
+  const gateResultId = createId('gate_result');
 
   return {
     gate_result_id: gateResultId,
@@ -94,6 +94,6 @@ function buildGateResult(
     target_state: targetState,
     created_at: nowTimestamp(),
     schema_version: SCHEMA_VERSION,
-    ...(auditMetadata ? { metadata: auditMetadata } : {})
+    ...(auditMetadata ? { metadata: auditMetadata } : {}),
   } as GateResult;
 }

@@ -1,8 +1,8 @@
-import type { AgentId, ArtifactId, CheckpointId, SchemaVersion, TaskId, Timestamp } from "./ids";
+import type { AgentId, ArtifactId, CheckpointId, SchemaVersion, TaskId, Timestamp } from './ids';
 
-export type CheckpointType = "full" | "incremental";
-export type CheckpointTrigger = "manual" | "periodic" | "shutdown" | "blocked" | "escalated";
-export type CheckpointValidity = "valid" | "invalid" | "superseded";
+export type CheckpointType = 'full' | 'incremental';
+export type CheckpointTrigger = 'manual' | 'periodic' | 'shutdown' | 'blocked' | 'escalated';
+export type CheckpointValidity = 'valid' | 'invalid' | 'superseded';
 
 export interface MechanicalSnapshot {
   base_commit: string;

@@ -11,11 +11,11 @@ import {
   type RunId,
   type Task,
   type TaskCreateRequest,
-  type TaskId
-} from "../core";
-import { InMemoryArtifactStore } from "./artifact-store";
-import { InMemoryCheckpointStore } from "./checkpoint-store";
-import { InMemoryEventStore } from "./event-store";
+  type TaskId,
+} from '../core';
+import { InMemoryArtifactStore } from './artifact-store';
+import { InMemoryCheckpointStore } from './checkpoint-store';
+import { InMemoryEventStore } from './event-store';
 
 export interface RuntimeStores {
   events: InMemoryEventStore;
@@ -26,7 +26,7 @@ export interface RuntimeStores {
 export interface ResumeFromCheckpointResult {
   checkpoint: Checkpoint;
   resume_cursor: string;
-  status: "ready_to_resume" | "needs_manual_recovery";
+  status: 'ready_to_resume' | 'needs_manual_recovery';
 }
 
 export class RuntimeOrchestrator {
@@ -38,33 +38,33 @@ export class RuntimeOrchestrator {
     this.stores = {
       events: stores?.events ?? new InMemoryEventStore(),
       artifacts: stores?.artifacts ?? new InMemoryArtifactStore(),
-      checkpoints: stores?.checkpoints ?? new InMemoryCheckpointStore()
+      checkpoints: stores?.checkpoints ?? new InMemoryCheckpointStore(),
     };
   }
 
   createTask(request: TaskCreateRequest): Task {
     const timestamp = nowTimestamp();
     const task: Task = {
-      task_id: createId("task"),
+      task_id: createId('task'),
       ...(request.parent_task_id ? { parent_id: request.parent_task_id } : {}),
-      status: "created",
+      status: 'created',
       ...(request.role_id ? { role_id: request.role_id } : {}),
-      risk_level: request.risk_level ?? "low",
+      risk_level: request.risk_level ?? 'low',
       spec: request.spec,
       completion_criteria: request.completion_criteria,
       ...(request.affected_paths ? { affected_paths: request.affected_paths } : {}),
       ...(request.budget ? { budget: request.budget } : {}),
       created_at: timestamp,
       updated_at: timestamp,
-      schema_version: SCHEMA_VERSION
+      schema_version: SCHEMA_VERSION,
     };
 
     this.tasks.set(task.task_id, task);
     this.appendEvent({
-      event_type: "task.created",
+      event_type: 'task.created',
       subject_id: task.task_id,
       task_id: task.task_id,
-      payload: { spec: task.spec, risk_level: task.risk_level }
+      payload: { spec: task.spec, risk_level: task.risk_level },
     });
     return task;
   }
@@ -72,20 +72,20 @@ export class RuntimeOrchestrator {
   createRun(taskId: TaskId): Run {
     const timestamp = nowTimestamp();
     const run: Run = {
-      run_id: createId("run"),
+      run_id: createId('run'),
       task_id: taskId,
-      status: "created",
+      status: 'created',
       created_at: timestamp,
       updated_at: timestamp,
-      schema_version: SCHEMA_VERSION
+      schema_version: SCHEMA_VERSION,
     };
 
     this.runs.set(run.run_id, run);
     this.appendEvent({
-      event_type: "run.created",
+      event_type: 'run.created',
       subject_id: run.run_id,
       run_id: run.run_id,
-      task_id: taskId
+      task_id: taskId,
     });
     return run;
   }
@@ -103,14 +103,14 @@ export class RuntimeOrchestrator {
   registerArtifact(artifact: ArtifactRef): ArtifactRef {
     const registered = this.stores.artifacts.register(artifact);
     this.appendEvent({
-      event_type: "artifact.registered",
+      event_type: 'artifact.registered',
       subject_id: artifact.artifact_id,
       ...(artifact.task_id ? { task_id: artifact.task_id } : {}),
       payload: {
         type: artifact.type,
         uri: artifact.uri,
-        producer_id: artifact.producer_id
-      }
+        producer_id: artifact.producer_id,
+      },
     });
     return registered;
   }
@@ -118,14 +118,14 @@ export class RuntimeOrchestrator {
   saveCheckpoint(checkpoint: Checkpoint): Checkpoint {
     const saved = this.stores.checkpoints.save(checkpoint);
     this.appendEvent({
-      event_type: "checkpoint.saved",
+      event_type: 'checkpoint.saved',
       subject_id: checkpoint.checkpoint_id,
       task_id: checkpoint.task_id,
       payload: {
         checkpoint_type: checkpoint.checkpoint_type,
         trigger: checkpoint.trigger,
-        artifact_refs: checkpoint.artifact_refs
-      }
+        artifact_refs: checkpoint.artifact_refs,
+      },
     });
     return saved;
   }
@@ -139,11 +139,11 @@ export class RuntimeOrchestrator {
     return {
       checkpoint,
       resume_cursor: checkpoint.runtime_state?.resume_cursor ?? checkpoint.checkpoint_id,
-      status: checkpoint.validity_status === "valid" ? "ready_to_resume" : "needs_manual_recovery"
+      status: checkpoint.validity_status === 'valid' ? 'ready_to_resume' : 'needs_manual_recovery',
     };
   }
 
-  updateRunStatus(runId: RunId, status: Run["status"]): Run {
+  updateRunStatus(runId: RunId, status: Run['status']): Run {
     const run = this.runs.get(runId);
     if (!run) {
       throw new Error(`Run ${runId} was not found`);
@@ -152,13 +152,13 @@ export class RuntimeOrchestrator {
     const updated: Run = {
       ...run,
       status,
-      updated_at: nowTimestamp()
+      updated_at: nowTimestamp(),
     };
     this.runs.set(runId, updated);
     return updated;
   }
 
-  updateTaskStatus(taskId: TaskId, status: Task["status"]): Task {
+  updateTaskStatus(taskId: TaskId, status: Task['status']): Task {
     const task = this.tasks.get(taskId);
     if (!task) {
       throw new Error(`Task ${taskId} was not found`);
@@ -167,7 +167,7 @@ export class RuntimeOrchestrator {
     const updated: Task = {
       ...task,
       status,
-      updated_at: nowTimestamp()
+      updated_at: nowTimestamp(),
     };
     this.tasks.set(taskId, updated);
     return updated;
