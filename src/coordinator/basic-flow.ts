@@ -12,7 +12,7 @@ import {
 import { MockCouncil, type CouncilDecision, type EvidencePack, type Proposal } from '../council';
 import { MockDriver, type DriverRunResult } from '../driver';
 import { HookEngine, type HookResult } from '../hook';
-import { DecisionAggregator, MockAllowGate, type GateRequest, type GateResult } from '../gate';
+import { DecisionAggregator, type GateRequest, type GateResult } from '../gate';
 import { MockMemoryProvider, type ContextPack } from '../memory';
 import { RuntimeOrchestrator } from './orchestrator';
 
@@ -152,17 +152,28 @@ export async function runBasicFlow(): Promise<BasicFlowResult> {
   orchestrator.updateTaskStatus(task.task_id, 'reviewing');
 
   const hookEngine = new HookEngine({
-    bindings: [
-      {
-        hook_point: 'task.completed',
-        gate_id: 'allow-gate',
-        priority: 100,
-        denying: true,
-        timeout_ms: 30000,
-        schema_version: SCHEMA_VERSION,
+    config: {
+      version: 'hook-0.1',
+      settings: {
+        fail_fast: false,
+        default_timeout: 30,
+        parallel: false,
+        output_format: 'json',
+        emergency_env_var: 'AGENT_EMERGENCY_SKIP',
       },
-    ],
-    gates: [new MockAllowGate()],
+      gates: {
+        'allow-gate': {
+          type: 'command',
+          run: 'node -e "process.exit(0)"',
+          retry_threshold: 1,
+        },
+      },
+      hooks: {
+        'task.completed': [
+          { gate: 'allow-gate', priority: 100, timeout: 30 },
+        ],
+      },
+    },
     aggregator: new DecisionAggregator(),
   });
   const hookResult = await hookEngine.handleEvent({

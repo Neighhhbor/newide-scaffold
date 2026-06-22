@@ -258,28 +258,30 @@ describe('GateScheduler', () => {
 describe('HookEngine integration', () => {
   it('should run HookEngine handleEvent using GateScheduler', async () => {
     const scheduler = new PriorityGateScheduler();
-    scheduler.initialize({
-      definitions: {
-        'test-gate': {
-          type: 'command',
-          command: 'node -e "process.exit(0)"',
-          retry_threshold: 1,
-          outputConfig: {},
-        },
-      },
-    });
 
     const hookEngine = new HookEngine({
-      bindings: [
-        {
-          hook_point: 'task.completed',
-          gate_id: 'test-gate',
-          priority: 100,
-          denying: true,
-          timeout_ms: 30000,
-          schema_version: SCHEMA_VERSION,
+      config: {
+        version: 'hook-0.1',
+        settings: {
+          fail_fast: false,
+          default_timeout: 30,
+          parallel: false,
+          output_format: 'json',
+          emergency_env_var: 'AGENT_EMERGENCY_SKIP',
         },
-      ],
+        gates: {
+          'test-gate': {
+            type: 'command',
+            run: 'node -e "process.exit(0)"',
+            retry_threshold: 1,
+          },
+        },
+        hooks: {
+          'task.completed': [
+            { gate: 'test-gate', priority: 100, timeout: 30 },
+          ],
+        },
+      },
       scheduler,
     });
 
@@ -287,6 +289,7 @@ describe('HookEngine integration', () => {
       event_id: 'e-1',
       event_type: 'task.completed',
       subject_id: 'task-123',
+      payload: {},
       created_at: nowTimestamp(),
       schema_version: SCHEMA_VERSION,
     });
