@@ -79,7 +79,7 @@ import { HookEngine } from '../hook';
 import { MockAllowGate } from '../gate';
 ```
 
-Avoid importing another module's internal files directly. For example, prefer `../memory` over `../memory/mock-memory`.
+Avoid importing another module's internal files directly. For example, prefer `../memory/mvp` for MVP code over deep paths like `../memory/mvp/mock-memory-provider`.
 
 `src/core` is the shared protocol layer. It must not import from other modules.
 
