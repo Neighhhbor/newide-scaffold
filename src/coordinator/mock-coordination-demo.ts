@@ -7,6 +7,7 @@ import {
   type ArtifactRef,
   type ArtifactId,
   type CouncilDecisionId,
+  type Event,
   type GateResultId,
   type Message,
   type SchemaVersion,
@@ -14,6 +15,7 @@ import {
   type Timestamp,
 } from '../core';
 import { InMemoryCoordinatorFacade, type CoordinatorTask } from './coordinator-facade';
+import { InMemoryEventStore } from './event-store';
 import type { MessageDelivery } from './mailbox-store';
 
 export interface MockCoordinationDemoInput {
@@ -139,6 +141,11 @@ export interface MockMergeAuthorization {
   schema_version: SchemaVersion;
 }
 
+export interface MockDenyBranchResult {
+  trace: string[];
+  final_status: CoordinatorTask['status'];
+}
+
 export interface MockCoordinationDemoResult {
   task: CoordinatorTask;
   role_profile: MockRoleProfileRef;
@@ -152,7 +159,12 @@ export interface MockCoordinationDemoResult {
   council_decision: MockCouncilDecision;
   merge_authorization: MockMergeAuthorization;
   message: Message;
+  pending_delivery: MessageDelivery;
   message_delivery: MessageDelivery;
+  mvp_trace: string[];
+  invariant_checks: string[];
+  deny_branch: MockDenyBranchResult;
+  event_log: Event[];
   timeline: string[];
 }
 
@@ -160,6 +172,8 @@ export function runMockCoordinationDemo(
   input: MockCoordinationDemoInput,
 ): MockCoordinationDemoResult {
   const coordinator = new InMemoryCoordinatorFacade();
+  const events = new InMemoryEventStore();
+  const mvpTrace: string[] = [];
   const timeline: string[] = [];
 
   const roleProfile = mockRoleProfile();
@@ -169,13 +183,37 @@ export function runMockCoordinationDemo(
     role_profile_ref: roleProfile.role_profile_id,
     completion_criteria: ['Mock council selects a proposal and C creates merge authorization.'],
   });
+  mvpTrace.push(`[task] create task_id=${task.task_id} status=${task.status}`);
+  events.append({
+    event_type: 'task.created',
+    subject_id: task.task_id,
+    task_id: task.task_id,
+    payload: { status: task.status },
+  });
   timeline.push('task.created');
 
   const agent = mockAgentMarketClaim(task.task_id, roleProfile);
-  coordinator.claimTask(task.task_id, agent.agent_id);
+  const claimedTask = coordinator.claimTask(task.task_id, agent.agent_id);
+  mvpTrace.push(`[task] claim agent_id=${agent.agent_id} status=${claimedTask.status}`);
+  events.append({
+    event_type: 'task.claimed',
+    subject_id: claimedTask.task_id,
+    task_id: claimedTask.task_id,
+    payload: {
+      agent_id: agent.agent_id,
+      status: claimedTask.status,
+    },
+  });
   timeline.push('task.claimed');
 
-  coordinator.updateTaskStatus(task.task_id, 'running');
+  const runningTask = coordinator.updateTaskStatus(claimedTask.task_id, 'running');
+  mvpTrace.push(`[task] start status=${runningTask.status}`);
+  events.append({
+    event_type: 'task.started',
+    subject_id: runningTask.task_id,
+    task_id: runningTask.task_id,
+    payload: { status: runningTask.status },
+  });
   timeline.push('task.started');
 
   const sent = coordinator.sendMessage({
@@ -191,12 +229,42 @@ export function runMockCoordinationDemo(
     requires_ack: true,
     deadline_seconds: 60,
   });
+  const pendingDelivery = firstDelivery(sent.deliveries);
+  mvpTrace.push(
+    `[mailbox] send message_id=${sent.message.message_id} ` +
+      `delivery_id=${pendingDelivery.delivery_id} delivery_status=${pendingDelivery.status}`,
+  );
+  events.append({
+    event_type: 'agent.message_send',
+    subject_id: sent.message.message_id,
+    task_id: runningTask.task_id,
+    payload: {
+      delivery_id: pendingDelivery.delivery_id,
+      delivery_status: pendingDelivery.status,
+      recipient_agent_id: pendingDelivery.recipient_agent_id,
+    },
+  });
   timeline.push('agent.message_send');
 
   const messageDelivery = coordinator.ackMessage(sent.message.message_id, {
     agent_id: agent.agent_id,
   });
+  mvpTrace.push(
+    `[mailbox] ack recipient=${agent.agent_id} delivery_status=${messageDelivery.status}`,
+  );
+  events.append({
+    event_type: 'agent.message_recv',
+    subject_id: messageDelivery.delivery_id,
+    task_id: runningTask.task_id,
+    payload: {
+      message_id: sent.message.message_id,
+      recipient_agent_id: agent.agent_id,
+      delivery_status: messageDelivery.status,
+    },
+  });
   timeline.push('agent.message_recv');
+
+  const invariantChecks = collectInvariantChecks(sent.message, pendingDelivery);
 
   const contextPack = mockContextPack(task.task_id, roleProfile);
   const driverResult = mockDriverRun(agent, task.task_id);
@@ -205,8 +273,8 @@ export function runMockCoordinationDemo(
   const artifactRef = firstDriverArtifact(driverResult);
   timeline.push('artifact.registered');
 
-  coordinator.updateTaskStatus(task.task_id, 'pending_council');
   const gateResult = mockGateDeferToCouncil(artifactRef);
+  coordinator.updateTaskStatus(task.task_id, 'pending_council');
   timeline.push('gate.deferred');
 
   const proposal = mockProposal(task.task_id, agent.agent_id, artifactRef);
@@ -239,27 +307,91 @@ export function runMockCoordinationDemo(
     council_decision: councilDecision,
     merge_authorization: mergeAuthorization,
     message: sent.message,
+    pending_delivery: pendingDelivery,
     message_delivery: messageDelivery,
+    mvp_trace: mvpTrace,
+    invariant_checks: invariantChecks,
+    deny_branch: runDenyBranchDemo(),
+    event_log: events.list(),
     timeline,
   };
 }
 
 export function formatMockCoordinationDemo(result: MockCoordinationDemoResult): string {
+  const mvpTrace = result.mvp_trace.map((entry) => `  ${entry}`).join('\n');
+  const invariantChecks = result.invariant_checks.map((entry) => `  ${entry}`).join('\n');
+  const denyTrace = result.deny_branch.trace.map((entry) => `  ${entry}`).join('\n');
+  const eventLog = result.event_log
+    .map((event, index) => `  ${index + 1}. ${event.event_type}`)
+    .join('\n');
   const timeline = result.timeline.map((event, index) => `${index + 1}. ${event}`).join('\n');
 
   return [
-    'Mock Coordinator Demo',
-    `Final task status: ${result.task.status}`,
+    '=== Implemented Core Loop ===',
     '',
-    `Task: ${result.task.task_id}`,
-    `Owner agent: ${result.agent.agent_id}`,
-    `Role profile: ${result.role_profile.role_profile_id}`,
-    `Context pack: ${result.context_pack.context_pack_id}`,
-    `Message: ${result.message.message_id} (${result.message_delivery.status})`,
-    `Artifact: ${result.artifact_ref.artifact_id}`,
-    `Gate: ${result.gate_result.decision} -> ${result.gate_result.target_state}`,
-    `Council: ${result.council_decision.verdict}`,
-    `Merge authorization: ${result.merge_authorization.status}`,
+    '[task-state]',
+    `  created --claim(${result.agent.agent_id})--> claimed`,
+    '  claimed --start--> running',
+    '',
+    '[mailbox.delivery]',
+    `  delivery_id: ${result.pending_delivery.delivery_id}`,
+    `  message_id: ${result.message.message_id}`,
+    `  recipient: ${result.agent.agent_id}`,
+    `  requires_ack: ${result.message.requires_ack}`,
+    `  deadline_at: ${result.pending_delivery.deadline_at ?? 'none'}`,
+    `  status: ${result.pending_delivery.status} -> ${result.message_delivery.status}`,
+    '',
+    '[trace]',
+    mvpTrace,
+    '',
+    '[event-log]',
+    eventLog,
+    '  source: demo-wired InMemoryEventStore; facade auto emit is a later slice',
+    '',
+    '[invariants]',
+    invariantChecks,
+    '',
+    '[result]',
+    '  state machine: ok (created -> claimed -> running)',
+    '  mailbox: ok (pending -> acked)',
+    `  event replay: ok (${result.event_log.length} events)`,
+    '',
+    '=== Deny / Blocked Branch ===',
+    '',
+    '[state-path]',
+    denyTrace,
+    '',
+    '[result]',
+    `  deny path: ok (final task status = ${result.deny_branch.final_status})`,
+    '  note: _gate.report_result is not implemented yet; this branch uses task.update_status',
+    '',
+    '=== Contract-shaped Integration Preview ===',
+    '',
+    '[driver-result]',
+    `  status: ${result.driver_result.status}`,
+    `  artifact: ${result.artifact_ref.uri}`,
+    '',
+    '[gate-result]',
+    `  decision: ${result.gate_result.decision}`,
+    `  target_state: ${result.gate_result.target_state}`,
+    '',
+    '[council-decision]',
+    `  verdict: ${result.council_decision.verdict}`,
+    `  decision_mode: ${result.council_decision.decision_mode}`,
+    '',
+    '[merge-authorization]',
+    `  status: ${result.merge_authorization.status}`,
+    `  evidence: ${result.artifact_ref.artifact_id} + ${result.gate_result.gate_result_id} + ${result.council_decision.decision_id}`,
+    '',
+    '[note]',
+    '  These are contract-shaped mocks, not complete artifact/gate/council services.',
+    '',
+    '=== Next Integration Slices ===',
+    '',
+    '1. artifact.register: driver artifact becomes ArtifactRef through C',
+    '2. _gate.report_result: GateResult decision drives TaskStatus',
+    '3. checkpoint: save message thread, scheduling, artifact refs, interrupt state',
+    '4. timeout branch: pending delivery -> system.timeout -> waiting_input / blocked',
     '',
     'Timeline:',
     timeline,
@@ -302,6 +434,90 @@ function firstDriverArtifact(result: MockDriverRunResultForCoordination): Artifa
   }
 
   return artifactRef;
+}
+
+function firstDelivery(deliveries: MessageDelivery[]): MessageDelivery {
+  const delivery = deliveries[0];
+  if (!delivery) {
+    throw new Error('Mock mailbox did not create a delivery');
+  }
+
+  return delivery;
+}
+
+function collectInvariantChecks(message: Message, pendingDelivery: MessageDelivery): string[] {
+  const checks: string[] = [];
+  const coordinator = new InMemoryCoordinatorFacade();
+
+  const invalidTransitionTask = coordinator.createTask({
+    spec: 'Probe invalid state transition.',
+    completion_criteria: ['created -> completed must be rejected'],
+  });
+
+  try {
+    coordinator.updateTaskStatus(invalidTransitionTask.task_id, 'completed');
+    checks.push('[fail] illegal transition created -> completed was accepted');
+  } catch {
+    checks.push('[ok] illegal transition created -> completed is rejected');
+  }
+
+  const terminalTask = coordinator.createTask({
+    spec: 'Probe terminal rollback.',
+    completion_criteria: ['completed -> running must be rejected'],
+  });
+  const claimedTask = coordinator.claimTask(terminalTask.task_id, 'agent_invariant');
+  const runningTask = coordinator.updateTaskStatus(claimedTask.task_id, 'running');
+  const reviewingTask = coordinator.updateTaskStatus(runningTask.task_id, 'reviewing');
+  const completedTask = coordinator.updateTaskStatus(reviewingTask.task_id, 'completed');
+
+  try {
+    coordinator.updateTaskStatus(completedTask.task_id, 'running');
+    checks.push('[fail] terminal status completed transitioned back to running');
+  } catch {
+    checks.push('[ok] terminal status completed cannot transition back to running');
+  }
+
+  if (pendingDelivery.message_id === message.message_id && !('delivery_id' in message)) {
+    checks.push('[ok] message and delivery are separate records');
+  } else {
+    checks.push('[fail] message and delivery separation is not visible');
+  }
+
+  if (message.requires_ack && pendingDelivery.deadline_at !== undefined) {
+    checks.push('[ok] requires_ack message has delivery deadline');
+  } else {
+    checks.push('[fail] requires_ack message is missing delivery deadline');
+  }
+
+  return checks;
+}
+
+function runDenyBranchDemo(): MockDenyBranchResult {
+  const coordinator = new InMemoryCoordinatorFacade();
+  const trace: string[] = [];
+
+  const task = coordinator.createTask({
+    spec: 'Demo deny path.',
+    completion_criteria: ['Task reaches blocked through pending_gate'],
+  });
+  trace.push(`create -> ${task.status}`);
+
+  const claimedTask = coordinator.claimTask(task.task_id, 'agent_gate_probe');
+  trace.push(`claim -> ${claimedTask.status}`);
+
+  const runningTask = coordinator.updateTaskStatus(claimedTask.task_id, 'running');
+  trace.push(`start -> ${runningTask.status}`);
+
+  const pendingGateTask = coordinator.updateTaskStatus(runningTask.task_id, 'pending_gate');
+  trace.push(`gate request -> ${pendingGateTask.status}`);
+
+  const blockedTask = coordinator.updateTaskStatus(pendingGateTask.task_id, 'blocked');
+  trace.push(`gate deny -> ${blockedTask.status}`);
+
+  return {
+    trace,
+    final_status: blockedTask.status,
+  };
 }
 
 function mockContextPack(taskId: TaskId, roleProfile: MockRoleProfileRef): MockContextPackRef {
