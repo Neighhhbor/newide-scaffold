@@ -61,6 +61,7 @@ export class InMemoryMailboxStore {
     if (input.requires_ack && input.deadline_seconds === undefined) {
       throw new Error('requires_ack messages must set deadline_seconds');
     }
+    this.assertRecipients(input.to);
 
     const message: Message = {
       message_id: createId('message'),
@@ -137,6 +138,20 @@ export class InMemoryMailboxStore {
       on_timeout: 'blocked',
       schema_version: SCHEMA_VERSION,
     };
+  }
+
+  private assertRecipients(recipients: MessageRecipient[]): void {
+    if (recipients.length === 0) {
+      throw new Error('messages must have at least one recipient');
+    }
+
+    for (const recipient of recipients) {
+      const targetCount =
+        Number(recipient.agent_id !== undefined) + Number(recipient.role_id !== undefined);
+      if (targetCount !== 1) {
+        throw new Error('message recipients must set exactly one of agent_id or role_id');
+      }
+    }
   }
 
   private findDelivery(

@@ -17,6 +17,43 @@ describe('coordinator mailbox store', () => {
     ).toThrow('requires_ack messages must set deadline_seconds');
   });
 
+  it('requires at least one concrete recipient', () => {
+    const mailbox = new InMemoryMailboxStore();
+
+    expect(() =>
+      mailbox.send({
+        thread_id: 'thread_1',
+        from_agent_id: 'agent_source',
+        to: [],
+        type: 'status_update',
+        payload: { status: 'running' },
+        requires_ack: false,
+      }),
+    ).toThrow('messages must have at least one recipient');
+
+    expect(() =>
+      mailbox.send({
+        thread_id: 'thread_1',
+        from_agent_id: 'agent_source',
+        to: [{}],
+        type: 'status_update',
+        payload: { status: 'running' },
+        requires_ack: false,
+      }),
+    ).toThrow('message recipients must set exactly one of agent_id or role_id');
+
+    expect(() =>
+      mailbox.send({
+        thread_id: 'thread_1',
+        from_agent_id: 'agent_source',
+        to: [{ agent_id: 'agent_target', role_id: 'role_reviewer' }],
+        type: 'status_update',
+        payload: { status: 'running' },
+        requires_ack: false,
+      }),
+    ).toThrow('message recipients must set exactly one of agent_id or role_id');
+  });
+
   it('creates one delivery per recipient', () => {
     const mailbox = new InMemoryMailboxStore();
 
