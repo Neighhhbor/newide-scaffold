@@ -18,8 +18,9 @@ my-session.json
 *.tar.gz
 *.log
 
-# memory 本地设计文档（Spec + 代码导读），不入仓；仓库内以 src/memory/README.md 为准
+# memory 本地设计文档（Spec + 代码导读 + 模块导读），不入仓
 src/memory/docs/
+src/memory/README.md
 
 # editor & OS
 .DS_Store

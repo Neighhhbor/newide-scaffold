@@ -1,53 +1,55 @@
 /**
  * Mock Driver 调用器
  *
- * 不依赖 Direction A 模块，根据 AgentTaskRequest 与检索结果生成 DriverReturn（6 字段报告）。
+ * MVP 版 invokeDriver 实现：根据 DriverContext 生成 DriverReturn（6 字段报告）。
+ *
+ * ## 输入边界
+ *
+ * - 仅读取 driver_context（task_instruction + experiences + skills）
+ * - 不读取 task.spec，不感知 Persona
+ * - experiences/skills 为完整实体，真实 Driver 应使用其 content 组装 prompt
  */
-import type { DriverReturn } from "../../schemas";
-import type { AgentTaskRequest } from "../../agent-types";
-import type { MemoryRetrievalResult } from "../../services/memory-query";
+import type { DriverReturn } from '../../schemas';
+import type { DriverInvokeInput } from '../../runtime/agent-run-deps';
 
-export interface MockDriverInvokeInput {
-  task: AgentTaskRequest;
-  task_id: string;
-  call_id: string;
-  source_driver: string;
-  retrieval: MemoryRetrievalResult;
-}
+/**
+ * 唤起 mock Driver 并返回 Spec 6 字段报告。
+ *
+ * @param input - 含 task_id、call_id、source_driver 与 driver_context
+ * @returns Driver 6 字段结构化报告（artifacts / summary / decisions 等）
+ */
+export async function invokeMockDriver(input: DriverInvokeInput): Promise<DriverReturn> {
+  const { task_id, driver_context } = input;
+  const memoryCount = driver_context.experiences.length + driver_context.skills.length;
 
-/** 唤起 mock Driver 并返回 Spec 6 字段报告 */
-export async function invokeMockDriver(input: MockDriverInvokeInput): Promise<DriverReturn> {
-  const { task, task_id, retrieval } = input;
-
-  // pass: 真实 Driver / ACP 会话未接入
   return {
     artifacts: [
       {
-        type: "patch",
+        type: 'patch',
         path: `artifact://patch/${task_id}/mock.patch`,
-        summary: `Mock patch for: ${task.spec}`,
+        summary: `Mock patch for: ${driver_context.task_instruction}`,
       },
     ],
-    summary: `Mock driver completed "${task.spec}" using ${retrieval.context_pack.memory_refs.length} memory refs.`,
+    summary: `Mock driver completed instruction using ${memoryCount} memory items (${driver_context.skills.length} skills, ${driver_context.experiences.length} experiences).`,
     decisions: [
       {
-        point: "context usage",
-        options: ["use-retrieved-memory", "ignore-memory"],
-        chosen: "use-retrieved-memory",
-        reason: "MVP always chooses retrieved mock memory",
+        point: 'context usage',
+        options: ['use-retrieved-memory', 'ignore-memory'],
+        chosen: 'use-retrieved-memory',
+        reason: 'MVP always chooses retrieved memories',
       },
     ],
     blockers: [],
-    referenced_experiences: retrieval.experiences.slice(0, 1).map((exp) => ({
+    referenced_experiences: driver_context.experiences.slice(0, 1).map((exp) => ({
       experience_id: exp.id,
       applied: true,
-      effectiveness: "fully_effective" as const,
-      note: "MVP mock reference",
+      effectiveness: 'fully_effective' as const,
+      note: 'MVP mock reference',
     })),
     assumptions: [
       {
-        assumption: retrieval.context_pack.summary,
-        risk_if_wrong: "Mock retrieval may not reflect production memory quality",
+        assumption: driver_context.task_instruction,
+        risk_if_wrong: 'Planned driver instruction may not match full task spec',
       },
     ],
   };

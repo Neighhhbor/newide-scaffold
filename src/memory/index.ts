@@ -33,7 +33,12 @@ export type {
 
 // Agent runtime types
 export type { AgentTaskRequest, AgentLoopState } from './agent-types';
-export type { AgentRunDeps, DriverInvokeInput, SkillPromotionHandler } from './runtime/agent-run-deps';
+export type {
+  AgentRunDeps,
+  DriverInvokeInput,
+  SkillPromotionHandler,
+  TaskInstructionPlanner,
+} from './runtime/agent-run-deps';
 
 // 正式服务
 export { writePendingBuffer } from './services/buffer-writer';

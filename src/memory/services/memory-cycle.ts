@@ -1,39 +1,61 @@
 /**
- * memory-cycle — 任务后 buffer 与记忆处理服务
+ * memory-cycle — 任务记忆全周期编排服务
  *
- * ingestTaskBuffer：写入 pending 原材料；
- * processPendingBuffer：提取经验、晋升技能、标记 processed；
- * runTaskMemoryCycle：MVP 同步串联全流程（查询 → Driver → ingest → process）。
+ * 串联任务前检索、指令规划、Driver 调用、buffer 写入、经验提取与技能晋升。
+ *
+ * ## 主流程（runTaskMemoryCycle）
+ *
+ * ```
+ * getPersona（仅元数据，不进 Driver）
+ *   → queryMemory（exp + skill）
+ *   → planTaskInstruction（task_instruction）
+ *   → 组装 DriverContext
+ *   → invokeDriver
+ *   → ingestTaskBuffer
+ *   → processPendingBuffer
+ * ```
  */
-import { randomUUID } from "node:crypto";
-import { createId, nowTimestamp } from "../../core";
-import type { AgentMemoryScope } from "../ports/agent-memory-scope";
-import type { ExperienceExtractor } from "../ports/experience-extractor";
-import type { AgentRunDeps } from "../runtime/agent-run-deps";
+import { randomUUID } from 'node:crypto';
+import { createId, nowTimestamp } from '../../core';
+import type { AgentMemoryScope } from '../ports/agent-memory-scope';
+import type { ExperienceExtractor } from '../ports/experience-extractor';
+import type { AgentRunDeps } from '../runtime/agent-run-deps';
 import type {
   AgentContextSnapshot,
   BufferSnapshot,
   DriverReturn,
   ExperienceRecord,
-} from "../schemas";
-import type { AgentTaskRequest } from "../agent-types";
+} from '../schemas';
+import type { AgentTaskRequest } from '../agent-types';
 import type {
+  DriverContext,
   ExtractionOutput,
   MemoryCycleResult,
   PromotionOutcome,
-} from "../types";
-import { writePendingBuffer } from "./buffer-writer";
-import { prepareTaskContext } from "./memory-query";
+} from '../types';
+import { writePendingBuffer } from './buffer-writer';
+import { prepareTaskContext } from './memory-query';
 
+/**
+ * ingestTaskBuffer 的输入。
+ * 将 Driver 返回报告与顶层 Agent 上下文快照成对写入 pending buffer。
+ */
 export interface TaskBufferIngestInput {
+  /** 原始任务请求（buffer 中 task_description 取 task.spec） */
   task: AgentTaskRequest;
   task_id: string;
   call_id: string;
   source_driver: string;
+  /** Driver 6 字段结构化报告 */
   driver_return: DriverReturn;
+  /** 顶层 Agent 清理后的上下文快照（与 buffer 成对存储） */
   agentContext: AgentContextSnapshot;
 }
 
+/**
+ * processPendingBuffer 的输入。
+ * 指定提取器与晋升处理器，对单条 pending buffer 执行后处理。
+ */
 export interface ProcessPendingInput {
   task: AgentTaskRequest;
   extractor: ExperienceExtractor;
@@ -44,11 +66,18 @@ export interface ProcessPendingInput {
   ) => Promise<PromotionOutcome>;
 }
 
+/** processPendingBuffer 的返回：提取结果 + 晋升结果 */
 export interface ProcessPendingResult {
   extraction: ExtractionOutput;
   promotion: PromotionOutcome;
 }
 
+/**
+ * 将 Driver 报告与 Agent 上下文写入 pending buffer。
+ * task_description 使用 task.spec（完整任务规格），非 task_instruction。
+ *
+ * @returns 分配的 buffer 序号与快照副本
+ */
 export async function ingestTaskBuffer(
   memory: AgentMemoryScope,
   input: TaskBufferIngestInput,
@@ -61,13 +90,16 @@ export async function ingestTaskBuffer(
     source_driver: input.source_driver,
     received_at: nowTimestamp(),
     retry_count: 0,
-    extraction_status: "pending",
+    extraction_status: 'pending',
   };
 
   const saved = await writePendingBuffer(memory, snapshot, input.agentContext);
   return { seq: saved.seq, snapshot: saved.snapshot };
 }
 
+/**
+ * 处理单条 pending buffer：提取经验 → 入库 → 晋升检查 → 标记 processed。
+ */
 export async function processPendingBuffer(
   memory: AgentMemoryScope,
   seq: number,
@@ -78,10 +110,7 @@ export async function processPendingBuffer(
     throw new Error(`Pending buffer not found: seq=${seq}`);
   }
 
-  const extraction = await input.extractor.extract(
-    pending.snapshot,
-    pending.agentContext,
-  );
+  const extraction = await input.extractor.extract(pending.snapshot, pending.agentContext);
 
   for (const experience of extraction.experiences) {
     await memory.saveExperience(experience);
@@ -96,39 +125,58 @@ export async function processPendingBuffer(
   return { extraction, promotion };
 }
 
+/**
+ * 单轮任务记忆全周期主入口。
+ *
+ * 1. 读取 Persona（仅写入 cycle 结果，不传给 Driver）
+ * 2. 检索 exp/skill
+ * 3. 规划 task_instruction
+ * 4. 组装 DriverContext 并调用 Driver
+ * 5. 写入 buffer → 提取经验 → 技能晋升
+ *
+ * @param memory - Agent 记忆作用域
+ * @param task   - 协调层任务请求（含 spec）
+ * @param deps   - 可注入的运行依赖
+ */
 export async function runTaskMemoryCycle(
   memory: AgentMemoryScope,
   task: AgentTaskRequest,
   deps: AgentRunDeps,
 ): Promise<MemoryCycleResult> {
-  const task_id = task.task_id ?? createId("task");
-  const call_id = task.call_id ?? createId("call");
-  const source_driver = task.source_driver ?? "mock-driver";
+  const task_id = task.task_id ?? createId('task');
+  const call_id = task.call_id ?? createId('call');
+  const source_driver = task.source_driver ?? 'mock-driver';
   const received_at = nowTimestamp();
 
   const skills_before = await memory.listSkills();
   const persona = await memory.getPersona();
 
   const retrieval = await prepareTaskContext(memory, task, task_id, deps.queryMemory);
+  const task_instruction = await deps.planTaskInstruction(task);
+  const driver_context: DriverContext = {
+    task_instruction,
+    experiences: retrieval.experiences,
+    skills: retrieval.skills,
+  };
+
   const driver_return = await deps.invokeDriver({
-    task,
     task_id,
     call_id,
     source_driver,
-    retrieval,
+    driver_context,
   });
 
   const agentContext: AgentContextSnapshot = {
     snapshot_id: randomUUID(),
     source_task_id: task_id,
     agent_id: memory.role_id,
-    thinking_trace: `Agent reasoning for ${task_id}: ${retrieval.context_pack.summary}`,
-    planning_trace: `Plan: ${task.spec}`,
+    thinking_trace: `Agent reasoning for ${task_id}: spec="${task.spec}"`,
+    planning_trace: `Driver instruction: ${task_instruction}`,
     driver_calls: [
       {
         call_id,
         driver_id: source_driver,
-        driver_return_ref: "report_pending.json",
+        driver_return_ref: 'report_pending.json',
       },
     ],
     cleaned_at: received_at,
@@ -157,6 +205,7 @@ export async function runTaskMemoryCycle(
     persona,
     skills_before,
     retrieval,
+    driver_context,
     buffer_snapshot: ingested.snapshot,
     buffer_seq: ingested.seq,
     extraction,
