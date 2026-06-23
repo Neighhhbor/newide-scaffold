@@ -3,7 +3,7 @@ import {
   assertTaskStatusTransition,
   isTerminalTaskStatus,
   transitionTaskStatus,
-} from './task-state-machine';
+} from '../../src/coordinator/task-state-machine';
 
 describe('coordinator task state machine', () => {
   it('allows the spec-c v0 happy path', () => {
