@@ -1,8 +1,15 @@
-import type { AgentId, MessageId, MessageRecipient, TaskId } from '../core';
+import type { AgentId, CheckpointId, MessageId, MessageRecipient, TaskId, ThreadId } from '../core';
 import { InMemoryCoordinatorFacade } from './coordinator-facade';
 import type { CoordinatorTask, CoordinatorTaskCreateRequest } from './coordinator-facade';
 import type { MessageDelivery, SendMessageInput, SendMessageResult } from './mailbox-store';
 import type { CoordinatorTaskStatus } from './task-state-machine';
+import type {
+  CoordinatorCheckpoint,
+  CoordinatorCheckpointForkResult,
+  CoordinatorCheckpointHistoryOptions,
+  CoordinatorCheckpointMeta,
+  CoordinatorCheckpointRequest,
+} from './checkpoint-store';
 
 export interface CoordinatorFacadeLike {
   createTask(request: CoordinatorTaskCreateRequest): CoordinatorTask;
@@ -10,6 +17,20 @@ export interface CoordinatorFacadeLike {
   updateTaskStatus(taskId: TaskId, status: CoordinatorTaskStatus, reason?: string): CoordinatorTask;
   sendMessage(input: SendMessageInput): SendMessageResult;
   ackMessage(messageId: MessageId, recipient: MessageRecipient): MessageDelivery;
+  saveCheckpoint(request: CoordinatorCheckpointRequest): CoordinatorCheckpoint;
+  loadCheckpoint(
+    threadId: ThreadId,
+    checkpointId?: CheckpointId,
+  ): CoordinatorCheckpoint | undefined;
+  listCheckpointHistory(
+    threadId: ThreadId,
+    options?: CoordinatorCheckpointHistoryOptions,
+  ): CoordinatorCheckpointMeta[];
+  forkCheckpoint(
+    threadId: ThreadId,
+    checkpointId: CheckpointId,
+    newThreadId: ThreadId,
+  ): CoordinatorCheckpointForkResult;
 }
 
 export interface MinimalCoordinatorContract {
@@ -21,6 +42,19 @@ export interface MinimalCoordinatorContract {
   message: {
     send(input: SendMessageInput): SendMessageResult;
     ack(messageId: MessageId, recipient: MessageRecipient): void;
+  };
+  state: {
+    checkpoint(request: CoordinatorCheckpointRequest): CoordinatorCheckpoint;
+    load(threadId: ThreadId, checkpointId?: CheckpointId): CoordinatorCheckpoint | undefined;
+    list_history(
+      threadId: ThreadId,
+      options?: CoordinatorCheckpointHistoryOptions,
+    ): CoordinatorCheckpointMeta[];
+    fork(
+      threadId: ThreadId,
+      checkpointId: CheckpointId,
+      newThreadId: ThreadId,
+    ): CoordinatorCheckpointForkResult;
   };
 }
 
@@ -38,6 +72,13 @@ export function createCoordinatorContract(
       ack: (messageId, recipient) => {
         facade.ackMessage(messageId, recipient);
       },
+    },
+    state: {
+      checkpoint: (request) => facade.saveCheckpoint(request),
+      load: (threadId, checkpointId) => facade.loadCheckpoint(threadId, checkpointId),
+      list_history: (threadId, options) => facade.listCheckpointHistory(threadId, options),
+      fork: (threadId, checkpointId, newThreadId) =>
+        facade.forkCheckpoint(threadId, checkpointId, newThreadId),
     },
   };
 }

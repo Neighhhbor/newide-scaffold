@@ -18,6 +18,16 @@ import {
 } from './mailbox-store';
 import { transitionTaskStatus, type CoordinatorTaskStatus } from './task-state-machine';
 import type { MessageId, MessageRecipient, RoleId } from '../core';
+import {
+  createCoordinatorCheckpoint,
+  InMemoryCheckpointStore,
+  type CoordinatorCheckpoint,
+  type CoordinatorCheckpointForkResult,
+  type CoordinatorCheckpointHistoryOptions,
+  type CoordinatorCheckpointMeta,
+  type CoordinatorCheckpointRequest,
+} from './checkpoint-store';
+import type { CheckpointId, ThreadId } from '../core';
 
 export interface CoordinatorRetryPolicy {
   max_retries: number;
@@ -50,6 +60,7 @@ export interface CoordinatorTask {
 
 export interface InMemoryCoordinatorFacadeStores {
   mailbox: InMemoryMailboxStore;
+  checkpoints: InMemoryCheckpointStore<CoordinatorCheckpoint>;
 }
 
 export class InMemoryCoordinatorFacade {
@@ -59,6 +70,7 @@ export class InMemoryCoordinatorFacade {
   constructor(stores?: Partial<InMemoryCoordinatorFacadeStores>) {
     this.stores = {
       mailbox: stores?.mailbox ?? new InMemoryMailboxStore(),
+      checkpoints: stores?.checkpoints ?? new InMemoryCheckpointStore<CoordinatorCheckpoint>(),
     };
   }
 
@@ -125,6 +137,43 @@ export class InMemoryCoordinatorFacade {
 
   ackMessage(messageId: MessageId, recipient: MessageRecipient): MessageDelivery {
     return this.stores.mailbox.ack(messageId, recipient);
+  }
+
+  saveCheckpoint(request: CoordinatorCheckpointRequest): CoordinatorCheckpoint {
+    this.getExistingTask(request.task_id);
+    const checkpoint = createCoordinatorCheckpoint(request);
+    return this.stores.checkpoints.save(checkpoint);
+  }
+
+  loadCheckpoint(
+    threadId: ThreadId,
+    checkpointId?: CheckpointId,
+  ): CoordinatorCheckpoint | undefined {
+    return this.stores.checkpoints.load(threadId, checkpointId);
+  }
+
+  listCheckpointHistory(
+    threadId: ThreadId,
+    options?: CoordinatorCheckpointHistoryOptions,
+  ): CoordinatorCheckpointMeta[] {
+    return this.stores.checkpoints.listHistory(threadId, options).map((checkpoint) => ({
+      checkpoint_id: checkpoint.checkpoint_id,
+      parent_checkpoint_id: checkpoint.parent_checkpoint_id ?? null,
+      checkpoint_type: checkpoint.checkpoint_type,
+      schema_version: checkpoint.schema_version,
+      timestamp: checkpoint.created_at,
+      trigger: checkpoint.trigger,
+      message_count: checkpoint.message_thread.length,
+      turn_count: checkpoint.scheduling.current_turn,
+    }));
+  }
+
+  forkCheckpoint(
+    threadId: ThreadId,
+    checkpointId: CheckpointId,
+    newThreadId: ThreadId,
+  ): CoordinatorCheckpointForkResult {
+    return this.stores.checkpoints.fork(threadId, checkpointId, newThreadId);
   }
 
   private getExistingTask(taskId: TaskId): CoordinatorTask {
