@@ -27,6 +27,9 @@
       "eslint --fix"
     ]
   },
+  "dependencies": {
+    "zod": "^4.0.5"
+  },
   "devDependencies": {
     "@commitlint/cli": "^21.0.2",
     "@commitlint/config-conventional": "^21.0.2",
