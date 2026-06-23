@@ -1,3 +1,4 @@
+export * from './coordinator-contract';
 export * from './event-store';
 export * from './artifact-store';
 export * from './checkpoint-store';
