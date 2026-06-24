@@ -31,7 +31,7 @@ export class HashEmbeddingProvider implements EmbeddingProvider {
   }
 }
 
-/** 模块默认实例，供 driver-context-builder 使用 */
+/** 模块默认实例，供 memory-retrieval 使用 */
 export const defaultHashEmbeddingProvider = new HashEmbeddingProvider();
 
 function textToVector(text: string, dimensions: number): number[] {

@@ -1,10 +1,11 @@
 /**
- * Driver 记忆检索装配器（memory 内部）
+ * 记忆检索适配器（memory 内部）
  *
  * 从 AgentMemoryScope 读取 Skills / Experiences，经资格过滤后，
  * 按 **embedding 余弦相似度** 或 **tag 相关性** 筛选相关条目，返回完整实体（含 content）。
  *
  * 不含 Persona；不使用配额（quota）截断数量。
+ * 不负责 DriverContext 组装 —— 组装见 services/driver-context.ts。
  *
  * ## 筛选规则
  *
@@ -17,11 +18,13 @@
  *
  * ```
  * repositoryRetrieveMemoryForTask → retrieveMemoriesForTask（本文件）
+ * memory-cycle → buildDriverContext（services/driver-context.ts）
  * ```
  */
 import type { EmbeddingProvider } from '../ports/embedding-provider';
 import type { AgentMemoryScope } from '../ports/agent-memory-scope';
 import type { ExperienceRecord, SkillRecord } from '../schemas';
+import type { MemoryRetrievalResult } from '../services/memory-query';
 import { defaultHashEmbeddingProvider } from './hash-embedding-provider';
 
 /** 默认 embedding 相似度阈值（0~1）；低于此值且 tag 不命中则排除 */
@@ -52,17 +55,11 @@ export interface MemoryRelevancePolicy {
 }
 
 /**
- * 可选构建参数：策略覆盖与自定义 EmbeddingProvider。
+ * 可选检索参数：策略覆盖与自定义 EmbeddingProvider。
  */
-export interface DriverContextBuilderOptions {
+export interface MemoryRetrievalOptions {
   selection?: Partial<MemoryRelevancePolicy>;
   embedding?: EmbeddingProvider;
-}
-
-/** retrieveMemoriesForTask 的返回值 */
-export interface RetrievedMemories {
-  experiences: ExperienceRecord[];
-  skills: SkillRecord[];
 }
 
 interface MemorySources {
@@ -77,15 +74,15 @@ interface ScoredItem<T> {
 }
 
 /**
- * 为 Driver 检索相关记忆的主入口。
+ * 为任务检索相关记忆的主入口。
  *
  * 流水线：加载 → 资格过滤 → embedding/tag 相关性筛选 → 按相关度排序。
  */
 export async function retrieveMemoriesForTask(
   scope: AgentMemoryScope,
   input: RetrieveMemoriesInput,
-  options?: DriverContextBuilderOptions,
-): Promise<RetrievedMemories> {
+  options?: MemoryRetrievalOptions,
+): Promise<MemoryRetrievalResult> {
   const embedding = options?.embedding ?? defaultHashEmbeddingProvider;
   const policy = resolveRelevancePolicy(options);
   const sources = await loadMemorySources(scope);
@@ -115,7 +112,7 @@ async function loadMemorySources(scope: AgentMemoryScope): Promise<MemorySources
   return { skills, experiences };
 }
 
-function resolveRelevancePolicy(options?: DriverContextBuilderOptions): MemoryRelevancePolicy {
+function resolveRelevancePolicy(options?: MemoryRetrievalOptions): MemoryRelevancePolicy {
   const overrides = options?.selection;
   return {
     include_skills: overrides?.include_skills ?? true,

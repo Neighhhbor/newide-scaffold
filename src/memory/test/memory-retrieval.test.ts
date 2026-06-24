@@ -1,5 +1,5 @@
 /**
- * driver-context-builder 单元测试
+ * memory-retrieval 单元测试
  *
  * 验证资格过滤、embedding/tag 相关性筛选与 content 保留。
  */
@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { nowTimestamp } from '../../core';
 import { InMemoryRepository } from '../adapters/in-memory-repository';
 import { createAgentMemoryScope } from '../adapters/agent-memory-scope';
-import { retrieveMemoriesForTask } from '../adapters/driver-context-builder';
+import { retrieveMemoriesForTask } from '../adapters/memory-retrieval';
 import { HashEmbeddingProvider } from '../adapters/hash-embedding-provider';
 import type { ExperienceRecord, SkillRecord } from '../schemas';
 
@@ -57,7 +57,7 @@ function createSkill(role_id: string, overrides: Partial<SkillRecord> = {}): Ski
 }
 
 describe('retrieveMemoriesForTask', () => {
-  const builderOptions = { embedding: testEmbedding };
+  const retrievalOptions = { embedding: testEmbedding };
 
   it('returns empty lists for a new agent', async () => {
     const repository = new InMemoryRepository();
@@ -67,7 +67,7 @@ describe('retrieveMemoriesForTask', () => {
     const result = await retrieveMemoriesForTask(
       scope,
       { task_query: 'Do something new.' },
-      builderOptions,
+      retrievalOptions,
     );
 
     expect(result.skills).toEqual([]);
@@ -109,7 +109,7 @@ describe('retrieveMemoriesForTask', () => {
       scope,
       { task_query: 'typescript contract' },
       {
-        ...builderOptions,
+        ...retrievalOptions,
         selection: { min_embedding_similarity: 1.0, min_tag_overlap: 1 },
       },
     );
@@ -179,7 +179,7 @@ describe('retrieveMemoriesForTask', () => {
       scope,
       { task_query: 'typescript contract boundaries' },
       {
-        ...builderOptions,
+        ...retrievalOptions,
         selection: { min_embedding_similarity: 0.95, min_tag_overlap: 2 },
       },
     );
@@ -204,7 +204,7 @@ describe('retrieveMemoriesForTask', () => {
     const result = await retrieveMemoriesForTask(
       scope,
       { task_query: 'prior task' },
-      builderOptions,
+      retrievalOptions,
     );
 
     expect(result.experiences).toHaveLength(1);

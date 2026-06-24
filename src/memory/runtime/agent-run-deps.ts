@@ -16,7 +16,7 @@ import type { DriverContext, PromotionOutcome } from '../types';
 /**
  * 顶层 Agent 任务指令规划器。
  * 阅读 task.spec（及未来可能的 Persona 等），产出下发给 Driver 的 task_instruction。
- * 与 queryMemory 分离：检索不负责指令，指令不负责检索。
+ * 与 queryMemory 分离：指令不负责检索；检索由 buildDriverContext 内部调用 queryMemory。
  */
 export type TaskInstructionPlanner = (task: AgentTaskRequest) => Promise<string>;
 
@@ -31,7 +31,7 @@ export interface DriverInvokeInput {
   call_id: string;
   /** 执行的 Driver 标识 */
   source_driver: string;
-  /** Driver 可见的全部上下文：task_instruction + experiences + skills */
+  /** Driver 可见的全部上下文：task_instruction + skills + experiences */
   driver_context: DriverContext;
 }
 
@@ -50,7 +50,7 @@ export type SkillPromotionHandler = (
  * 替换 mock 时只改此对象，不改 Agent / memory-cycle 骨架。
  */
 export interface AgentRunDeps {
-  /** 任务前检索 exp/skill（不含 Persona） */
+  /** 记忆检索策略，由 buildDriverContext 内部调用（不含 Persona） */
   queryMemory: MemoryQueryStrategy;
   /** 顶层 Agent 规划 Driver 任务指令（非 task.spec） */
   planTaskInstruction: TaskInstructionPlanner;
