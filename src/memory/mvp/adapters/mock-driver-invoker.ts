@@ -5,7 +5,7 @@
  *
  * ## 输入边界
  *
- * - 仅读取 driver_context（task_instruction + experiences + skills）
+ * - 仅读取 driver_context（task_instruction + skills + experiences）
  * - 不读取 task.spec，不感知 Persona
  * - experiences/skills 为完整实体，真实 Driver 应使用其 content 组装 prompt
  */
