@@ -7,9 +7,8 @@
  *
  * ```
  * getPersona（仅元数据，不进 Driver）
- *   → queryMemory（exp + skill）
  *   → planTaskInstruction（task_instruction）
- *   → 组装 DriverContext
+ *   → buildDriverContext（内部 queryMemory + 组装）
  *   → invokeDriver
  *   → ingestTaskBuffer
  *   → processPendingBuffer
@@ -27,14 +26,9 @@ import type {
   ExperienceRecord,
 } from '../schemas';
 import type { AgentTaskRequest } from '../agent-types';
-import type {
-  DriverContext,
-  ExtractionOutput,
-  MemoryCycleResult,
-  PromotionOutcome,
-} from '../types';
+import type { ExtractionOutput, MemoryCycleResult, PromotionOutcome } from '../types';
 import { writePendingBuffer } from './buffer-writer';
-import { prepareTaskContext } from './memory-query';
+import { buildDriverContext } from './driver-context';
 
 /**
  * ingestTaskBuffer 的输入。
@@ -129,10 +123,9 @@ export async function processPendingBuffer(
  * 单轮任务记忆全周期主入口。
  *
  * 1. 读取 Persona（仅写入 cycle 结果，不传给 Driver）
- * 2. 检索 exp/skill
- * 3. 规划 task_instruction
- * 4. 组装 DriverContext 并调用 Driver
- * 5. 写入 buffer → 提取经验 → 技能晋升
+ * 2. 规划 task_instruction
+ * 3. buildDriverContext（内部 queryMemory + 组装）并调用 Driver
+ * 4. 写入 buffer → 提取经验 → 技能晋升
  *
  * @param memory - Agent 记忆作用域
  * @param task   - 协调层任务请求（含 spec）
@@ -151,13 +144,14 @@ export async function runTaskMemoryCycle(
   const skills_before = await memory.listSkills();
   const persona = await memory.getPersona();
 
-  const retrieval = await prepareTaskContext(memory, task, task_id, deps.queryMemory);
   const task_instruction = await deps.planTaskInstruction(task);
-  const driver_context: DriverContext = {
+  const { driver_context, retrieval } = await buildDriverContext({
+    memory,
+    task,
+    task_id,
     task_instruction,
-    experiences: retrieval.experiences,
-    skills: retrieval.skills,
-  };
+    queryMemory: deps.queryMemory,
+  });
 
   const driver_return = await deps.invokeDriver({
     task_id,
