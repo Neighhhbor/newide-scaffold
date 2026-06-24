@@ -42,7 +42,19 @@ export type {
 
 // 正式服务
 export { writePendingBuffer } from './services/buffer-writer';
+export {
+  buildDriverContext,
+  type BuildDriverContextInput,
+  type BuildDriverContextResult,
+} from './services/driver-context';
 export { prepareTaskContext, type MemoryQueryStrategy } from './services/memory-query';
+export {
+  retrieveMemoriesForTask,
+  type MemoryRetrievalOptions,
+  type MemoryRelevancePolicy,
+  type RetrieveMemoriesInput,
+} from './adapters/memory-retrieval';
+export { repositoryRetrieveMemoryForTask } from './adapters/repository-memory-retrieval';
 export {
   ingestTaskBuffer,
   processPendingBuffer,

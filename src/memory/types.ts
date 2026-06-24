@@ -29,9 +29,8 @@ export interface ExtractionOutput {
  * 下发给 Driver 的执行上下文。
  *
  * Driver 可见的全部记忆信息仅此三项，不含 Persona。
- * 由 memory-cycle 在 invokeDriver 前组装：
- *   task_instruction ← planTaskInstruction(task)
- *   experiences/skills ← queryMemory(task) 的检索结果
+ * 由 buildDriverContext 内部调用 queryMemory 检索；与 task_instruction 合并后
+ * 经 memory-cycle 下发给 Driver。
  */
 export interface DriverContext {
   /**
@@ -39,10 +38,10 @@ export interface DriverContext {
    * 由 planTaskInstruction 产出，不是 Coordinator 传入的 task.spec。
    */
   task_instruction: string;
+  /** 入选技能，含 description 与 content 全文（排在经验之前，便于 Driver 优先关注） */
+  skills: SkillRecord[];
   /** 入选经验，含 description 与 content 全文 */
   experiences: ExperienceRecord[];
-  /** 入选技能，含 description 与 content 全文 */
-  skills: SkillRecord[];
 }
 
 /**

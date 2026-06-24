@@ -7,7 +7,7 @@
 import type { AgentMemoryScope } from '../../ports/agent-memory-scope';
 import type { AgentTaskRequest } from '../../agent-types';
 import type { MemoryRetrievalResult } from '../../services/memory-query';
-import { retrieveMemoriesForTask } from '../../adapters/driver-context-builder';
+import { retrieveMemoriesForTask } from '../../adapters/memory-retrieval';
 
 /** @deprecated 使用 repositoryRetrieveMemoryForTask 代替 */
 export async function mockRetrieveMemoryForTask(
