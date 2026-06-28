@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { createAgentMemoryScope } from '../adapters/agent-memory-scope';
 import { InMemoryRepository } from '../adapters/in-memory-repository';
+import { InMemoryBufferRepository } from '../adapters/in-memory-buffer-repository';
 import { buildDriverContext } from '../services/driver-context';
 import type { MemoryQueryStrategy } from '../services/memory-query';
 
@@ -49,7 +50,7 @@ describe('buildDriverContext', () => {
 
     const repository = new InMemoryRepository();
     await repository.initializeAgent({ role_id: 'role_a', name: 'Agent A' });
-    const memory = createAgentMemoryScope(repository, 'role_a');
+    const memory = createAgentMemoryScope(repository, new InMemoryBufferRepository(), 'role_a');
 
     const { driver_context, retrieval } = await buildDriverContext({
       memory,
@@ -78,7 +79,7 @@ describe('buildDriverContext', () => {
 
     const repository = new InMemoryRepository();
     await repository.initializeAgent({ role_id: 'role_empty', name: 'Empty' });
-    const memory = createAgentMemoryScope(repository, 'role_empty');
+    const memory = createAgentMemoryScope(repository, new InMemoryBufferRepository(), 'role_empty');
 
     const { driver_context } = await buildDriverContext({
       memory,
