@@ -10,10 +10,13 @@ export * from './types';
 export * as schemas from './schemas';
 export { MockMemoryProvider } from './mock-memory';
 export { InMemoryRepository } from './adapters/in-memory-repository';
+export { InMemoryBufferRepository } from './adapters/in-memory-buffer-repository';
+export { PgMemoryRepository } from './adapters/pg-memory-repository';
 export { createAgentMemoryScope } from './adapters/agent-memory-scope';
 
 // Ports — 公开接口类型
-export type { MemoryRepository, SaveBufferResult } from './ports/memory-repository';
+export type { BufferRepository, SaveBufferResult } from './ports/buffer-repository';
+export type { MemoryRepository, MemoryVectorSearchOptions } from './ports/memory-repository';
 export type { AgentMemoryScope } from './ports/agent-memory-scope';
 export type { ExperienceExtractor } from './ports/experience-extractor';
 export type { EmbeddingProvider } from './ports/embedding-provider';

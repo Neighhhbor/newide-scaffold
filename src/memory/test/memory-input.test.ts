@@ -7,11 +7,13 @@
 import { describe, it, expect } from 'vitest';
 import { AgentManager } from '../runtime/agent-manager';
 import { InMemoryRepository } from '../adapters/in-memory-repository';
+import { InMemoryBufferRepository } from '../adapters/in-memory-buffer-repository';
 
 describe('memory MVP demo flow', () => {
   it('createAgent → submitTask → 检索 → mock Driver → buffer → 提取 → 默认不晋升', async () => {
     const repository = new InMemoryRepository();
-    const manager = AgentManager.create(repository);
+    const bufferRepository = new InMemoryBufferRepository();
+    const manager = AgentManager.create(repository, bufferRepository);
 
     await manager.createAgent({
       role_id: 'role_ts_engineer',
@@ -41,7 +43,7 @@ describe('memory MVP demo flow', () => {
     expect(result.cycle.driver_context.experiences).toEqual([]);
     expect(result.cycle.driver_context.skills).toEqual([]);
 
-    const meta = await repository.getBufferMeta('role_ts_engineer');
+    const meta = await bufferRepository.getBufferMeta('role_ts_engineer');
     expect(meta.pending_count).toBe(0);
     expect(meta.total_processed).toBe(1);
 
@@ -52,7 +54,8 @@ describe('memory MVP demo flow', () => {
 
   it('promotion_ready scenario → mock 技能晋升', async () => {
     const repository = new InMemoryRepository();
-    const manager = AgentManager.create(repository);
+    const bufferRepository = new InMemoryBufferRepository();
+    const manager = AgentManager.create(repository, bufferRepository);
 
     await manager.createAgent({
       role_id: 'role_promo',

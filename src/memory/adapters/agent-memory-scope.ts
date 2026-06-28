@@ -1,11 +1,12 @@
 /**
  * AgentMemoryScope 适配器
  *
- * 将 MemoryRepository 包装为绑定 role_id 的作用域对象；
+ * 将 MemoryRepository 与 BufferRepository 组合为绑定 role_id 的作用域对象；
  * 由 AgentManager.createAgent 为每个 Agent 创建独立实例。
  */
-import type { AgentMemoryScope } from "../ports/agent-memory-scope";
-import type { MemoryRepository } from "../ports/memory-repository";
+import type { AgentMemoryScope } from '../ports/agent-memory-scope';
+import type { BufferRepository } from '../ports/buffer-repository';
+import type { MemoryRepository, MemoryVectorSearchOptions } from '../ports/memory-repository';
 import type {
   AgentHandle,
   AgentMetrics,
@@ -15,12 +16,13 @@ import type {
   ExperienceRecord,
   PersonaDef,
   SkillRecord,
-} from "../schemas";
-import type { SaveBufferResult } from "../ports/memory-repository";
+} from '../schemas';
+import type { SaveBufferResult } from '../ports/buffer-repository';
 
 class ScopedAgentMemory implements AgentMemoryScope {
   constructor(
     private readonly repository: MemoryRepository,
+    private readonly buffer: BufferRepository,
     readonly role_id: string,
   ) {}
 
@@ -44,34 +46,45 @@ class ScopedAgentMemory implements AgentMemoryScope {
     return this.repository.listExperiences(this.role_id);
   }
 
+  searchSkills(options: MemoryVectorSearchOptions): Promise<SkillRecord[]> {
+    return this.repository.searchSkills(this.role_id, options);
+  }
+
+  searchExperiences(options: MemoryVectorSearchOptions): Promise<ExperienceRecord[]> {
+    return this.repository.searchExperiences(this.role_id, options);
+  }
+
   saveBufferSnapshot(
     snapshot: BufferSnapshot,
     agentContext?: AgentContextSnapshot,
   ): Promise<SaveBufferResult> {
-    return this.repository.saveBufferSnapshot(this.role_id, snapshot, agentContext);
+    return this.buffer.saveBufferSnapshot(this.role_id, snapshot, agentContext);
   }
 
   getBufferMeta(): Promise<BufferMeta> {
-    return this.repository.getBufferMeta(this.role_id);
+    return this.buffer.getBufferMeta(this.role_id);
   }
 
   listPendingBufferSeqs(): Promise<number[]> {
-    return this.repository.listPendingBufferSeqs(this.role_id);
+    return this.buffer.listPendingBufferSeqs(this.role_id);
   }
 
-  getPendingBuffer(seq: number): Promise<{
-    snapshot: BufferSnapshot;
-    agentContext?: AgentContextSnapshot;
-  } | undefined> {
-    return this.repository.getPendingBuffer(this.role_id, seq);
+  getPendingBuffer(seq: number): Promise<
+    | {
+        snapshot: BufferSnapshot;
+        agentContext?: AgentContextSnapshot;
+      }
+    | undefined
+  > {
+    return this.buffer.getPendingBuffer(this.role_id, seq);
   }
 
   markBufferProcessed(seq: number): Promise<void> {
-    return this.repository.markBufferProcessed(this.role_id, seq);
+    return this.buffer.markBufferProcessed(this.role_id, seq);
   }
 
   markBufferDeadLetter(seq: number): Promise<void> {
-    return this.repository.markBufferDeadLetter(this.role_id, seq);
+    return this.buffer.markBufferDeadLetter(this.role_id, seq);
   }
 
   saveExperience(experience: ExperienceRecord): Promise<void> {
@@ -89,7 +102,8 @@ class ScopedAgentMemory implements AgentMemoryScope {
 
 export function createAgentMemoryScope(
   repository: MemoryRepository,
+  buffer: BufferRepository,
   role_id: string,
 ): AgentMemoryScope {
-  return new ScopedAgentMemory(repository, role_id);
+  return new ScopedAgentMemory(repository, buffer, role_id);
 }
