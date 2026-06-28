@@ -2,14 +2,15 @@
  * AgentManager 运行时（Boss）
  *
  * 管理 Agent 生命周期：createAgent、start/stop、竞标派单 submitTask。
- * 持有共享 MemoryRepository，为每个 Agent 创建独立 AgentMemoryScope；不直接写 buffer。
+ * 持有共享 MemoryRepository 与 BufferRepository，为每个 Agent 创建独立 AgentMemoryScope。
  */
-import type { AgentHandle, CreateAgentSpec } from "../schemas";
-import type { MemoryRepository } from "../ports/memory-repository";
-import type { AgentTaskRequest } from "../agent-types";
-import type { MemoryCycleResult } from "../types";
-import { createAgentMemoryScope } from "../adapters/agent-memory-scope";
-import { Agent } from "./agent";
+import type { AgentHandle, CreateAgentSpec } from '../schemas';
+import type { BufferRepository } from '../ports/buffer-repository';
+import type { MemoryRepository } from '../ports/memory-repository';
+import type { AgentTaskRequest } from '../agent-types';
+import type { MemoryCycleResult } from '../types';
+import { createAgentMemoryScope } from '../adapters/agent-memory-scope';
+import { Agent } from './agent';
 
 /** submitTask 的返回：中标 Agent、竞标分数与记忆周期结果 */
 export interface SubmitTaskResult {
@@ -22,15 +23,19 @@ export class AgentManager {
   private readonly agents = new Map<string, Agent>();
   private started = false;
 
-  constructor(private readonly repository: MemoryRepository) {}
+  constructor(
+    private readonly repository: MemoryRepository,
+    private readonly bufferRepository: BufferRepository,
+  ) {}
 
-  static create(repository: MemoryRepository): AgentManager {
-    return new AgentManager(repository);
+  static create(repository: MemoryRepository, bufferRepository: BufferRepository): AgentManager {
+    return new AgentManager(repository, bufferRepository);
   }
 
   async createAgent(spec: CreateAgentSpec): Promise<AgentHandle> {
     await this.repository.initializeAgent(spec);
-    const memory = createAgentMemoryScope(this.repository, spec.role_id);
+    await this.bufferRepository.ensureAgent(spec.role_id);
+    const memory = createAgentMemoryScope(this.repository, this.bufferRepository, spec.role_id);
     const agent = new Agent(memory);
     this.agents.set(spec.role_id, agent);
     if (this.started) {
@@ -61,7 +66,7 @@ export class AgentManager {
 
   async submitTask(request: AgentTaskRequest): Promise<SubmitTaskResult> {
     if (this.agents.size === 0) {
-      throw new Error("No agents registered");
+      throw new Error('No agents registered');
     }
 
     this.wakeAll();
@@ -95,7 +100,7 @@ export class AgentManager {
 }
 
 function pickWinner(scores: Record<string, number>): string {
-  let winner = "";
+  let winner = '';
   let best = -Infinity;
 
   for (const [role_id, score] of Object.entries(scores)) {

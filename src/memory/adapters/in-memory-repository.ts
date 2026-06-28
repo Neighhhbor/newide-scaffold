@@ -2,26 +2,20 @@
  * InMemoryRepository — MemoryRepository 内存适配器
  *
  * 所有 Agent 共享一个实例，数据按 role_id 隔离存储于内存 Map。
- * 含 pending buffer、experiences、skills、persona 等；无物理文件路径。
+ * 含 experiences、skills、persona 等；buffer 见 InMemoryBufferRepository。
  */
-import { nowTimestamp } from "../../core";
+import { nowTimestamp } from '../../core';
 import type {
   AgentHandle,
   AgentMetrics,
-  BufferMeta,
-  BufferSnapshot,
-  AgentContextSnapshot,
   CreateAgentSpec,
   ExperienceRecord,
   PersonaDef,
   SkillRecord,
-} from "../schemas";
-import type { MemoryRepository, SaveBufferResult } from "../ports/memory-repository";
-
-interface PendingEntry {
-  snapshot: BufferSnapshot;
-  agentContext?: AgentContextSnapshot;
-}
+} from '../schemas';
+import type { EmbeddingProvider } from '../ports/embedding-provider';
+import type { MemoryRepository, MemoryVectorSearchOptions } from '../ports/memory-repository';
+import { defaultHashEmbeddingProvider } from './hash-embedding-provider';
 
 interface AgentStore {
   handle: AgentHandle;
@@ -29,9 +23,15 @@ interface AgentStore {
   metrics: AgentMetrics;
   skills: SkillRecord[];
   experiences: ExperienceRecord[];
-  bufferMeta: BufferMeta;
-  pending: Map<number, PendingEntry>;
 }
+
+interface ScoredRecord<T> {
+  item: T;
+  similarity: number;
+}
+
+const DEFAULT_MIN_EXPERIENCE_CONFIDENCE = 0.2;
+const DEFAULT_MIN_SIMILARITY = 0.5;
 
 function createSeedPersona(role_id: string, persona_seed?: string): PersonaDef {
   const generated_at = nowTimestamp();
@@ -39,10 +39,10 @@ function createSeedPersona(role_id: string, persona_seed?: string): PersonaDef {
     role_id,
     version: 1,
     summary: persona_seed ?? `Seed persona for ${role_id}`,
-    skills_overview: "No skills yet.",
-    experience_coverage: "No experiences yet.",
-    recent_performance: "Awaiting first task.",
-    notes: "Initialized by InMemoryRepository.",
+    skills_overview: 'No skills yet.',
+    experience_coverage: 'No experiences yet.',
+    recent_performance: 'Awaiting first task.',
+    notes: 'Initialized by InMemoryRepository.',
     generated_at,
   };
 }
@@ -67,14 +67,18 @@ function createSeedMetrics(role_id: string): AgentMetrics {
   };
 }
 
-function createSeedHandle(spec: CreateAgentSpec, persona: PersonaDef, metrics: AgentMetrics): AgentHandle {
+function createSeedHandle(
+  spec: CreateAgentSpec,
+  persona: PersonaDef,
+  metrics: AgentMetrics,
+): AgentHandle {
   return {
     role_id: spec.role_id,
     name: spec.name,
     persona,
     skill_count: 0,
     experience_count: 0,
-    status: "created",
+    status: 'created',
     created_at: nowTimestamp(),
     tags: spec.tags,
     owned_skills: [],
@@ -83,18 +87,22 @@ function createSeedHandle(spec: CreateAgentSpec, persona: PersonaDef, metrics: A
   };
 }
 
-function createEmptyBufferMeta(role_id: string): BufferMeta {
-  return {
-    role_id,
-    pending_count: 0,
-    cursor: 0,
-    total_processed: 0,
-    total_dead_letters: 0,
-  };
+function isEligibleSkill(skill: SkillRecord): boolean {
+  return skill.review_status === 'approved' && skill.market_status !== 'superseded';
+}
+
+function isEligibleExperience(experience: ExperienceRecord, min_confidence: number): boolean {
+  return (
+    experience.type === 'positive' &&
+    !experience.promoted_to &&
+    experience.confidence >= min_confidence
+  );
 }
 
 export class InMemoryRepository implements MemoryRepository {
   private readonly agents = new Map<string, AgentStore>();
+
+  constructor(private readonly embedding: EmbeddingProvider = defaultHashEmbeddingProvider) {}
 
   async ensureAgent(role_id: string): Promise<void> {
     if (this.agents.has(role_id)) {
@@ -121,8 +129,6 @@ export class InMemoryRepository implements MemoryRepository {
       metrics,
       skills: [],
       experiences: [],
-      bufferMeta: createEmptyBufferMeta(spec.role_id),
-      pending: new Map(),
     });
   }
 
@@ -146,55 +152,37 @@ export class InMemoryRepository implements MemoryRepository {
     return [...this.requireStore(role_id).experiences];
   }
 
-  async saveBufferSnapshot(
+  async searchSkills(role_id: string, options: MemoryVectorSearchOptions): Promise<SkillRecord[]> {
+    const eligible = this.requireStore(role_id).skills.filter(isEligibleSkill);
+    return rankByVectorSimilarity(eligible, options, this.embedding);
+  }
+
+  async searchExperiences(
     role_id: string,
-    snapshot: BufferSnapshot,
-    agentContext?: AgentContextSnapshot,
-  ): Promise<SaveBufferResult> {
-    const store = this.requireStore(role_id);
-    const seq = store.bufferMeta.cursor + 1;
-    store.bufferMeta.cursor = seq;
-    store.bufferMeta.pending_count += 1;
-
-    const storedSnapshot: BufferSnapshot = agentContext
-      ? { ...snapshot, context_snapshot_ref: String(seq) }
-      : snapshot;
-
-    const storedAgentContext = agentContext
-      ? {
-          ...agentContext,
-          driver_calls: agentContext.driver_calls.map((call) => ({
-            ...call,
-            driver_return_ref: `report_${seq}.json`,
-          })),
-        }
-      : undefined;
-
-    store.pending.set(seq, {
-      snapshot: storedSnapshot,
-      ...(storedAgentContext ? { agentContext: storedAgentContext } : {}),
-    });
-
-    return {
-      seq,
-      snapshot: storedSnapshot,
-      ...(storedAgentContext ? { agent_context_snapshot: storedAgentContext } : {}),
-    };
+    options: MemoryVectorSearchOptions,
+  ): Promise<ExperienceRecord[]> {
+    const min_confidence = options.min_confidence ?? DEFAULT_MIN_EXPERIENCE_CONFIDENCE;
+    const eligible = this.requireStore(role_id).experiences.filter((experience) =>
+      isEligibleExperience(experience, min_confidence),
+    );
+    return rankByVectorSimilarity(eligible, options, this.embedding);
   }
 
   async saveExperience(role_id: string, experience: ExperienceRecord): Promise<void> {
     const store = this.requireStore(role_id);
-    store.experiences.push(experience);
+    const stored = await this.withDescriptionEmbedding(experience);
+    store.experiences.push(stored);
     store.handle.experience_count = store.experiences.length;
-    store.handle.owned_exps.push(experience.id);
+    store.handle.owned_exps.push(stored.id);
     store.metrics.experience_count = store.experiences.length;
   }
 
   async saveSkill(role_id: string, skill: SkillRecord): Promise<void> {
     const store = this.requireStore(role_id);
-    store.skills.push(skill);
+    const stored = await this.withDescriptionEmbedding(skill);
+    store.skills.push(stored);
     store.handle.skill_count = store.skills.length;
-    store.handle.owned_skills.push(skill.id);
+    store.handle.owned_skills.push(stored.id);
     store.metrics.skill_count = store.skills.length;
     store.metrics.promoted_skill_count += 1;
   }
@@ -205,52 +193,18 @@ export class InMemoryRepository implements MemoryRepository {
     if (index === -1) {
       throw new Error(`Experience not found: ${experience.id}`);
     }
-    store.experiences[index] = experience;
+    store.experiences[index] = await this.withDescriptionEmbedding(experience);
   }
 
-  async getBufferMeta(role_id: string): Promise<BufferMeta> {
-    return { ...this.requireStore(role_id).bufferMeta };
-  }
-
-  async markBufferProcessed(role_id: string, seq: number): Promise<void> {
-    const store = this.requireStore(role_id);
-    const entry = store.pending.get(seq);
-    if (!entry) {
-      throw new Error(`Pending buffer not found: seq=${seq}`);
-    }
-    store.pending.delete(seq);
-    store.bufferMeta.pending_count = Math.max(0, store.bufferMeta.pending_count - 1);
-    store.bufferMeta.total_processed += 1;
-    entry.snapshot.extraction_status = "processed";
-  }
-
-  async markBufferDeadLetter(role_id: string, seq: number): Promise<void> {
-    const store = this.requireStore(role_id);
-    const entry = store.pending.get(seq);
-    if (!entry) {
-      throw new Error(`Pending buffer not found: seq=${seq}`);
-    }
-    store.pending.delete(seq);
-    store.bufferMeta.pending_count = Math.max(0, store.bufferMeta.pending_count - 1);
-    store.bufferMeta.total_dead_letters += 1;
-    entry.snapshot.extraction_status = "dead_letter";
-  }
-
-  async listPendingBufferSeqs(role_id: string): Promise<number[]> {
-    return [...this.requireStore(role_id).pending.keys()].sort((a, b) => a - b);
-  }
-
-  async getPendingBuffer(
-    role_id: string,
-    seq: number,
-  ): Promise<{ snapshot: BufferSnapshot; agentContext?: AgentContextSnapshot } | undefined> {
-    const entry = this.requireStore(role_id).pending.get(seq);
-    if (!entry) {
-      return undefined;
+  private async withDescriptionEmbedding<T extends SkillRecord | ExperienceRecord>(
+    record: T,
+  ): Promise<T> {
+    if (record.description_embedding.length === this.embedding.dimensions) {
+      return record;
     }
     return {
-      snapshot: entry.snapshot,
-      ...(entry.agentContext ? { agentContext: entry.agentContext } : {}),
+      ...record,
+      description_embedding: await this.embedding.embed(record.description),
     };
   }
 
@@ -261,4 +215,29 @@ export class InMemoryRepository implements MemoryRepository {
     }
     return store;
   }
+}
+
+async function rankByVectorSimilarity<T extends SkillRecord | ExperienceRecord>(
+  items: T[],
+  options: MemoryVectorSearchOptions,
+  embedding: EmbeddingProvider,
+): Promise<T[]> {
+  const scored: ScoredRecord<T>[] = [];
+
+  for (const item of items) {
+    const itemEmbedding =
+      item.description_embedding.length === embedding.dimensions
+        ? item.description_embedding
+        : await embedding.embed(item.description);
+    scored.push({
+      item,
+      similarity: embedding.cosineSimilarity(options.query_embedding, itemEmbedding),
+    });
+  }
+
+  return scored
+    .filter((entry) => entry.similarity >= (options.min_similarity ?? DEFAULT_MIN_SIMILARITY))
+    .sort((left, right) => right.similarity - left.similarity)
+    .slice(0, options.top_k)
+    .map((entry) => entry.item);
 }
