@@ -1,18 +1,16 @@
 /**
  * 记忆检索适配器（memory 内部）
  *
- * 从 AgentMemoryScope 读取 Skills / Experiences，经资格过滤后，
- * 按 **embedding 余弦相似度** 或 **tag 相关性** 筛选相关条目，返回完整实体（含 content）。
- *
- * 不含 Persona；不使用配额（quota）截断数量。
+ * ReMe 第一阶段：索引层 top-K 向量召回 → confidence 过滤 → 总量截断。
+ * tag 命中作为向量召回之外的补充路径。
  * 不负责 DriverContext 组装 —— 组装见 services/driver-context.ts。
  *
- * ## 筛选规则
+ * ## 筛选规则（Spec §5.1 第一阶段，LLM 精筛留后续）
  *
- * 1. 资格过滤：approved skill、未晋升 positive experience
- * 2. 相关性过滤（满足其一即入选）：
- *    - cosine(task_embedding, item.description_embedding) ≥ min_embedding_similarity
- *    - tag 与 task_query 的重叠数 ≥ min_tag_overlap
+ * 1. 向量 top-K 召回（默认 K=20）+ 最低余弦相似度门槛（默认 0.5）
+ * 2. tag 补充：eligible 池中 tag 命中但未被向量召回的条目
+ * 3. experience 过滤 confidence ≥ min_confidence（默认 0.2）
+ * 4. 按相关度排序，skills + experiences 合计不超过 max_memory_items（默认 5）
  *
  * ## 调用链
  *
@@ -27,11 +25,20 @@ import type { ExperienceRecord, SkillRecord } from '../schemas';
 import type { MemoryRetrievalResult } from '../services/memory-query';
 import { defaultHashEmbeddingProvider } from './hash-embedding-provider';
 
-/** 默认 embedding 相似度阈值（0~1）；低于此值且 tag 不命中则排除 */
-const DEFAULT_MIN_EMBEDDING_SIMILARITY = 0.75;
+/** ReMe 索引层默认 top-K（Spec §5.1） */
+const DEFAULT_RECALL_TOP_K = 20;
 
-/** 默认 tag 最少命中数（task_query token 与 tags 的交集） */
+/** 经验最低置信度（Spec §5.1） */
+const DEFAULT_MIN_CONFIDENCE = 0.2;
+
+/** 注入 Driver 的记忆条目总量上限（MemoryPolicy.max_memory_items） */
+const DEFAULT_MAX_MEMORY_ITEMS = 5;
+
+/** tag 补充路径：task_query token 与 tags 的最低重叠命中数 */
 const DEFAULT_MIN_TAG_OVERLAP = 1;
+
+/** 向量召回最低余弦相似度（低于此值视为不相关，不返回） */
+const DEFAULT_MIN_EMBEDDING_SIMILARITY = 0.5;
 
 /**
  * retrieveMemoriesForTask 的输入。
@@ -42,15 +49,20 @@ export interface RetrieveMemoriesInput {
 }
 
 /**
- * 记忆相关性筛选策略。
- * 不包含配额字段；入选完全由 embedding / tag 相关性决定。
+ * 记忆检索策略（ReMe 第一阶段 + tag 补充）。
  */
 export interface MemoryRelevancePolicy {
   include_skills: boolean;
   include_recent_experience: boolean;
-  /** description_embedding 与 task embedding 的最低余弦相似度 */
+  /** 索引层向量召回 top-K */
+  recall_top_k: number;
+  /** 向量召回最低余弦相似度 */
   min_embedding_similarity: number;
-  /** task_query 与 tags 的最低重叠命中数 */
+  /** 经验最低置信度 */
+  min_confidence: number;
+  /** skills + experiences 合计最大条目数 */
+  max_memory_items: number;
+  /** tag 补充路径的最低重叠命中数 */
   min_tag_overlap: number;
 }
 
@@ -67,8 +79,10 @@ interface MemorySources {
   experiences: ExperienceRecord[];
 }
 
-interface ScoredItem<T> {
-  item: T;
+interface ScoredMemoryItem {
+  kind: 'skill' | 'experience';
+  skill?: SkillRecord;
+  experience?: ExperienceRecord;
   embedding_similarity: number;
   tag_overlap: number;
 }
@@ -76,7 +90,7 @@ interface ScoredItem<T> {
 /**
  * 为任务检索相关记忆的主入口。
  *
- * 流水线：加载 → 资格过滤 → embedding/tag 相关性筛选 → 按相关度排序。
+ * 流水线：向量 top-K → tag 补充 → confidence 过滤 → 相关度排序 → 总量截断。
  */
 export async function retrieveMemoriesForTask(
   scope: AgentMemoryScope,
@@ -85,26 +99,39 @@ export async function retrieveMemoriesForTask(
 ): Promise<MemoryRetrievalResult> {
   const embedding = options?.embedding ?? defaultHashEmbeddingProvider;
   const policy = resolveRelevancePolicy(options);
-  const sources = await loadMemorySources(scope);
-  const eligible = filterEligibleMemories(sources, policy);
   const taskEmbedding = await embedding.embed(input.task_query);
 
-  const skills = await selectByRelevance(
-    eligible.skills,
+  const vectorSkills = policy.include_skills
+    ? await scope.searchSkills({
+        query_embedding: taskEmbedding,
+        top_k: policy.recall_top_k,
+        min_similarity: policy.min_embedding_similarity,
+      })
+    : [];
+  const vectorExperiences = policy.include_recent_experience
+    ? await scope.searchExperiences({
+        query_embedding: taskEmbedding,
+        top_k: policy.recall_top_k,
+        min_similarity: policy.min_embedding_similarity,
+        min_confidence: policy.min_confidence,
+      })
+    : [];
+
+  const sources = await loadMemorySources(scope);
+  const eligible = filterEligibleMemories(sources, policy);
+
+  const candidates = await buildCandidateSet(
     input.task_query,
     taskEmbedding,
     policy,
     embedding,
-  );
-  const experiences = await selectByRelevance(
-    eligible.experiences,
-    input.task_query,
-    taskEmbedding,
-    policy,
-    embedding,
+    eligible,
+    vectorSkills,
+    vectorExperiences,
   );
 
-  return { skills, experiences };
+  const selected = candidates.slice(0, policy.max_memory_items);
+  return partitionSelectedMemories(selected);
 }
 
 async function loadMemorySources(scope: AgentMemoryScope): Promise<MemorySources> {
@@ -117,8 +144,11 @@ function resolveRelevancePolicy(options?: MemoryRetrievalOptions): MemoryRelevan
   return {
     include_skills: overrides?.include_skills ?? true,
     include_recent_experience: overrides?.include_recent_experience ?? true,
+    recall_top_k: overrides?.recall_top_k ?? DEFAULT_RECALL_TOP_K,
     min_embedding_similarity:
       overrides?.min_embedding_similarity ?? DEFAULT_MIN_EMBEDDING_SIMILARITY,
+    min_confidence: overrides?.min_confidence ?? DEFAULT_MIN_CONFIDENCE,
+    max_memory_items: overrides?.max_memory_items ?? DEFAULT_MAX_MEMORY_ITEMS,
     min_tag_overlap: overrides?.min_tag_overlap ?? DEFAULT_MIN_TAG_OVERLAP,
   };
 }
@@ -135,40 +165,109 @@ function filterEligibleMemories(
 
   const experiences = policy.include_recent_experience
     ? sources.experiences.filter(
-        (experience) => experience.type === 'positive' && !experience.promoted_to,
+        (experience) =>
+          experience.type === 'positive' &&
+          !experience.promoted_to &&
+          experience.confidence >= policy.min_confidence,
       )
     : [];
 
   return { skills, experiences };
 }
 
-/**
- * 按 embedding 余弦相似度或 tag 重叠筛选，并按相关度降序排列。
- * 入选条件：similarity ≥ 阈值 **或** tag_overlap ≥ 阈值。
- */
-async function selectByRelevance<T extends SkillRecord | ExperienceRecord>(
-  items: T[],
+async function buildCandidateSet(
   task_query: string,
   taskEmbedding: number[],
   policy: MemoryRelevancePolicy,
   embedding: EmbeddingProvider,
-): Promise<T[]> {
-  const scored: ScoredItem<T>[] = [];
+  eligible: MemorySources,
+  vectorSkills: SkillRecord[],
+  vectorExperiences: ExperienceRecord[],
+): Promise<ScoredMemoryItem[]> {
+  const seenSkillIds = new Set(vectorSkills.map((skill) => skill.id));
+  const seenExperienceIds = new Set(vectorExperiences.map((experience) => experience.id));
+  const scored: ScoredMemoryItem[] = [];
 
-  for (const item of items) {
-    const itemEmbedding = await resolveItemEmbedding(item, embedding);
-    const embedding_similarity = embedding.cosineSimilarity(taskEmbedding, itemEmbedding);
-    const tag_overlap = scoreTagOverlap(item.tags, task_query);
-    const isRelevant =
-      embedding_similarity >= policy.min_embedding_similarity ||
-      tag_overlap >= policy.min_tag_overlap;
+  for (const skill of vectorSkills) {
+    scored.push(await scoreSkill(skill, task_query, taskEmbedding, embedding));
+  }
 
-    if (isRelevant) {
-      scored.push({ item, embedding_similarity, tag_overlap });
+  for (const experience of vectorExperiences) {
+    scored.push(await scoreExperience(experience, task_query, taskEmbedding, embedding));
+  }
+
+  for (const skill of eligible.skills) {
+    if (seenSkillIds.has(skill.id)) {
+      continue;
+    }
+    const tag_overlap = scoreTagOverlap(skill.tags, task_query);
+    if (tag_overlap >= policy.min_tag_overlap) {
+      seenSkillIds.add(skill.id);
+      scored.push(await scoreSkill(skill, task_query, taskEmbedding, embedding, tag_overlap));
     }
   }
 
-  return scored.sort((left, right) => compareRelevance(left, right)).map((entry) => entry.item);
+  for (const experience of eligible.experiences) {
+    if (seenExperienceIds.has(experience.id)) {
+      continue;
+    }
+    const tag_overlap = scoreTagOverlap(experience.tags, task_query);
+    if (tag_overlap >= policy.min_tag_overlap) {
+      seenExperienceIds.add(experience.id);
+      scored.push(
+        await scoreExperience(experience, task_query, taskEmbedding, embedding, tag_overlap),
+      );
+    }
+  }
+
+  return scored.sort((left, right) => compareRelevance(left, right));
+}
+
+async function scoreSkill(
+  skill: SkillRecord,
+  task_query: string,
+  taskEmbedding: number[],
+  embedding: EmbeddingProvider,
+  tag_overlap = scoreTagOverlap(skill.tags, task_query),
+): Promise<ScoredMemoryItem> {
+  const itemEmbedding = await resolveItemEmbedding(skill, embedding);
+  return {
+    kind: 'skill',
+    skill,
+    embedding_similarity: embedding.cosineSimilarity(taskEmbedding, itemEmbedding),
+    tag_overlap,
+  };
+}
+
+async function scoreExperience(
+  experience: ExperienceRecord,
+  task_query: string,
+  taskEmbedding: number[],
+  embedding: EmbeddingProvider,
+  tag_overlap = scoreTagOverlap(experience.tags, task_query),
+): Promise<ScoredMemoryItem> {
+  const itemEmbedding = await resolveItemEmbedding(experience, embedding);
+  return {
+    kind: 'experience',
+    experience,
+    embedding_similarity: embedding.cosineSimilarity(taskEmbedding, itemEmbedding),
+    tag_overlap,
+  };
+}
+
+function partitionSelectedMemories(selected: ScoredMemoryItem[]): MemoryRetrievalResult {
+  const skills: SkillRecord[] = [];
+  const experiences: ExperienceRecord[] = [];
+
+  for (const entry of selected) {
+    if (entry.kind === 'skill' && entry.skill) {
+      skills.push(entry.skill);
+    } else if (entry.kind === 'experience' && entry.experience) {
+      experiences.push(entry.experience);
+    }
+  }
+
+  return { skills, experiences };
 }
 
 /** 优先使用已存储的 description_embedding；维度不匹配时回退 embed(description) */
@@ -182,7 +281,7 @@ async function resolveItemEmbedding(
   return embedding.embed(item.description);
 }
 
-function compareRelevance<T>(left: ScoredItem<T>, right: ScoredItem<T>): number {
+function compareRelevance(left: ScoredMemoryItem, right: ScoredMemoryItem): number {
   const leftScore = Math.max(left.embedding_similarity, normalizeTagScore(left.tag_overlap));
   const rightScore = Math.max(right.embedding_similarity, normalizeTagScore(right.tag_overlap));
   if (rightScore !== leftScore) {
