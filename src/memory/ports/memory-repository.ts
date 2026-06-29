@@ -2,7 +2,7 @@
  * MemoryRepository 持久化端口
  *
  * 定义 Agent 结构化记忆数据的读写契约：Persona、Skills、Experiences、
- * 指标等。Buffer 队列见 BufferRepository。实现见 adapters/in-memory-repository.ts。
+ * 指标等。Buffer 队列见 BufferRepository。实现见 InMemoryRepository、PgMemoryRepository。
  */
 import type {
   AgentHandle,

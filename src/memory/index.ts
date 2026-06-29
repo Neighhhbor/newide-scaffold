@@ -15,7 +15,11 @@ export {
   FileBufferRepository,
   type FileBufferRepositoryOptions,
 } from './adapters/file-buffer-repository';
-export { PgMemoryRepository } from './adapters/pg-memory-repository';
+export {
+  PgMemoryRepository,
+  type PgMemoryRepositoryOptions,
+} from './adapters/pg-memory-repository';
+export { ensurePgMemorySchema } from './adapters/pg-memory-schema';
 export { createAgentMemoryScope } from './adapters/agent-memory-scope';
 
 // Ports — 公开接口类型
