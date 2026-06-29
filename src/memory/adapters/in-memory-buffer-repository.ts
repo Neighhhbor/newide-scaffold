@@ -2,7 +2,7 @@
  * InMemoryBufferRepository — BufferRepository 内存适配器
  *
  * 所有 Agent 共享一个实例，buffer 数据按 role_id 隔离存储于内存 Map。
- * 无物理文件路径；生产方向见 FileBufferRepository（待实现）。
+ * 无物理文件路径；生产向持久化见 FileBufferRepository。
  */
 import type { BufferMeta, BufferSnapshot, AgentContextSnapshot } from '../schemas';
 import type { BufferRepository, SaveBufferResult } from '../ports/buffer-repository';
