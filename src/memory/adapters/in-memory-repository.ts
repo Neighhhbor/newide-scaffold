@@ -3,8 +3,8 @@
  *
  * 所有 Agent 共享一个实例，数据按 role_id 隔离存储于内存 Map。
  * 含 experiences、skills、persona 等；buffer 见 InMemoryBufferRepository。
+ * 生产向持久化见 PgMemoryRepository。
  */
-import { nowTimestamp } from '../../core';
 import type {
   AgentHandle,
   AgentMetrics,
@@ -16,6 +16,15 @@ import type {
 import type { EmbeddingProvider } from '../ports/embedding-provider';
 import type { MemoryRepository, MemoryVectorSearchOptions } from '../ports/memory-repository';
 import { defaultHashEmbeddingProvider } from './hash-embedding-provider';
+import {
+  createSeedHandle,
+  createSeedMetrics,
+  createSeedPersona,
+  DEFAULT_MIN_EXPERIENCE_CONFIDENCE,
+  DEFAULT_MIN_SIMILARITY,
+  isEligibleExperience,
+  isEligibleSkill,
+} from './memory-repository-seeds';
 
 interface AgentStore {
   handle: AgentHandle;
@@ -28,75 +37,6 @@ interface AgentStore {
 interface ScoredRecord<T> {
   item: T;
   similarity: number;
-}
-
-const DEFAULT_MIN_EXPERIENCE_CONFIDENCE = 0.2;
-const DEFAULT_MIN_SIMILARITY = 0.5;
-
-function createSeedPersona(role_id: string, persona_seed?: string): PersonaDef {
-  const generated_at = nowTimestamp();
-  return {
-    role_id,
-    version: 1,
-    summary: persona_seed ?? `Seed persona for ${role_id}`,
-    skills_overview: 'No skills yet.',
-    experience_coverage: 'No experiences yet.',
-    recent_performance: 'Awaiting first task.',
-    notes: 'Initialized by InMemoryRepository.',
-    generated_at,
-  };
-}
-
-function createSeedMetrics(role_id: string): AgentMetrics {
-  return {
-    role_id,
-    total_tasks: 0,
-    tasks_bid: 0,
-    tasks_won: 0,
-    tasks_completed: 0,
-    tasks_succeeded: 0,
-    tasks_partial: 0,
-    tasks_failed: 0,
-    skill_count: 0,
-    experience_count: 0,
-    imported_skill_count: 0,
-    promoted_skill_count: 0,
-    avg_confidence: 0,
-    token_cost_total: 0,
-    persona_version: 1,
-  };
-}
-
-function createSeedHandle(
-  spec: CreateAgentSpec,
-  persona: PersonaDef,
-  metrics: AgentMetrics,
-): AgentHandle {
-  return {
-    role_id: spec.role_id,
-    name: spec.name,
-    persona,
-    skill_count: 0,
-    experience_count: 0,
-    status: 'created',
-    created_at: nowTimestamp(),
-    tags: spec.tags,
-    owned_skills: [],
-    owned_exps: [],
-    metric: metrics,
-  };
-}
-
-function isEligibleSkill(skill: SkillRecord): boolean {
-  return skill.review_status === 'approved' && skill.market_status !== 'superseded';
-}
-
-function isEligibleExperience(experience: ExperienceRecord, min_confidence: number): boolean {
-  return (
-    experience.type === 'positive' &&
-    !experience.promoted_to &&
-    experience.confidence >= min_confidence
-  );
 }
 
 export class InMemoryRepository implements MemoryRepository {
