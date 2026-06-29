@@ -11,6 +11,10 @@ export * as schemas from './schemas';
 export { MockMemoryProvider } from './mock-memory';
 export { InMemoryRepository } from './adapters/in-memory-repository';
 export { InMemoryBufferRepository } from './adapters/in-memory-buffer-repository';
+export {
+  FileBufferRepository,
+  type FileBufferRepositoryOptions,
+} from './adapters/file-buffer-repository';
 export { PgMemoryRepository } from './adapters/pg-memory-repository';
 export { createAgentMemoryScope } from './adapters/agent-memory-scope';
 
