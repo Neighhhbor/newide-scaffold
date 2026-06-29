@@ -1,3 +1,13 @@
+/**
+ * Coordinator Task 状态机 MVP。
+ *
+ * - 覆盖当前 mock coordinator 对外暴露的 TaskStatus 集合。
+ * - 只负责校验状态能否从 current 推进到 next，不负责持久化、事件、Gate/Council 调用。
+ * - terminal 状态 completed / failed / cancelled 一旦进入，不允许再回到运行态。
+ *
+ * 这里是 coordinator 控制面的基础约束：上层 facade / contract 只能通过这个状态机推进任务，
+ * 避免 demo 或后续 mock 直接把 task.status 当普通字符串随意改写。
+ */
 export type CoordinatorTaskStatus =
   | 'created'
   | 'claimed'

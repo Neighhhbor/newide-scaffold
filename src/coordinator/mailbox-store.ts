@@ -13,6 +13,16 @@ import {
   type Timestamp,
 } from '../core';
 
+/**
+ * Mailbox MVP：持久化消息主体 + 为每个接收方创建投递记录。
+ *
+ * - Message 是线程里的事实记录，按 thread_id 可回放。
+ * - Delivery 是面向接收方的投递状态，支持 pending -> acked 的最小闭环。
+ * - requires_ack 的消息必须带 deadline_seconds，避免产生无 deadline 的无限等待语义。
+ *
+ * 当前未实现 timeout/retry 自动推进；这些字段先保留在 MessageDelivery 上，
+ * 后续由 message timeout API 或调度器切片接入。
+ */
 export type MessageDeliveryStatus = 'pending' | 'delivered' | 'acked' | 'timeout' | 'failed';
 export type MessageTimeoutAction = 'retry' | 'blocked' | 'failed' | 'waiting_input';
 

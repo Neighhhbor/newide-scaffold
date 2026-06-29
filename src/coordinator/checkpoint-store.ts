@@ -1,3 +1,14 @@
+/**
+ * Long-running checkpoint MVP for Coordinator state.
+ *
+ * 这个模块保存 `_coord.state.*` 所需的协调边界状态，并按 thread_id 组织 checkpoint 历史。
+ *
+ * 当前实现边界：
+ * - 只实现 full checkpoint 的内存保存、按 thread 加载和历史列表。
+ * - incremental checkpoint 和 fork 只保留显式 not implemented 占位。
+ * - 不执行 git commit / checkout，不做 schema migration，不生成 ResumePackage。
+ * - 不保存 Agent model_context、隐藏推理、Driver 临时缓存、未完成协程或长期记忆。
+ */
 import {
   SCHEMA_VERSION,
   createId,
@@ -32,6 +43,9 @@ export interface CoordinatorMessageThreadEntry {
   created_at?: Timestamp;
 }
 
+/**
+ * 调度游标：恢复时 Runtime 用它判断下一轮由谁继续执行。
+ */
 export interface CoordinatorSchedulingState {
   policy: 'single_agent' | 'round_robin' | 'manual' | (string & {});
   current_turn: number;
@@ -46,10 +60,16 @@ export type CoordinatorInterruptState = InterruptState;
 export type CoordinatorRuntimeStateSnapshot = RuntimeStateSnapshot;
 
 export interface CoordinatorCheckpointArtifactRefs {
+  /** 文件系统锚点；真实实现应由保存 checkpoint 前的 git commit 产生。 */
   git_commit_hash?: string;
   [key: string]: unknown;
 }
 
+/**
+ * 保存 checkpoint 的输入对象。
+ *
+ * 这里显式要求 thread_id，因为 load/list/fork 都按 thread_id 组织历史。
+ */
 export interface CoordinatorCheckpointRequest {
   thread_id: ThreadId;
   task_id: TaskId;
@@ -169,6 +189,11 @@ function assertCheckpointTypeImplemented(type: CoordinatorCheckpointType): void 
   }
 }
 
+/**
+ * 递归阻止把 Agent 私有或不可恢复的运行时状态写入 checkpoint。
+ * Checkpoint 只保存团队协作进度；Agent 的心智状态应由 message_thread 和
+ * memory/persona 体系在恢复时重建。
+ */
 function assertNoForbiddenCheckpointKeys(value: unknown): void {
   if (Array.isArray(value)) {
     for (const item of value) {
@@ -189,6 +214,16 @@ function assertNoForbiddenCheckpointKeys(value: unknown): void {
   }
 }
 
+/**
+ * 内存 checkpoint store。
+ *
+ * 同时保留：
+ * - checkpoint_id -> checkpoint 的直接索引，支持精确加载。
+ * - thread_id -> checkpoint_id[] 的历史链索引，支持 latest/list_history。
+ *
+ * 泛型默认兼容 core.Checkpoint，但 coordinator path 使用 CoordinatorCheckpoint，
+ * 因为当前 checkpoint history 需要 thread_id 和对象型 artifact_refs。
+ */
 export class InMemoryCheckpointStore<TCheckpoint extends StoredCheckpoint = CoreCheckpoint> {
   private readonly checkpoints = new Map<CheckpointId, TCheckpoint>();
   private readonly checkpointIdsByThread = new Map<ThreadId, CheckpointId[]>();

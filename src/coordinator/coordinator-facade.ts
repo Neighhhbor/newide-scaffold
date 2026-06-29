@@ -1,3 +1,13 @@
+/**
+ * In-memory Coordinator facade.
+ *
+ * 这是当前 mock-coordinator 的内部实现层，不是 public API：
+ * - 对外 `_coord.*` 方法名由 coordinator-contract.ts 负责映射。
+ * - 这里负责调用状态机、mailbox store、checkpoint store，并维护最小 task map。
+ * - 所有状态都在内存中，重启丢失；真实 SQLite/Postgres/FS store 后续应替换 stores，而不是改 public contract。
+ *
+ * 当前目标是先证明 Task 状态推进、Mailbox 投递、Checkpoint 保存/历史查询能闭环。
+ */
 import {
   SCHEMA_VERSION,
   createId,
@@ -35,7 +45,9 @@ export interface CoordinatorRetryPolicy {
 }
 
 export interface CoordinatorTaskCreateRequest extends TaskCreateRequest {
+  /** RoleProfileRef 的轻量引用；当前只保存字符串，不拉取真实 memory/persona。 */
   role_profile_ref?: string;
+  /** Coordinator 本地 retry policy；当前只持久在 task 上，暂未接自动 retry 调度。 */
   retry_policy?: CoordinatorRetryPolicy;
   schema_version?: SchemaVersion;
 }
@@ -140,6 +152,7 @@ export class InMemoryCoordinatorFacade {
   }
 
   saveCheckpoint(request: CoordinatorCheckpointRequest): CoordinatorCheckpoint {
+    // Checkpoint 必须锚定已有 task；避免孤立 checkpoint 进入历史链。
     this.getExistingTask(request.task_id);
     const checkpoint = createCoordinatorCheckpoint(request);
     return this.stores.checkpoints.save(checkpoint);
