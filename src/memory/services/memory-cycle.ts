@@ -19,6 +19,7 @@ import { createId, nowTimestamp } from '../../core';
 import type { AgentMemoryScope } from '../ports/agent-memory-scope';
 import type { ExperienceExtractor } from '../ports/experience-extractor';
 import type { AgentRunDeps } from '../runtime/agent-run-deps';
+import type { TelemetrySink } from '../../telemetry/telemetry-sink';
 import type {
   AgentContextSnapshot,
   BufferSnapshot,
@@ -29,6 +30,7 @@ import type { AgentTaskRequest } from '../agent-types';
 import type { ExtractionOutput, MemoryCycleResult, PromotionOutcome } from '../types';
 import { writePendingBuffer } from './buffer-writer';
 import { buildDriverContext } from './driver-context';
+import { recordMemoryCycleTelemetry } from '../../telemetry/memory-cycle-observer';
 
 /**
  * ingestTaskBuffer 的输入。
@@ -64,6 +66,12 @@ export interface ProcessPendingInput {
 export interface ProcessPendingResult {
   extraction: ExtractionOutput;
   promotion: PromotionOutcome;
+}
+
+export interface MemoryCycleOptions {
+  telemetry?: TelemetrySink;
+  run_id?: string;
+  memory_ablation?: string;
 }
 
 /**
@@ -135,7 +143,9 @@ export async function runTaskMemoryCycle(
   memory: AgentMemoryScope,
   task: AgentTaskRequest,
   deps: AgentRunDeps,
+  options?: MemoryCycleOptions,
 ): Promise<MemoryCycleResult> {
+  const telemetry = options?.telemetry ?? deps.telemetry;
   const task_id = task.task_id ?? createId('task');
   const call_id = task.call_id ?? createId('call');
   const source_driver = task.source_driver ?? 'mock-driver';
@@ -193,6 +203,29 @@ export async function runTaskMemoryCycle(
     extractor: deps.extractor,
     promote: deps.promote,
   });
+
+  if (telemetry) {
+    const skills_after = await memory.listSkills();
+    const experiences_after = await memory.listExperiences();
+    await recordMemoryCycleTelemetry(telemetry, {
+      context: {
+        task_id,
+        role_id: memory.role_id,
+        ...(options?.run_id ? { run_id: options.run_id } : {}),
+        ...(options?.memory_ablation ? { memory_ablation: options.memory_ablation } : {}),
+      },
+      retrieval,
+      call_id,
+      source_driver,
+      driver_return,
+      buffer_seq: ingested.seq,
+      extract_result: extraction.result,
+      promotion,
+      persona,
+      skills_after,
+      experience_count: experiences_after.length,
+    });
+  }
 
   return {
     agent_id: memory.role_id,
