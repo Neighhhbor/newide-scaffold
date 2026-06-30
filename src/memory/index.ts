@@ -9,6 +9,7 @@ export * from './contract';
 export * from './types';
 export * as schemas from './schemas';
 export { MockMemoryProvider } from './mock-memory';
+export { RepositoryMemoryProvider } from './adapters/repository-memory-provider';
 export { InMemoryRepository } from './adapters/in-memory-repository';
 export { InMemoryBufferRepository } from './adapters/in-memory-buffer-repository';
 export {
