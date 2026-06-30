@@ -14,6 +14,7 @@
  */
 import type { AgentRunDeps } from '../runtime/agent-run-deps';
 import { repositoryRetrieveMemoryForTask } from '../adapters/repository-memory-retrieval';
+import { NullContextCleaner } from '../adapters/null-context-cleaner';
 import { MockExperienceExtractor } from './adapters/mock-experience-extractor';
 import { invokeMockDriver } from './adapters/mock-driver-invoker';
 import { mockPlanTaskInstruction } from './adapters/mock-task-instruction-planner';
@@ -26,4 +27,5 @@ export const defaultMvpAgentRunDeps: AgentRunDeps = {
   invokeDriver: invokeMockDriver,
   extractor: new MockExperienceExtractor(),
   promote: runMockSkillPromotion,
+  contextCleaner: new NullContextCleaner(),
 };

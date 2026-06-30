@@ -22,6 +22,7 @@ export {
 } from './adapters/pg-memory-repository';
 export { ensurePgMemorySchema } from './adapters/pg-memory-schema';
 export { createAgentMemoryScope } from './adapters/agent-memory-scope';
+export { NullContextCleaner } from './adapters/null-context-cleaner';
 
 // Ports — 公开接口类型
 export type { BufferRepository, SaveBufferResult } from './ports/buffer-repository';
