@@ -14,7 +14,6 @@
  *   → processPendingBuffer
  * ```
  */
-import { randomUUID } from 'node:crypto';
 import { createId, nowTimestamp } from '../../core';
 import type { AgentMemoryScope } from '../ports/agent-memory-scope';
 import type { ExperienceExtractor } from '../ports/experience-extractor';
@@ -45,7 +44,7 @@ export interface TaskBufferIngestInput {
   /** Driver 6 字段结构化报告 */
   driver_return: DriverReturn;
   /** 顶层 Agent 清理后的上下文快照（与 buffer 成对存储） */
-  agentContext: AgentContextSnapshot;
+  agentContext?: AgentContextSnapshot | undefined;
 }
 
 /**
@@ -149,7 +148,6 @@ export async function runTaskMemoryCycle(
   const task_id = task.task_id ?? createId('task');
   const call_id = task.call_id ?? createId('call');
   const source_driver = task.source_driver ?? 'mock-driver';
-  const received_at = nowTimestamp();
 
   const skills_before = await memory.listSkills();
   const persona = await memory.getPersona();
@@ -170,24 +168,12 @@ export async function runTaskMemoryCycle(
     driver_context,
   });
 
-  const agentContext: AgentContextSnapshot = {
-    snapshot_id: randomUUID(),
-    source_task_id: task_id,
+  const agentContext = await deps.contextCleaner.clean({
     agent_id: memory.role_id,
-    thinking_trace: `Agent reasoning for ${task_id}: spec="${task.spec}"`,
-    planning_trace: `Driver instruction: ${task_instruction}`,
-    driver_calls: [
-      {
-        call_id,
-        driver_id: source_driver,
-        driver_return_ref: 'report_pending.json',
-      },
-    ],
-    cleaned_at: received_at,
-    original_token_count: 1000,
-    cleaned_token_count: 400,
-    compression_ratio: 0.4,
-  };
+    source_task_id: task_id,
+    raw_context: `Task spec: ${task.spec}\nInstruction: ${task_instruction}`,
+    driver_returns: [{ call_id, driver_id: source_driver, driver_return }],
+  });
 
   const ingested = await ingestTaskBuffer(memory, {
     task,
@@ -195,7 +181,7 @@ export async function runTaskMemoryCycle(
     call_id,
     source_driver,
     driver_return,
-    agentContext,
+    agentContext: agentContext ?? undefined,
   });
 
   const { extraction, promotion } = await processPendingBuffer(memory, ingested.seq, {
