@@ -13,6 +13,13 @@ import {
   type TaskCreateRequest,
   type TaskId,
 } from '../core';
+import { observeCheckpoint } from '../telemetry/adapters/c-coordination';
+import {
+  emitTelemetry,
+  mirrorEventToTelemetry,
+  NoopTelemetrySink,
+  type TelemetrySink,
+} from '../telemetry/telemetry-sink';
 import { InMemoryArtifactStore } from './artifact-store';
 import { InMemoryCheckpointStore } from './checkpoint-store';
 import { InMemoryEventStore } from './event-store';
@@ -23,6 +30,11 @@ export interface RuntimeStores {
   checkpoints: InMemoryCheckpointStore;
 }
 
+export interface RuntimeOrchestratorConfig {
+  stores?: Partial<RuntimeStores>;
+  telemetry?: TelemetrySink;
+}
+
 export interface ResumeFromCheckpointResult {
   checkpoint: Checkpoint;
   resume_cursor: string;
@@ -31,15 +43,18 @@ export interface ResumeFromCheckpointResult {
 
 export class RuntimeOrchestrator {
   readonly stores: RuntimeStores;
+  readonly telemetry: TelemetrySink;
   private readonly tasks = new Map<TaskId, Task>();
   private readonly runs = new Map<RunId, Run>();
 
-  constructor(stores?: Partial<RuntimeStores>) {
+  constructor(config?: Partial<RuntimeStores> | RuntimeOrchestratorConfig) {
+    const normalized = normalizeOrchestratorConfig(config);
     this.stores = {
-      events: stores?.events ?? new InMemoryEventStore(),
-      artifacts: stores?.artifacts ?? new InMemoryArtifactStore(),
-      checkpoints: stores?.checkpoints ?? new InMemoryCheckpointStore(),
+      events: normalized.stores?.events ?? new InMemoryEventStore(),
+      artifacts: normalized.stores?.artifacts ?? new InMemoryArtifactStore(),
+      checkpoints: normalized.stores?.checkpoints ?? new InMemoryCheckpointStore(),
     };
+    this.telemetry = normalized.telemetry ?? new NoopTelemetrySink();
   }
 
   createTask(request: TaskCreateRequest): Task {
@@ -97,7 +112,9 @@ export class RuntimeOrchestrator {
     task_id?: TaskId;
     payload?: Record<string, unknown>;
   }): Event {
-    return this.stores.events.append(input);
+    const event = this.stores.events.append(input);
+    void mirrorEventToTelemetry(this.telemetry, event);
+    return event;
   }
 
   registerArtifact(artifact: ArtifactRef): ArtifactRef {
@@ -127,6 +144,7 @@ export class RuntimeOrchestrator {
         artifact_refs: checkpoint.artifact_refs,
       },
     });
+    void emitTelemetry(this.telemetry, observeCheckpoint(saved));
     return saved;
   }
 
@@ -172,4 +190,34 @@ export class RuntimeOrchestrator {
     this.tasks.set(taskId, updated);
     return updated;
   }
+}
+
+function normalizeOrchestratorConfig(
+  config?: Partial<RuntimeStores> | RuntimeOrchestratorConfig,
+): RuntimeOrchestratorConfig {
+  if (!config) {
+    return {};
+  }
+
+  if ('telemetry' in config) {
+    const orchestratorConfig = config as RuntimeOrchestratorConfig & Partial<RuntimeStores>;
+    const { telemetry, stores, events, artifacts, checkpoints } = orchestratorConfig;
+    const legacyStores: Partial<RuntimeStores> = {};
+    if (events !== undefined) legacyStores.events = events;
+    if (artifacts !== undefined) legacyStores.artifacts = artifacts;
+    if (checkpoints !== undefined) legacyStores.checkpoints = checkpoints;
+    const resolvedStores =
+      stores ?? (Object.keys(legacyStores).length > 0 ? legacyStores : undefined);
+
+    return {
+      ...(telemetry ? { telemetry } : {}),
+      ...(resolvedStores ? { stores: resolvedStores } : {}),
+    };
+  }
+
+  if ('stores' in config) {
+    return config as RuntimeOrchestratorConfig;
+  }
+
+  return { stores: config as Partial<RuntimeStores> };
 }

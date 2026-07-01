@@ -15,6 +15,7 @@ import { HookEngine, type HookResult } from '../hook';
 import { DecisionAggregator, type GateRequest, type GateResult } from '../gate';
 import { MockMemoryProvider, type ContextPack } from '../memory';
 import { RuntimeOrchestrator } from './orchestrator';
+import type { TelemetrySink } from '../telemetry/telemetry-sink';
 
 export interface TimelineItem {
   name: string;
@@ -35,8 +36,14 @@ export interface BasicFlowResult {
   artifacts: ArtifactRef[];
 }
 
-export async function runBasicFlow(): Promise<BasicFlowResult> {
-  const orchestrator = new RuntimeOrchestrator();
+export interface BasicFlowOptions {
+  telemetry?: TelemetrySink;
+}
+
+export async function runBasicFlow(options?: BasicFlowOptions): Promise<BasicFlowResult> {
+  const orchestrator = new RuntimeOrchestrator(
+    options?.telemetry ? { telemetry: options.telemetry } : undefined,
+  );
   const timeline: TimelineItem[] = [];
 
   const taskRequest: TaskCreateRequest = {
@@ -169,9 +176,7 @@ export async function runBasicFlow(): Promise<BasicFlowResult> {
         },
       },
       hooks: {
-        'task.completed': [
-          { gate: 'allow-gate', priority: 100, timeout: 30 },
-        ],
+        'task.completed': [{ gate: 'allow-gate', priority: 100, timeout: 30 }],
       },
     },
     aggregator: new DecisionAggregator(),
