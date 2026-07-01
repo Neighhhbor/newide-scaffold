@@ -13,6 +13,7 @@ import type { DriverReturn, ExperienceRecord } from '../schemas';
 import type { AgentTaskRequest } from '../agent-types';
 import type { MemoryQueryStrategy } from '../services/memory-query';
 import type { DriverContext, PromotionOutcome } from '../types';
+import type { TelemetrySink } from '../../telemetry/telemetry-sink';
 
 /**
  * 顶层 Agent 任务指令规划器。
@@ -61,6 +62,8 @@ export interface AgentRunDeps {
   extractor: ExperienceExtractor;
   /** 检查并将符合条件的经验晋升为 Skill */
   promote: SkillPromotionHandler;
+  /** F 方向观测 sink；缺省时不写入 telemetry */
+  telemetry?: TelemetrySink;
   /** 清理顶层 Agent 原始上下文，产出 AgentContextSnapshot（null 时降级） */
   contextCleaner: AgentContextCleaner;
 }
