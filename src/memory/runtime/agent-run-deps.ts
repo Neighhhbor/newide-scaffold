@@ -7,6 +7,7 @@
  * 由 mvp/default-agent-run-deps.ts 提供默认 MVP 实现组合。
  */
 import type { AgentMemoryScope } from '../ports/agent-memory-scope';
+import type { AgentContextCleaner } from '../ports/agent-context-cleaner';
 import type { ExperienceExtractor } from '../ports/experience-extractor';
 import type { DriverReturn, ExperienceRecord } from '../schemas';
 import type { AgentTaskRequest } from '../agent-types';
@@ -63,4 +64,6 @@ export interface AgentRunDeps {
   promote: SkillPromotionHandler;
   /** F 方向观测 sink；缺省时不写入 telemetry */
   telemetry?: TelemetrySink;
+  /** 清理顶层 Agent 原始上下文，产出 AgentContextSnapshot（null 时降级） */
+  contextCleaner: AgentContextCleaner;
 }
