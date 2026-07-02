@@ -27,3 +27,7 @@ src/memory/README.md
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Claude Code 本地文件
+**/CLAUDE.md
+.claude/

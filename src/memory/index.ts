@@ -23,6 +23,10 @@ export {
 export { ensurePgMemorySchema } from './adapters/pg-memory-schema';
 export { createAgentMemoryScope } from './adapters/agent-memory-scope';
 export { NullContextCleaner } from './adapters/null-context-cleaner';
+export { RuleBasedExperienceExtractor } from './adapters/rule-based-experience-extractor';
+export { LlmExperienceExtractor } from './adapters/llm-experience-extractor';
+export { MockLlmClient } from './adapters/mock-llm-client';
+export { DeepSeekLlmClient } from './adapters/deepseek-llm-client';
 
 // Ports — 公开接口类型
 export type { BufferRepository, SaveBufferResult } from './ports/buffer-repository';
@@ -30,6 +34,7 @@ export type { MemoryRepository, MemoryVectorSearchOptions } from './ports/memory
 export type { AgentMemoryScope } from './ports/agent-memory-scope';
 export type { ExperienceExtractor } from './ports/experience-extractor';
 export type { EmbeddingProvider } from './ports/embedding-provider';
+export type { LlmClient, LlmMessage } from './ports/llm-client';
 export type { SkillMarketPort, SkillMarketSearchResult } from './ports/skill-market-port';
 export type { AgentContextCleaner, AgentContextCleanInput } from './ports/agent-context-cleaner';
 export type { BufferTriggerPolicy } from './ports/buffer-trigger-policy';
@@ -68,6 +73,7 @@ export {
   type RetrieveMemoriesInput,
 } from './adapters/memory-retrieval';
 export { repositoryRetrieveMemoryForTask } from './adapters/repository-memory-retrieval';
+export { ruleBasedSkillPromotion } from './services/skill-promotion';
 export {
   ingestTaskBuffer,
   processPendingBuffer,
@@ -80,4 +86,5 @@ export { AgentManager, type SubmitTaskResult } from './runtime/agent-manager';
 
 // MVP mock（可整包移除）
 export { defaultMvpAgentRunDeps } from './mvp/default-agent-run-deps';
+export { createDefaultLlmAgentRunDeps } from './mvp/default-llm-agent-run-deps';
 export { MockExperienceExtractor } from './mvp/adapters/mock-experience-extractor';
