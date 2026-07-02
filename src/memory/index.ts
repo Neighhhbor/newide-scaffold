@@ -86,5 +86,5 @@ export { AgentManager, type SubmitTaskResult } from './runtime/agent-manager';
 
 // MVP mock（可整包移除）
 export { defaultMvpAgentRunDeps } from './mvp/default-agent-run-deps';
-export { defaultLlmAgentRunDeps } from './mvp/default-llm-agent-run-deps';
+export { createDefaultLlmAgentRunDeps } from './mvp/default-llm-agent-run-deps';
 export { MockExperienceExtractor } from './mvp/adapters/mock-experience-extractor';
