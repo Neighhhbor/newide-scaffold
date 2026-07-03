@@ -4,6 +4,7 @@ export * from './run';
 export * from './event';
 export * from './artifact';
 export * from './checkpoint';
+export * from './checkpoint-store';
 export * from './decision';
 export * from './message';
 export * from './lease';

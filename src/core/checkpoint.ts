@@ -1,4 +1,12 @@
-import type { AgentId, ArtifactId, CheckpointId, SchemaVersion, TaskId, Timestamp } from './ids';
+import type {
+  AgentId,
+  ArtifactId,
+  CheckpointId,
+  RunId,
+  SchemaVersion,
+  TaskId,
+  Timestamp,
+} from './ids';
 
 export type CheckpointType = 'full' | 'incremental';
 export type CheckpointTrigger = 'manual' | 'periodic' | 'shutdown' | 'blocked' | 'escalated';
@@ -42,6 +50,7 @@ export interface Checkpoint {
   parent_checkpoint_id?: CheckpointId;
   checkpoint_type: CheckpointType;
   task_id: TaskId;
+  run_id: RunId;
   agent_id?: AgentId;
   trigger: CheckpointTrigger;
   mechanical_snapshot: MechanicalSnapshot;

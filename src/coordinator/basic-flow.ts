@@ -169,9 +169,7 @@ export async function runBasicFlow(): Promise<BasicFlowResult> {
         },
       },
       hooks: {
-        'task.completed': [
-          { gate: 'allow-gate', priority: 100, timeout: 30 },
-        ],
+        'task.completed': [{ gate: 'allow-gate', priority: 100, timeout: 30 }],
       },
     },
     aggregator: new DecisionAggregator(),
@@ -286,6 +284,7 @@ export async function runBasicFlow(): Promise<BasicFlowResult> {
     checkpoint_id: createId('checkpoint'),
     checkpoint_type: 'full',
     task_id: task.task_id,
+    run_id: run.run_id,
     agent_id: 'agent_mock_driver',
     trigger: 'manual',
     mechanical_snapshot: {
