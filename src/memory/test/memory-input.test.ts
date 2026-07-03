@@ -8,6 +8,11 @@ import { describe, it, expect } from 'vitest';
 import { AgentManager } from '../runtime/agent-manager';
 import { InMemoryRepository } from '../adapters/in-memory-repository';
 import { InMemoryBufferRepository } from '../adapters/in-memory-buffer-repository';
+import { createAgentMemoryScope } from '../adapters/agent-memory-scope';
+import { runTaskMemoryCycle } from '../services/memory-cycle';
+import { ruleBasedSkillPromotion } from '../services/skill-promotion';
+import type { AgentRunDeps } from '../runtime/agent-run-deps';
+import type { AgentTaskRequest } from '../agent-types';
 
 describe('memory MVP demo flow', () => {
   it('createAgent → submitTask → 检索 → mock Driver → buffer → 提取 → 默认不晋升', async () => {
@@ -52,31 +57,77 @@ describe('memory MVP demo flow', () => {
     expect(experiences[0]?.source_task_id).toBe(task_id);
   });
 
-  it('promotion_ready scenario → mock 技能晋升', async () => {
+  it('高置信度经验 → rule-based 技能晋升', async () => {
     const repository = new InMemoryRepository();
     const bufferRepository = new InMemoryBufferRepository();
-    const manager = AgentManager.create(repository, bufferRepository);
+    const role_id = 'role_promo';
 
-    await manager.createAgent({
-      role_id: 'role_promo',
-      name: 'Promotion Demo Agent',
-    });
-    manager.start();
+    await repository.initializeAgent({ role_id, name: 'Promotion Agent', tags: [] });
+    await bufferRepository.ensureAgent(role_id);
+    const memory = createAgentMemoryScope(repository, bufferRepository, role_id);
 
-    const result = await manager.submitTask({
-      spec: 'Trigger mock skill promotion.',
+    const deps: AgentRunDeps = {
+      queryMemory: async () => ({ experiences: [], skills: [] }),
+      planTaskInstruction: async () => 'Execute the task.',
+      invokeDriver: async () => ({
+        summary: 'Task completed successfully.',
+        artifacts: [],
+        decisions: [{ point: 'Approach', options: ['A', 'B'], chosen: 'A', reason: 'Best fit' }],
+        blockers: [],
+        referenced_experiences: [
+          { experience_id: 'exp_ref', applied: true, effectiveness: 'fully_effective', note: '' },
+        ],
+        assumptions: [],
+      }),
+      extractor: {
+        extract: async (snapshot) => ({
+          experiences: [
+            {
+              id: '00000000-0000-0000-0000-000000000001',
+              description: 'High confidence skill candidate',
+              description_embedding: [0.1, 0.2, 0.3],
+              content: 'Use approach A for this class of problems',
+              confidence: 0.96,
+              tags: ['approach'],
+              agent_id: role_id,
+              confidence_history: [],
+              referenced_count: 0,
+              source_task_id: snapshot.task_id,
+              source_driver: snapshot.source_driver,
+              type: 'positive',
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+          ],
+          result: {
+            experiences_created: 1,
+            experiences_updated: 0,
+            negative_experiences: 0,
+            skills_promoted: 0,
+          },
+        }),
+      },
+      promote: ruleBasedSkillPromotion,
+      contextCleaner: { clean: async () => null },
+    };
+
+    const task: AgentTaskRequest = {
+      spec: 'Trigger confidence-based skill promotion.',
       task_id: 'task_promo_001',
-      scenario: 'promotion_ready',
-    });
+    };
 
-    expect(result.cycle.promotion.check.eligible).toBe(true);
-    expect(result.cycle.promotion.skill).toBeDefined();
-    expect(result.cycle.extraction.result.skills_promoted).toBe(1);
+    const result = await runTaskMemoryCycle(memory, task, deps);
 
-    const skills = await repository.listSkills('role_promo');
+    expect(result.promotion.check.eligible).toBe(true);
+    expect(result.promotion.skill).toBeDefined();
+    expect(result.promotion.skill!.review_status).toBe('pending');
+    expect(result.extraction.result.skills_promoted).toBe(1);
+
+    const skills = await repository.listSkills(role_id);
     expect(skills).toHaveLength(1);
+    expect(skills[0]!.promoted_from).toBe('00000000-0000-0000-0000-000000000001');
 
-    const experiences = await repository.listExperiences('role_promo');
+    const experiences = await repository.listExperiences(role_id);
     expect(experiences[0]?.promoted_to).toBe(skills[0]?.id);
   });
 });
