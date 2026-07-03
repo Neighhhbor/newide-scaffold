@@ -22,6 +22,9 @@ my-session.json
 src/memory/docs/
 src/memory/README.md
 
+# Local-only docs（路径清单见 .githubignore，供 AI 助手与本地参考，不入仓）
+doc/
+
 # editor & OS
 .DS_Store
 .idea/

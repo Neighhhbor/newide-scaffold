@@ -1,0 +1,21 @@
+# .githubignore — 本地保留、不入仓的文档
+#
+# 用途：列出仅供本地开发与 AI 助手参考的文档路径。
+# 这些文件应保留在工作区中，但不应提交到 Git 远程仓库。
+# 请在 .gitignore 中同步引用下列路径（保持与本文件一致）。
+#
+# 维护说明：
+# - 新增本地文档时，将其路径追加到下方列表
+# - 同步更新 .gitignore 中「Local-only docs」段落
+
+# 方向 C 本地文档（调研摘要 + RFC）
+doc/direction-c-long-horizon-council.md
+doc/direction-c-rfc.md
+doc/direction-c-long-horizon-state-management-rfc.md
+
+# 工程规范与实现 Spec
+doc/commit-conventions.md
+doc/checkpoint-store-mvp-spec.md
+
+# 后续本地文档在此追加，例如：
+# doc/<topic>.md
