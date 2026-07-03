@@ -17,5 +17,8 @@ doc/direction-c-long-horizon-state-management-rfc.md
 doc/commit-conventions.md
 doc/checkpoint-store-mvp-spec.md
 
+# 本地草稿 / 临时产物（不入仓）
+.github/pr-body.md
+
 # 后续本地文档在此追加，例如：
 # doc/<topic>.md
