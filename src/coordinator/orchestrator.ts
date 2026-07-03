@@ -16,11 +16,12 @@ import {
 import { InMemoryArtifactStore } from './artifact-store';
 import { InMemoryCheckpointStore } from './checkpoint-store';
 import { InMemoryEventStore } from './event-store';
+import type { CheckpointStore } from '../core';
 
 export interface RuntimeStores {
   events: InMemoryEventStore;
   artifacts: InMemoryArtifactStore;
-  checkpoints: InMemoryCheckpointStore;
+  checkpoints: CheckpointStore;
 }
 
 export interface ResumeFromCheckpointResult {
@@ -122,6 +123,7 @@ export class RuntimeOrchestrator {
       subject_id: checkpoint.checkpoint_id,
       task_id: checkpoint.task_id,
       payload: {
+        run_id: checkpoint.run_id,
         checkpoint_type: checkpoint.checkpoint_type,
         trigger: checkpoint.trigger,
         artifact_refs: checkpoint.artifact_refs,
