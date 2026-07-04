@@ -17,6 +17,7 @@
     "test": "vitest run",
     "verify": "pnpm lint && pnpm typecheck && pnpm test",
     "example:basic": "tsx src/examples/basic-flow.ts",
+    "example:market-bidding-demo": "tsx src/market/examples.ts",
     "prepare": "husky"
   },
   "lint-staged": {
