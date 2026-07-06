@@ -127,12 +127,20 @@ describe('runIntegrationV0Flow', () => {
       mode: result.summary.mode,
       driver_id: result.summary.driver_diagnostics.driver_id,
       artifact_outputs: result.summary.artifact_outputs,
+      result_path: `.newide/runs/${result.run_id}/result.json`,
       summary_path: `.newide/runs/${result.run_id}/summary.json`,
       timeline_path: `.newide/runs/${result.run_id}/timeline.json`,
       checkpoint_path: `.newide/runs/${result.run_id}/checkpoint.json`,
       schema_version: result.summary.schema_version,
     });
     expect(manifest.created_at).toBeDefined();
+    await expect(readJson(manifest.summary_path)).resolves.toMatchObject({
+      run_id: result.run_id,
+    });
+    await expect(readJson(manifest.timeline_path)).resolves.toEqual(expect.any(Array));
+    await expect(readJson(manifest.checkpoint_path)).resolves.toMatchObject({
+      checkpoint_id: result.summary.checkpoint_id,
+    });
   });
 
   it('should materialize artifacts to worktree', async () => {
@@ -445,3 +453,7 @@ describe('runIntegrationV0Flow', () => {
     return result;
   }
 });
+
+async function readJson(filePath: string): Promise<unknown> {
+  return JSON.parse(await fs.readFile(filePath, 'utf-8'));
+}

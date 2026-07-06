@@ -140,9 +140,9 @@ try {
   }
 
   console.log('\n💾 Results saved to:');
-  console.log(`  .newide/runs/${result.run_id}/result.json`);
-  console.log(`  .newide/runs/${result.run_id}/summary.json`);
-  console.log(`  .newide/runs/${result.run_id}/timeline.json`);
+  console.log(`  ${result.result_manifest.result_path}`);
+  console.log(`  ${result.result_manifest.summary_path}`);
+  console.log(`  ${result.result_manifest.timeline_path}`);
 
   console.log('\n✨ Done!');
 } catch (error) {

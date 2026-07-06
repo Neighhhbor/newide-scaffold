@@ -1,16 +1,26 @@
 /**
- * Coordinator 运行结果清单模块。
+ * Coordinator 运行输出模块。
  *
- * 这个文件只负责构建和写入 `.newide/runs/<run_id>/result.json`。
- * `result.json` 是给 CLI、UI、人工 review 或后续模块读取的稳定入口，
- * 避免调用方同时解析 summary/timeline/checkpoint 多个文件。
+ * 这个文件负责 `.newide/runs/<run_id>/` 下的输出路径和结果文件写入：
+ * result.json、summary.json、timeline.json、checkpoint.json。
+ * 它不生成 checkpoint 语义，不生成 timeline 事件，不修改 task/run 状态，
+ * 也不调用 driver、gate、council 或 mailbox。
  */
 import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import type { SchemaVersion, TaskId, RunId, Timestamp } from '../core';
 import type { SelectionMode } from './artifact-finalizer';
 import type { ArtifactOutput } from './artifact-output';
 
 export type RunResultStatus = 'completed' | 'failed';
+
+export interface IntegrationRunOutputPaths {
+  run_dir: string;
+  result_path: string;
+  summary_path: string;
+  timeline_path: string;
+  checkpoint_path: string;
+}
 
 export interface IntegrationRunResultManifest {
   run_id: RunId;
@@ -19,11 +29,34 @@ export interface IntegrationRunResultManifest {
   mode: SelectionMode;
   driver_id: string;
   artifact_outputs: ArtifactOutput[];
+  result_path: string;
   summary_path: string;
   timeline_path: string;
   checkpoint_path: string;
   created_at: Timestamp;
   schema_version: SchemaVersion;
+}
+
+export interface WriteIntegrationRunOutputsInput {
+  paths: IntegrationRunOutputPaths;
+  summary: unknown;
+  timeline: unknown;
+  checkpoint: unknown;
+  result_manifest: IntegrationRunResultManifest;
+}
+
+export function buildRunOutputPaths(
+  runId: RunId,
+  runsRoot = '.newide/runs',
+): IntegrationRunOutputPaths {
+  const runDir = path.join(runsRoot, runId);
+  return {
+    run_dir: runDir,
+    result_path: path.join(runDir, 'result.json'),
+    summary_path: path.join(runDir, 'summary.json'),
+    timeline_path: path.join(runDir, 'timeline.json'),
+    checkpoint_path: path.join(runDir, 'checkpoint.json'),
+  };
 }
 
 export interface BuildRunResultManifestInput {
@@ -33,6 +66,7 @@ export interface BuildRunResultManifestInput {
   mode: SelectionMode;
   driver_id: string;
   artifact_outputs: readonly ArtifactOutput[];
+  result_path: string;
   summary_path: string;
   timeline_path: string;
   checkpoint_path: string;
@@ -50,6 +84,7 @@ export function buildRunResultManifest(
     mode: input.mode,
     driver_id: input.driver_id,
     artifact_outputs: [...input.artifact_outputs],
+    result_path: input.result_path,
     summary_path: input.summary_path,
     timeline_path: input.timeline_path,
     checkpoint_path: input.checkpoint_path,
@@ -63,4 +98,18 @@ export async function writeRunResultManifest(
   manifest: IntegrationRunResultManifest,
 ): Promise<void> {
   await fs.writeFile(filePath, JSON.stringify(manifest, null, 2), 'utf-8');
+}
+
+export async function writeIntegrationRunOutputs(
+  input: WriteIntegrationRunOutputsInput,
+): Promise<void> {
+  await fs.mkdir(input.paths.run_dir, { recursive: true });
+  await fs.writeFile(input.paths.summary_path, JSON.stringify(input.summary, null, 2), 'utf-8');
+  await fs.writeFile(input.paths.timeline_path, JSON.stringify(input.timeline, null, 2), 'utf-8');
+  await fs.writeFile(
+    input.paths.checkpoint_path,
+    JSON.stringify(input.checkpoint, null, 2),
+    'utf-8',
+  );
+  await writeRunResultManifest(input.paths.result_path, input.result_manifest);
 }
