@@ -21,14 +21,25 @@
  *
  * Environment variables:
  *   - ACP_DRIVER_RUNNER_DIR: Path to acp-client-prototype (required for --external-driver)
+ *   - ACP_DRIVER_ENV_FILE: Env file loaded for the external runner (default: <ACP_DRIVER_RUNNER_DIR>/.env)
  *   - ACP_AGENT_ID: Agent to use (default: mock-driver)
  *   - ACP_WORKSPACE: Workspace path (default: current directory)
  */
 
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { runIntegrationV0Flow } from '../coordinator/integration-v0-flow';
 import { ExternalDriverRuntime } from '../driver/external-driver-runtime';
 import { CommandDriverTransport } from '../driver/command-driver-transport';
 import type { DriverRuntimeHandle } from '../driver';
+
+const CLAUDE_MODEL_OVERRIDE_ENV = [
+  'ANTHROPIC_MODEL',
+  'ANTHROPIC_DEFAULT_OPUS_MODEL',
+  'ANTHROPIC_DEFAULT_SONNET_MODEL',
+  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  'CLAUDE_CODE_SUBAGENT_MODEL',
+] as const;
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -63,7 +74,15 @@ if (useExternalDriver) {
 
   console.log(`Using external driver from: ${driverRunnerDir}`);
   console.log(`ACP_AGENT_ID: ${process.env.ACP_AGENT_ID || 'mock-driver'}`);
-  console.log(`ACP_WORKSPACE: ${process.env.ACP_WORKSPACE || process.cwd()}\n`);
+  console.log(`ACP_WORKSPACE: ${process.env.ACP_WORKSPACE || process.cwd()}`);
+
+  const driverEnvFile = process.env.ACP_DRIVER_ENV_FILE || path.join(driverRunnerDir, '.env');
+  const driverEnv = loadEnvFile(driverEnvFile);
+  const unsetEnv = CLAUDE_MODEL_OVERRIDE_ENV.filter((key) => driverEnv[key] === undefined);
+  if (Object.keys(driverEnv).length > 0) {
+    console.log(`ACP_DRIVER_ENV_FILE: ${driverEnvFile}`);
+  }
+  console.log('');
 
   driver = new ExternalDriverRuntime({
     driver_id: 'acp-external',
@@ -72,9 +91,13 @@ if (useExternalDriver) {
       args: ['--dir', driverRunnerDir, 'driver:run'],
       cwd: process.cwd(),
       env: {
+        ...driverEnv,
+        COREPACK_ENABLE_PROJECT_SPEC: process.env.COREPACK_ENABLE_PROJECT_SPEC || '0',
+        PNPM_CONFIG_PM_ON_FAIL: process.env.PNPM_CONFIG_PM_ON_FAIL || 'ignore',
         ACP_AGENT_ID: process.env.ACP_AGENT_ID || 'mock-driver',
         ACP_WORKSPACE: process.env.ACP_WORKSPACE || process.cwd(),
       },
+      unsetEnv,
     }),
   });
 }
@@ -125,4 +148,48 @@ try {
   console.error('\n❌ Integration v0 failed:');
   console.error(error);
   process.exit(1);
+}
+
+function loadEnvFile(filePath: string): NodeJS.ProcessEnv {
+  if (!existsSync(filePath)) {
+    return {};
+  }
+
+  return parseEnvFile(readFileSync(filePath, 'utf8'));
+}
+
+function parseEnvFile(content: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) {
+      continue;
+    }
+
+    const separatorIndex = line.indexOf('=');
+    if (separatorIndex <= 0) {
+      continue;
+    }
+
+    const key = line.slice(0, separatorIndex).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      continue;
+    }
+
+    env[key] = stripEnvValueQuotes(line.slice(separatorIndex + 1).trim());
+  }
+
+  return env;
+}
+
+function stripEnvValueQuotes(value: string): string {
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    return value.slice(1, -1);
+  }
+
+  return value;
 }
