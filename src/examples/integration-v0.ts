@@ -140,6 +140,7 @@ try {
   }
 
   console.log('\n💾 Results saved to:');
+  console.log(`  .newide/runs/${result.run_id}/result.json`);
   console.log(`  .newide/runs/${result.run_id}/summary.json`);
   console.log(`  .newide/runs/${result.run_id}/timeline.json`);
 

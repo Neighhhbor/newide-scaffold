@@ -1,3 +1,10 @@
+/**
+ * Coordinator artifact 输出摘要模块。
+ *
+ * 这个文件只负责把已选择的 ArtifactRef 与 materializer 生成的本地记录路径
+ * 整理成 summary/result 中可展示、可被上层消费的 artifact_outputs。
+ * 它不负责选择 artifact，也不负责真正 apply patch 或写 worktree。
+ */
 import path from 'node:path';
 import type { ArtifactRef } from '../core';
 
