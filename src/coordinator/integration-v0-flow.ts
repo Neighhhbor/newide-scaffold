@@ -24,6 +24,7 @@ import {
 import { WorktreeMaterializer, type MaterializationResult } from './worktree-materializer';
 import { MockCouncil, type CouncilProvider, type EvidencePack } from '../council';
 import { InMemoryMailboxStore, type MessageDelivery } from './mailbox-store';
+import { buildArtifactOutputs, type ArtifactOutput } from './artifact-output';
 
 export interface IntegrationV0TimelineItem {
   name: string;
@@ -38,6 +39,7 @@ export interface IntegrationV0Summary {
   worktree_path: string;
   artifacts_materialized: number;
   files_written: string[];
+  artifact_outputs: ArtifactOutput[];
   driver_diagnostics: {
     driver_id: string;
     duration_ms: number;
@@ -560,6 +562,10 @@ export async function runIntegrationV0Flow(
 
   // 17. Build summary
   const checkpointPath = path.join('.newide/runs', run.run_id, 'checkpoint.json');
+  const artifactOutputs = buildArtifactOutputs({
+    artifacts: selectionResult.selected_artifacts,
+    materialized_record_paths: materializationResult.files_written,
+  });
   const summary: IntegrationV0Summary = {
     run_id: run.run_id,
     task_id: task.task_id,
@@ -568,6 +574,7 @@ export async function runIntegrationV0Flow(
     worktree_path: materializationResult.worktree_path,
     artifacts_materialized: materializationResult.materialized_artifacts.length,
     files_written: materializationResult.files_written,
+    artifact_outputs: artifactOutputs,
     driver_diagnostics: {
       driver_id: driverResult.diagnostics.driver_id,
       duration_ms: driverResult.diagnostics.duration_ms,
