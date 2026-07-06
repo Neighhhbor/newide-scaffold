@@ -604,6 +604,7 @@ export async function runIntegrationV0Flow(
     summary_path: outputPaths.summary_path,
     timeline_path: outputPaths.timeline_path,
     checkpoint_path: outputPaths.checkpoint_path,
+    message_thread_path: outputPaths.message_thread_path,
     created_at: summary.created_at,
     schema_version: SCHEMA_VERSION,
   });
@@ -614,6 +615,7 @@ export async function runIntegrationV0Flow(
     summary,
     timeline,
     checkpoint: savedCheckpoint,
+    message_thread: mailboxThread,
     result_manifest: resultManifest,
   });
 

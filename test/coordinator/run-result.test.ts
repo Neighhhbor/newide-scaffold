@@ -23,6 +23,7 @@ describe('run-result output writer', () => {
       summary_path: '.newide/runs/run_001/summary.json',
       timeline_path: '.newide/runs/run_001/timeline.json',
       checkpoint_path: '.newide/runs/run_001/checkpoint.json',
+      message_thread_path: '.newide/runs/run_001/message-thread.json',
     });
   });
 
@@ -42,6 +43,7 @@ describe('run-result output writer', () => {
       summary_path: outputPaths.summary_path,
       timeline_path: outputPaths.timeline_path,
       checkpoint_path: outputPaths.checkpoint_path,
+      message_thread_path: outputPaths.message_thread_path,
       created_at: '2026-07-07T00:00:00.000Z',
       schema_version: SCHEMA_VERSION,
     });
@@ -51,6 +53,7 @@ describe('run-result output writer', () => {
       summary: { run_id: 'run_001' },
       timeline: [{ name: 'RunCompleted', id: 'event_001' }],
       checkpoint: { checkpoint_id: 'checkpoint_001' },
+      message_thread: [{ message_id: 'msg_001', type: 'driver.completed' }],
       result_manifest: manifest,
     });
 
@@ -61,12 +64,16 @@ describe('run-result output writer', () => {
     await expect(readJson(outputPaths.checkpoint_path)).resolves.toEqual({
       checkpoint_id: 'checkpoint_001',
     });
+    await expect(readJson(outputPaths.message_thread_path)).resolves.toEqual([
+      { message_id: 'msg_001', type: 'driver.completed' },
+    ]);
     await expect(readJson(outputPaths.result_path)).resolves.toMatchObject({
       run_id: 'run_001',
       result_path: outputPaths.result_path,
       summary_path: outputPaths.summary_path,
       timeline_path: outputPaths.timeline_path,
       checkpoint_path: outputPaths.checkpoint_path,
+      message_thread_path: outputPaths.message_thread_path,
     });
   });
 });

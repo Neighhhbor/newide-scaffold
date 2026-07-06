@@ -143,6 +143,7 @@ try {
   console.log(`  ${result.result_manifest.result_path}`);
   console.log(`  ${result.result_manifest.summary_path}`);
   console.log(`  ${result.result_manifest.timeline_path}`);
+  console.log(`  ${result.result_manifest.message_thread_path}`);
 
   console.log('\n✨ Done!');
 } catch (error) {

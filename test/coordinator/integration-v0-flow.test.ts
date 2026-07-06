@@ -131,6 +131,7 @@ describe('runIntegrationV0Flow', () => {
       summary_path: `.newide/runs/${result.run_id}/summary.json`,
       timeline_path: `.newide/runs/${result.run_id}/timeline.json`,
       checkpoint_path: `.newide/runs/${result.run_id}/checkpoint.json`,
+      message_thread_path: `.newide/runs/${result.run_id}/message-thread.json`,
       schema_version: result.summary.schema_version,
     });
     expect(manifest.created_at).toBeDefined();
@@ -141,6 +142,7 @@ describe('runIntegrationV0Flow', () => {
     await expect(readJson(manifest.checkpoint_path)).resolves.toMatchObject({
       checkpoint_id: result.summary.checkpoint_id,
     });
+    await expect(readJson(manifest.message_thread_path)).resolves.toEqual(result.mailbox_thread);
   });
 
   it('should materialize artifacts to worktree', async () => {
