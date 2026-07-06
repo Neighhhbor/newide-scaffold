@@ -31,3 +31,4 @@ src/memory/README.md
 # Claude Code 本地文件
 **/CLAUDE.md
 .claude/
+.newide/
