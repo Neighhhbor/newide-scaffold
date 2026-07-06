@@ -13,21 +13,23 @@
 import type { AgentRunDeps } from '../runtime/agent-run-deps';
 import type { DeepSeekLlmClientOptions } from '../adapters/deepseek-llm-client';
 import { repositoryRetrieveMemoryForTask } from '../adapters/repository-memory-retrieval';
-import { NullContextCleaner } from '../adapters/null-context-cleaner';
 import { DeepSeekLlmClient } from '../adapters/deepseek-llm-client';
 import { LlmExperienceExtractor } from '../adapters/llm-experience-extractor';
-import { ruleBasedSkillPromotion } from '../services/skill-promotion';
+import { LlmTaskInstructionPlanner } from '../adapters/llm-task-instruction-planner';
+import { LlmContextCleaner } from '../adapters/context-cleaner';
+import { LlmSkillPromotion } from '../adapters/llm-skill-promotion';
 import { invokeMockDriver } from './adapters/mock-driver-invoker';
-import { mockPlanTaskInstruction } from './adapters/mock-task-instruction-planner';
 
 /** 默认 LLM 提取的 AgentRunDeps 工厂，可传入 DeepSeek 选项覆盖环境变量 */
 export function createDefaultLlmAgentRunDeps(options?: DeepSeekLlmClientOptions): AgentRunDeps {
+  const llm = new DeepSeekLlmClient(options);
+  const planner = new LlmTaskInstructionPlanner(llm);
   return {
     queryMemory: repositoryRetrieveMemoryForTask,
-    planTaskInstruction: mockPlanTaskInstruction,
+    planTaskInstruction: (task) => planner.plan(task),
     invokeDriver: invokeMockDriver,
-    extractor: new LlmExperienceExtractor(new DeepSeekLlmClient(options)),
-    promote: ruleBasedSkillPromotion,
-    contextCleaner: new NullContextCleaner(),
+    extractor: new LlmExperienceExtractor(llm),
+    promote: new LlmSkillPromotion(llm).promote,
+    contextCleaner: new LlmContextCleaner(llm),
   };
 }
