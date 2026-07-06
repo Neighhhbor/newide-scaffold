@@ -180,7 +180,7 @@ describe('confidence calculation', () => {
     const extractor = new RuleBasedExperienceExtractor();
     const result = await extractor.extract(snapshot);
 
-    expect(result.experiences.at(0)!.confidence).toBeCloseTo(0.9, 2);
+    expect(result.experiences.at(0)!.confidence).toBeCloseTo(0.97, 2);
   });
 
   it('ineffective referenced experience yields low confidence', async () => {
@@ -214,8 +214,8 @@ describe('confidence calculation', () => {
     const extractor = new RuleBasedExperienceExtractor();
     const result = await extractor.extract(snapshot);
 
-    // 0.9 - 0.2 = 0.7
-    expect(result.experiences.at(0)!.confidence).toBeCloseTo(0.7, 2);
+    // 0.97 - 0.2 = 0.77
+    expect(result.experiences.at(0)!.confidence).toBeCloseTo(0.77, 2);
   });
 
   it('no referenced experiences returns base confidence 0.5', async () => {

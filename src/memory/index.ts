@@ -25,6 +25,9 @@ export { createAgentMemoryScope } from './adapters/agent-memory-scope';
 export { NullContextCleaner } from './adapters/null-context-cleaner';
 export { RuleBasedExperienceExtractor } from './adapters/rule-based-experience-extractor';
 export { LlmExperienceExtractor } from './adapters/llm-experience-extractor';
+export { LlmTaskInstructionPlanner } from './adapters/llm-task-instruction-planner';
+export { LlmContextCleaner } from './adapters/context-cleaner';
+export { LlmSkillPromotion } from './adapters/llm-skill-promotion';
 export { MockLlmClient } from './adapters/mock-llm-client';
 export { DeepSeekLlmClient } from './adapters/deepseek-llm-client';
 
