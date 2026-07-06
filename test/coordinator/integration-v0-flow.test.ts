@@ -34,6 +34,35 @@ describe('runIntegrationV0Flow', () => {
     expect(timelineNames).toContain('MailboxMessageSent (driver.requested)');
     expect(timelineNames).toContain('MailboxMessageSent (driver.completed)');
     expect(timelineNames).toContain('MailboxMessageAcked (driver.requested)');
+    expect(timelineNames.indexOf('MailboxMessageAcked (driver.requested)')).toBeLessThan(
+      timelineNames.indexOf('DriverRunResult'),
+    );
+
+    expect(result.mailbox_thread.map((message) => message.type)).toEqual([
+      'task.assigned',
+      'driver.requested',
+      'driver.completed',
+    ]);
+
+    const driverRequested = result.mailbox_thread.find(
+      (message) => message.type === 'driver.requested',
+    );
+    expect(driverRequested).toBeDefined();
+    if (!driverRequested) {
+      throw new Error('driver.requested mailbox message was not found');
+    }
+    expect(driverRequested.requires_ack).toBe(true);
+    expect(driverRequested.deadline_seconds).toBe(300);
+
+    const driverRequestedDelivery = result.mailbox_deliveries.find(
+      (delivery) => delivery.message_id === driverRequested.message_id,
+    );
+    expect(driverRequestedDelivery).toBeDefined();
+    if (!driverRequestedDelivery) {
+      throw new Error('driver.requested mailbox delivery was not found');
+    }
+    expect(driverRequestedDelivery.status).toBe('acked');
+    expect(driverRequestedDelivery.ack_at).toBeDefined();
   });
 
   it('should run with council mode when enabled', async () => {
