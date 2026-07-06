@@ -7,7 +7,7 @@ import {
   type DriverPrompt,
   type DriverRunResult,
 } from '../../src/driver';
-import { createId } from '../../src/core';
+import { SCHEMA_VERSION, createId, type ArtifactRef } from '../../src/core';
 
 describe('runIntegrationV0Flow', () => {
   afterEach(async () => {
@@ -124,6 +124,20 @@ describe('runIntegrationV0Flow', () => {
     expect(result.summary.worktree_path).toBe(result.materialization_result.worktree_path);
   });
 
+  it('should include materialized artifact outputs in summary', async () => {
+    const result = await runIntegrationV0Flow();
+    const artifact = result.selection_result.selected_artifacts[0]!;
+
+    expect(result.summary.artifact_outputs).toEqual([
+      expect.objectContaining({
+        artifact_id: artifact.artifact_id,
+        type: artifact.type,
+        uri: artifact.uri,
+        materialized_record_path: result.materialization_result.files_written[0],
+      }),
+    ]);
+  });
+
   it('should work with injected driver', async () => {
     const fakeDriver = new MockDriver();
     const result = await runIntegrationV0Flow({ driver: fakeDriver });
@@ -165,6 +179,7 @@ describe('runIntegrationV0Flow', () => {
     expect(result.summary).toHaveProperty('worktree_path');
     expect(result.summary).toHaveProperty('artifacts_materialized');
     expect(result.summary).toHaveProperty('files_written');
+    expect(result.summary).toHaveProperty('artifact_outputs');
     expect(result.summary).toHaveProperty('driver_diagnostics');
     expect(result.summary).toHaveProperty('created_at');
     expect(result.summary).toHaveProperty('schema_version');
@@ -304,30 +319,25 @@ describe('runIntegrationV0Flow', () => {
             producer_id: this.driver_id,
             task_id: input.task_id,
             created_at: new Date().toISOString(),
-            schema_version: '1.0',
+            schema_version: SCHEMA_VERSION,
           },
           tool_events: [],
           diagnostics: {
             driver_id: this.driver_id,
             duration_ms: 100,
-            exit_code: 1,
             notes: ['Driver failed intentionally'],
           },
+          error: {
+            code: 'MOCK_DRIVER_FAILED',
+            message: 'Driver failed intentionally',
+            retryable: false,
+          },
           created_at: new Date().toISOString(),
-          schema_version: '1.0',
+          schema_version: SCHEMA_VERSION,
         };
       }
 
-      async collectTranscript(taskId: string): Promise<{
-        artifact_id: string;
-        type: string;
-        uri: string;
-        sha256: string;
-        producer_id: string;
-        task_id: string;
-        created_at: string;
-        schema_version: string;
-      }> {
+      async collectTranscript(taskId = 'task'): Promise<ArtifactRef> {
         return {
           artifact_id: createId('artifact'),
           type: 'transcript',
@@ -336,11 +346,11 @@ describe('runIntegrationV0Flow', () => {
           producer_id: this.driver_id,
           task_id: taskId,
           created_at: new Date().toISOString(),
-          schema_version: '1.0',
+          schema_version: SCHEMA_VERSION,
         };
       }
 
-      async interrupt(): Promise<void> {}
+      async interrupt(_reason: string): Promise<void> {}
 
       async close(): Promise<void> {}
     }
