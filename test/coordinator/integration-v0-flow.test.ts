@@ -30,9 +30,10 @@ describe('runIntegrationV0Flow', () => {
 
     // Verify mailbox events in timeline
     const timelineNames = result.timeline.map((t) => t.name);
-    expect(timelineNames).toContain('task.assigned');
-    expect(timelineNames).toContain('driver.requested');
-    expect(timelineNames).toContain('driver.completed');
+    expect(timelineNames).toContain('MailboxMessageSent (task.assigned)');
+    expect(timelineNames).toContain('MailboxMessageSent (driver.requested)');
+    expect(timelineNames).toContain('MailboxMessageSent (driver.completed)');
+    expect(timelineNames).toContain('MailboxMessageAcked (driver.requested)');
   });
 
   it('should run with council mode when enabled', async () => {
@@ -112,9 +113,10 @@ describe('runIntegrationV0Flow', () => {
     expect(timelineNames).toContain('RunCreated');
 
     // Mailbox events
-    expect(timelineNames).toContain('task.assigned');
-    expect(timelineNames).toContain('driver.requested');
-    expect(timelineNames).toContain('driver.completed');
+    expect(timelineNames).toContain('MailboxMessageSent (task.assigned)');
+    expect(timelineNames).toContain('MailboxMessageSent (driver.requested)');
+    expect(timelineNames).toContain('MailboxMessageSent (driver.completed)');
+    expect(timelineNames).toContain('MailboxMessageAcked (driver.requested)');
 
     // Processing events
     expect(timelineNames).toContain('ContextPackBuilt');
@@ -137,9 +139,16 @@ describe('runIntegrationV0Flow', () => {
     expect(result.summary).toHaveProperty('driver_diagnostics');
     expect(result.summary).toHaveProperty('created_at');
     expect(result.summary).toHaveProperty('schema_version');
+    expect(result.summary).toHaveProperty('mailbox_message_refs');
+    expect(result.summary).toHaveProperty('mailbox_thread_id');
 
     expect(result.summary.driver_diagnostics).toHaveProperty('driver_id');
     expect(result.summary.driver_diagnostics).toHaveProperty('duration_ms');
+
+    // Verify mailbox fields
+    expect(result.summary.mailbox_message_refs).toBeInstanceOf(Array);
+    expect(result.summary.mailbox_message_refs.length).toBe(3); // task.assigned, driver.requested, driver.completed
+    expect(result.summary.mailbox_thread_id).toBe(result.run_id);
   });
 
   it('should support custom driver prompt', async () => {
@@ -280,9 +289,7 @@ describe('runIntegrationV0Flow', () => {
         };
       }
 
-      async collectTranscript(
-        taskId: string,
-      ): Promise<{
+      async collectTranscript(taskId: string): Promise<{
         artifact_id: string;
         type: string;
         uri: string;
@@ -329,5 +336,32 @@ describe('runIntegrationV0Flow', () => {
     expect(checkpoint.validity_status).toBe('valid');
     expect(checkpoint.semantic_handoff.done).not.toContain('driver completed');
     expect(checkpoint.semantic_handoff.blocked_on).toContain('driver execution failed');
+  });
+
+  it('should use real mailbox send/ack mechanism', async () => {
+    const result = await runIntegrationV0Flow();
+
+    // Verify mailbox fields exist in summary
+    expect(result.summary.mailbox_message_refs).toBeInstanceOf(Array);
+    expect(result.summary.mailbox_message_refs.length).toBe(3);
+    expect(result.summary.mailbox_thread_id).toBe(result.run_id);
+
+    // Verify timeline contains mailbox events
+    const timelineNames = result.timeline.map((t) => t.name);
+    expect(timelineNames).toContain('MailboxMessageSent (task.assigned)');
+    expect(timelineNames).toContain('MailboxMessageSent (driver.requested)');
+    expect(timelineNames).toContain('MailboxMessageSent (driver.completed)');
+    expect(timelineNames).toContain('MailboxMessageAcked (driver.requested)');
+
+    // Verify mailbox events appear in correct order
+    const taskAssignedIndex = timelineNames.indexOf('MailboxMessageSent (task.assigned)');
+    const driverRequestedIndex = timelineNames.indexOf('MailboxMessageSent (driver.requested)');
+    const driverCompletedIndex = timelineNames.indexOf('MailboxMessageSent (driver.completed)');
+    const driverAckedIndex = timelineNames.indexOf('MailboxMessageAcked (driver.requested)');
+
+    expect(taskAssignedIndex).toBeGreaterThanOrEqual(0);
+    expect(driverRequestedIndex).toBeGreaterThan(taskAssignedIndex);
+    expect(driverCompletedIndex).toBeGreaterThan(driverRequestedIndex);
+    expect(driverAckedIndex).toBeGreaterThan(driverRequestedIndex);
   });
 });

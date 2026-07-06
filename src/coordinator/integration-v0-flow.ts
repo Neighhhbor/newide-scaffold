@@ -5,6 +5,8 @@ import {
   createId,
   nowTimestamp,
   type Checkpoint,
+  type Message,
+  type MessageId,
   type RoleProfileRef,
   type TaskCreateRequest,
 } from '../core';
@@ -21,6 +23,7 @@ import {
 } from './artifact-finalizer';
 import { WorktreeMaterializer, type MaterializationResult } from './worktree-materializer';
 import { MockCouncil, type CouncilProvider, type EvidencePack } from '../council';
+import { InMemoryMailboxStore, type MessageDelivery } from './mailbox-store';
 
 export interface IntegrationV0TimelineItem {
   name: string;
@@ -41,6 +44,8 @@ export interface IntegrationV0Summary {
   };
   checkpoint_id: string;
   checkpoint_path: string;
+  mailbox_message_refs: MessageId[];
+  mailbox_thread_id: string;
   created_at: string;
   schema_version: string;
 }
@@ -60,6 +65,8 @@ export interface IntegrationV0Result {
   driver_result: DriverRunResult;
   selection_result: ArtifactSelectionResult;
   materialization_result: MaterializationResult;
+  mailbox_thread: Message[];
+  mailbox_deliveries: MessageDelivery[];
   summary: IntegrationV0Summary;
 }
 
@@ -69,11 +76,11 @@ export interface IntegrationV0Result {
  * This is a v0 runner that connects A-B-C-D modules:
  * - A: Driver (MockDriver or ExternalDriverRuntime)
  * - B: Memory (MockMemoryProvider)
- * - C: Coordinator (RuntimeOrchestrator, ArtifactSelector)
+ * - C: Coordinator (RuntimeOrchestrator, ArtifactSelector, InMemoryMailboxStore)
  * - D: Gate (HookEngine)
  *
  * Key features:
- * - Explicit mailbox events (task.assigned, driver.requested, driver.completed)
+ * - Real mailbox send/ack mechanism (task.assigned, driver.requested, driver.completed)
  * - Persistent output to .newide/runs/<run_id>/ (summary.json, timeline.json)
  * - Support single_agent (default) and council modes
  * - Support MockDriver (default) and external driver injection
@@ -84,7 +91,9 @@ export async function runIntegrationV0Flow(
   const orchestrator = new RuntimeOrchestrator(
     options?.telemetry ? { telemetry: options.telemetry } : undefined,
   );
+  const mailbox = new InMemoryMailboxStore();
   const timeline: IntegrationV0TimelineItem[] = [];
+  const mailboxMessageRefs: MessageId[] = [];
 
   // 1. Create task
   const taskRequest: TaskCreateRequest = {
@@ -99,6 +108,7 @@ export async function runIntegrationV0Flow(
 
   // 2. Create run
   const run = orchestrator.createRun(task.task_id);
+  const threadId = run.run_id; // Use run_id as thread_id for v0
   timeline.push({ name: 'RunCreated', id: run.run_id });
   orchestrator.updateRunStatus(run.run_id, 'running');
   orchestrator.updateTaskStatus(task.task_id, 'running');
@@ -106,18 +116,34 @@ export async function runIntegrationV0Flow(
   // 3. Select driver (injected or default MockDriver)
   const driver = options?.driver ?? new MockDriver();
 
-  // 4. Mailbox event: task.assigned
-  const taskAssignedEvent = orchestrator.appendEvent({
-    event_type: 'task.assigned',
-    subject_id: task.task_id,
-    run_id: run.run_id,
-    task_id: task.task_id,
+  // 4. Mailbox: send task.assigned
+  const taskAssignedResult = mailbox.send({
+    thread_id: threadId,
+    from_agent_id: 'coordinator',
+    to: [{ agent_id: driver.driver_id }],
+    type: 'task.assigned',
     payload: {
+      task_id: task.task_id,
       agent_id: driver.driver_id,
       session_id: driver.session_id,
     },
+    requires_ack: false,
   });
-  timeline.push({ name: 'task.assigned', id: taskAssignedEvent.event_id });
+  mailboxMessageRefs.push(taskAssignedResult.message.message_id);
+
+  // Record mailbox message sent event
+  const taskAssignedEvent = orchestrator.appendEvent({
+    event_type: 'mailbox.message_sent',
+    subject_id: taskAssignedResult.message.message_id,
+    run_id: run.run_id,
+    task_id: task.task_id,
+    payload: {
+      message_type: 'task.assigned',
+      from_agent_id: 'coordinator',
+      to_agent_id: driver.driver_id,
+    },
+  });
+  timeline.push({ name: 'MailboxMessageSent (task.assigned)', id: taskAssignedEvent.event_id });
 
   // 5. Build context pack (B: Memory)
   const roleProfileRef: RoleProfileRef = {
@@ -174,17 +200,39 @@ export async function runIntegrationV0Flow(
   });
   timeline.push({ name: 'DriverSessionStarted', id: sessionEvent.event_id });
 
-  // 7. Mailbox event: driver.requested
+  // 7. Mailbox: send driver.requested
+  const driverRequestedResult = mailbox.send({
+    thread_id: threadId,
+    from_agent_id: 'coordinator',
+    to: [{ agent_id: driver.driver_id }],
+    type: 'driver.requested',
+    payload: {
+      task_id: task.task_id,
+      run_id: run.run_id,
+      prompt: options?.driverPrompt || taskRequest.spec,
+    },
+    requires_ack: true,
+    deadline_seconds: 300, // 5 minutes timeout
+  });
+  mailboxMessageRefs.push(driverRequestedResult.message.message_id);
+
+  // Record mailbox message sent event
   const driverRequestedEvent = orchestrator.appendEvent({
-    event_type: 'driver.requested',
-    subject_id: driver.session_id,
+    event_type: 'mailbox.message_sent',
+    subject_id: driverRequestedResult.message.message_id,
     run_id: run.run_id,
     task_id: task.task_id,
     payload: {
-      prompt: options?.driverPrompt || taskRequest.spec,
+      message_type: 'driver.requested',
+      from_agent_id: 'coordinator',
+      to_agent_id: driver.driver_id,
+      requires_ack: true,
     },
   });
-  timeline.push({ name: 'driver.requested', id: driverRequestedEvent.event_id });
+  timeline.push({
+    name: 'MailboxMessageSent (driver.requested)',
+    id: driverRequestedEvent.event_id,
+  });
 
   // 8. Call driver (A: Driver)
   const driverResult = await driver.sendPrompt({
@@ -201,18 +249,62 @@ export async function runIntegrationV0Flow(
     schema_version: SCHEMA_VERSION,
   });
 
-  // 9. Mailbox event: driver.completed
+  // 9. Mailbox: send driver.completed
+  const driverCompletedResult = mailbox.send({
+    thread_id: threadId,
+    from_agent_id: driver.driver_id,
+    to: [{ agent_id: 'coordinator' }],
+    type: 'driver.completed',
+    payload: {
+      task_id: task.task_id,
+      run_id: run.run_id,
+      status: driverResult.status,
+      artifact_count: driverResult.artifacts.length,
+      driver_run_result_id: driverResult.driver_run_result_id,
+    },
+    requires_ack: false,
+  });
+  mailboxMessageRefs.push(driverCompletedResult.message.message_id);
+
+  // Record mailbox message sent event
   const driverCompletedEvent = orchestrator.appendEvent({
-    event_type: 'driver.completed',
-    subject_id: driverResult.driver_run_result_id,
+    event_type: 'mailbox.message_sent',
+    subject_id: driverCompletedResult.message.message_id,
     run_id: run.run_id,
     task_id: task.task_id,
     payload: {
+      message_type: 'driver.completed',
+      from_agent_id: driver.driver_id,
+      to_agent_id: 'coordinator',
       status: driverResult.status,
-      artifact_count: driverResult.artifacts.length,
     },
   });
-  timeline.push({ name: 'driver.completed', id: driverCompletedEvent.event_id });
+  timeline.push({
+    name: 'MailboxMessageSent (driver.completed)',
+    id: driverCompletedEvent.event_id,
+  });
+
+  // Ack the driver.requested message (driver has completed the request)
+  const ackedDelivery = mailbox.ack(driverRequestedResult.message.message_id, {
+    agent_id: driver.driver_id,
+  });
+
+  // Record mailbox ack event
+  const driverRequestedAckEvent = orchestrator.appendEvent({
+    event_type: 'mailbox.message_acked',
+    subject_id: ackedDelivery.delivery_id,
+    run_id: run.run_id,
+    task_id: task.task_id,
+    payload: {
+      message_id: driverRequestedResult.message.message_id,
+      message_type: 'driver.requested',
+      acked_by: driver.driver_id,
+    },
+  });
+  timeline.push({
+    name: 'MailboxMessageAcked (driver.requested)',
+    id: driverRequestedAckEvent.event_id,
+  });
 
   const driverResultEvent = orchestrator.appendEvent({
     event_type: 'driver.run_result',
@@ -483,9 +575,13 @@ export async function runIntegrationV0Flow(
     },
     checkpoint_id: savedCheckpoint.checkpoint_id,
     checkpoint_path: checkpointPath,
+    mailbox_message_refs: mailboxMessageRefs,
+    mailbox_thread_id: threadId,
     created_at: nowTimestamp(),
     schema_version: SCHEMA_VERSION,
   };
+  const mailboxThread = mailbox.listThread(threadId);
+  const mailboxDeliveries = mailbox.listDeliveries();
 
   // 17. Persist summary, timeline, and checkpoint to .newide/runs/<run_id>/
   const runDir = path.join('.newide/runs', run.run_id);
@@ -506,6 +602,8 @@ export async function runIntegrationV0Flow(
     driver_result: driverResult,
     selection_result: selectionResult,
     materialization_result: materializationResult,
+    mailbox_thread: mailboxThread,
+    mailbox_deliveries: mailboxDeliveries,
     summary,
   };
 }
