@@ -1,0 +1,119 @@
+/**
+ * Integration v0 Example
+ *
+ * End-to-end integration flow connecting A-B-C-D modules.
+ *
+ * Usage:
+ *   # Default: MockDriver + single_agent
+ *   pnpm example:integration-v0
+ *
+ *   # With council mode
+ *   pnpm example:integration-v0 --enable-council
+ *
+ *   # With external driver (requires ACP_DRIVER_RUNNER_DIR)
+ *   ACP_DRIVER_RUNNER_DIR=/path/to/acp-client-prototype pnpm example:integration-v0 --external-driver
+ *
+ *   # External driver + council
+ *   ACP_DRIVER_RUNNER_DIR=/path/to/acp-client-prototype pnpm example:integration-v0 --external-driver --enable-council
+ *
+ * Environment variables:
+ *   - ACP_DRIVER_RUNNER_DIR: Path to acp-client-prototype (required for --external-driver)
+ *   - ACP_AGENT_ID: Agent to use (default: mock-driver)
+ *   - ACP_WORKSPACE: Workspace path (default: current directory)
+ */
+
+import { runIntegrationV0Flow } from '../coordinator/integration-v0-flow';
+import { ExternalDriverRuntime } from '../driver/external-driver-runtime';
+import { CommandDriverTransport } from '../driver/command-driver-transport';
+import type { DriverRuntimeHandle } from '../driver';
+
+// Parse command line arguments
+const enableCouncil = process.argv.includes('--enable-council');
+const useExternalDriver = process.argv.includes('--external-driver');
+
+console.log('🚀 Integration v0 Flow\n');
+console.log(`Mode: ${enableCouncil ? 'council' : 'single_agent'}`);
+console.log(`Driver: ${useExternalDriver ? 'external (ACP)' : 'mock'}\n`);
+
+// Setup driver
+let driver: DriverRuntimeHandle | undefined;
+
+if (useExternalDriver) {
+  const driverRunnerDir = process.env.ACP_DRIVER_RUNNER_DIR;
+
+  if (!driverRunnerDir) {
+    console.error(
+      '❌ Error: ACP_DRIVER_RUNNER_DIR environment variable is required when using --external-driver.\n',
+    );
+    console.error('Example:');
+    console.error(
+      '  ACP_DRIVER_RUNNER_DIR=/path/to/acp-client-prototype pnpm example:integration-v0 --external-driver\n',
+    );
+    process.exit(1);
+  }
+
+  console.log(`Using external driver from: ${driverRunnerDir}`);
+  console.log(`ACP_AGENT_ID: ${process.env.ACP_AGENT_ID || 'mock-driver'}`);
+  console.log(`ACP_WORKSPACE: ${process.env.ACP_WORKSPACE || process.cwd()}\n`);
+
+  driver = new ExternalDriverRuntime({
+    driver_id: 'acp-external',
+    transport: new CommandDriverTransport({
+      command: 'pnpm',
+      args: ['--dir', driverRunnerDir, 'driver:run'],
+      cwd: process.cwd(),
+      env: {
+        ACP_AGENT_ID: process.env.ACP_AGENT_ID || 'mock-driver',
+        ACP_WORKSPACE: process.env.ACP_WORKSPACE || process.cwd(),
+      },
+    }),
+  });
+}
+
+// Run integration flow
+try {
+  const flowOptions: {
+    driver?: DriverRuntimeHandle;
+    enableCouncil: boolean;
+    driverPrompt: string;
+  } = {
+    enableCouncil,
+    driverPrompt: 'Produce a mock patch artifact for integration v0 test',
+  };
+
+  if (driver) {
+    flowOptions.driver = driver;
+  }
+
+  const result = await runIntegrationV0Flow(flowOptions);
+
+  // Print results
+  console.log('✅ Integration v0 completed successfully!\n');
+  console.log('📋 Summary:');
+  console.log(`  Run ID: ${result.run_id}`);
+  console.log(`  Task ID: ${result.task_id}`);
+  console.log(`  Mode: ${result.summary.mode}`);
+  console.log(`  Status: ${result.summary.status}`);
+  console.log(`  Driver: ${result.summary.driver_diagnostics.driver_id}`);
+  console.log(`  Duration: ${result.summary.driver_diagnostics.duration_ms}ms`);
+  console.log(`  Artifacts: ${result.summary.artifacts_materialized}`);
+  console.log(`  Files written: ${result.summary.files_written.length}`);
+
+  console.log('\n📂 Worktree:');
+  console.log(`  ${result.materialization_result.worktree_path}`);
+
+  console.log('\n📊 Timeline:');
+  for (const item of result.timeline) {
+    console.log(`  ✓ ${item.name}`);
+  }
+
+  console.log('\n💾 Results saved to:');
+  console.log(`  .newide/runs/${result.run_id}/summary.json`);
+  console.log(`  .newide/runs/${result.run_id}/timeline.json`);
+
+  console.log('\n✨ Done!');
+} catch (error) {
+  console.error('\n❌ Integration v0 failed:');
+  console.error(error);
+  process.exit(1);
+}

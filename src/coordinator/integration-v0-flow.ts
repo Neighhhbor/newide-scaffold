@@ -1,0 +1,420 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import {
+  SCHEMA_VERSION,
+  createId,
+  nowTimestamp,
+  type RoleProfileRef,
+  type TaskCreateRequest,
+} from '../core';
+import { MockDriver, type DriverRunResult, type DriverRuntimeHandle } from '../driver';
+import { HookEngine } from '../hook';
+import { DecisionAggregator, type GateResult } from '../gate';
+import { MockMemoryProvider } from '../memory';
+import { RuntimeOrchestrator } from './orchestrator';
+import type { TelemetrySink } from '../telemetry/telemetry-sink';
+import {
+  ArtifactSelector,
+  type ArtifactSelectionResult,
+  type SelectionMode,
+} from './artifact-finalizer';
+import { WorktreeMaterializer, type MaterializationResult } from './worktree-materializer';
+import { MockCouncil, type CouncilProvider, type EvidencePack } from '../council';
+
+export interface IntegrationV0TimelineItem {
+  name: string;
+  id: string;
+}
+
+export interface IntegrationV0Summary {
+  run_id: string;
+  task_id: string;
+  mode: SelectionMode;
+  status: 'completed' | 'failed';
+  worktree_path: string;
+  artifacts_materialized: number;
+  files_written: string[];
+  driver_diagnostics: {
+    driver_id: string;
+    duration_ms: number;
+  };
+  created_at: string;
+  schema_version: string;
+}
+
+export interface IntegrationV0Options {
+  driver?: DriverRuntimeHandle;
+  driverPrompt?: string;
+  enableCouncil?: boolean;
+  worktreePath?: string;
+  telemetry?: TelemetrySink;
+}
+
+export interface IntegrationV0Result {
+  run_id: string;
+  task_id: string;
+  timeline: IntegrationV0TimelineItem[];
+  driver_result: DriverRunResult;
+  selection_result: ArtifactSelectionResult;
+  materialization_result: MaterializationResult;
+  summary: IntegrationV0Summary;
+}
+
+/**
+ * Integration v0 Flow: End-to-end integration from task creation to worktree materialization.
+ *
+ * This is a v0 runner that connects A-B-C-D modules:
+ * - A: Driver (MockDriver or ExternalDriverRuntime)
+ * - B: Memory (MockMemoryProvider)
+ * - C: Coordinator (RuntimeOrchestrator, ArtifactSelector)
+ * - D: Gate (HookEngine)
+ *
+ * Key features:
+ * - Explicit mailbox events (task.assigned, driver.requested, driver.completed)
+ * - Persistent output to .newide/runs/<run_id>/ (summary.json, timeline.json)
+ * - Support single_agent (default) and council modes
+ * - Support MockDriver (default) and external driver injection
+ */
+export async function runIntegrationV0Flow(
+  options?: IntegrationV0Options,
+): Promise<IntegrationV0Result> {
+  const orchestrator = new RuntimeOrchestrator(
+    options?.telemetry ? { telemetry: options.telemetry } : undefined,
+  );
+  const timeline: IntegrationV0TimelineItem[] = [];
+
+  // 1. Create task
+  const taskRequest: TaskCreateRequest = {
+    spec: options?.driverPrompt || 'Run the integration v0 flow',
+    role_id: 'role_ts_engineer',
+    risk_level: 'low',
+    affected_paths: ['src/**'],
+    completion_criteria: ['integration v0 flow completes successfully'],
+  };
+  const task = orchestrator.createTask(taskRequest);
+  timeline.push({ name: 'TaskCreated', id: task.task_id });
+
+  // 2. Create run
+  const run = orchestrator.createRun(task.task_id);
+  timeline.push({ name: 'RunCreated', id: run.run_id });
+  orchestrator.updateRunStatus(run.run_id, 'running');
+  orchestrator.updateTaskStatus(task.task_id, 'running');
+
+  // 3. Select driver (injected or default MockDriver)
+  const driver = options?.driver ?? new MockDriver();
+
+  // 4. Mailbox event: task.assigned
+  const taskAssignedEvent = orchestrator.appendEvent({
+    event_type: 'task.assigned',
+    subject_id: task.task_id,
+    run_id: run.run_id,
+    task_id: task.task_id,
+    payload: {
+      agent_id: driver.driver_id,
+      session_id: driver.session_id,
+    },
+  });
+  timeline.push({ name: 'task.assigned', id: taskAssignedEvent.event_id });
+
+  // 5. Build context pack (B: Memory)
+  const roleProfileRef: RoleProfileRef = {
+    role_id: 'role_ts_engineer',
+    persona_ref: 'persona://role_ts_engineer/current',
+    skill_refs: ['skill://typescript-integration'],
+    capability_tags: ['typescript', 'integration', 'v0'],
+    memory_policy: {
+      allow_in_driver_context: true,
+      allow_in_council_proposer: true,
+      allow_in_council_judge: true,
+      max_memory_items: 5,
+    },
+    schema_version: SCHEMA_VERSION,
+  };
+
+  const memory = new MockMemoryProvider();
+  const contextPack = await memory.buildContextPack({
+    task_id: task.task_id,
+    role_profile_ref: roleProfileRef,
+    memory_refs: [
+      {
+        memory_id: 'memory_integration_v0',
+        kind: 'experience',
+        uri: 'memory://integration/v0',
+        summary: 'Integration v0 flow connects A-B-C-D modules.',
+        schema_version: SCHEMA_VERSION,
+      },
+    ],
+    artifact_refs: [],
+  });
+  const contextEvent = orchestrator.appendEvent({
+    event_type: 'memory.context_pack_built',
+    subject_id: contextPack.context_pack_id,
+    run_id: run.run_id,
+    task_id: task.task_id,
+    payload: {
+      role_id: contextPack.role_profile_ref.role_id,
+      memory_refs: contextPack.memory_refs.map((memoryRef) => memoryRef.memory_id),
+    },
+  });
+  timeline.push({ name: 'ContextPackBuilt', id: contextEvent.event_id });
+
+  // 6. Start driver session
+  const sessionEvent = orchestrator.appendEvent({
+    event_type: 'driver.session_started',
+    subject_id: driver.session_id,
+    run_id: run.run_id,
+    task_id: task.task_id,
+    payload: {
+      driver_id: driver.driver_id,
+      capabilities: driver.capabilities,
+    },
+  });
+  timeline.push({ name: 'DriverSessionStarted', id: sessionEvent.event_id });
+
+  // 7. Mailbox event: driver.requested
+  const driverRequestedEvent = orchestrator.appendEvent({
+    event_type: 'driver.requested',
+    subject_id: driver.session_id,
+    run_id: run.run_id,
+    task_id: task.task_id,
+    payload: {
+      prompt: options?.driverPrompt || taskRequest.spec,
+    },
+  });
+  timeline.push({ name: 'driver.requested', id: driverRequestedEvent.event_id });
+
+  // 8. Call driver (A: Driver)
+  const driverResult = await driver.sendPrompt({
+    task_id: task.task_id,
+    run_id: run.run_id,
+    prompt: options?.driverPrompt || taskRequest.spec,
+    context_pack_ref: {
+      context_pack_id: contextPack.context_pack_id,
+      task_id: contextPack.task_id,
+      uri: `artifact://context/${task.task_id}/${contextPack.context_pack_id}`,
+      schema_version: SCHEMA_VERSION,
+    },
+    created_at: nowTimestamp(),
+    schema_version: SCHEMA_VERSION,
+  });
+
+  // 9. Mailbox event: driver.completed
+  const driverCompletedEvent = orchestrator.appendEvent({
+    event_type: 'driver.completed',
+    subject_id: driverResult.driver_run_result_id,
+    run_id: run.run_id,
+    task_id: task.task_id,
+    payload: {
+      status: driverResult.status,
+      artifact_count: driverResult.artifacts.length,
+    },
+  });
+  timeline.push({ name: 'driver.completed', id: driverCompletedEvent.event_id });
+
+  const driverResultEvent = orchestrator.appendEvent({
+    event_type: 'driver.run_result',
+    subject_id: driverResult.driver_run_result_id,
+    run_id: run.run_id,
+    task_id: task.task_id,
+    payload: {
+      status: driverResult.status,
+      artifact_refs: driverResult.artifacts.map((artifact) => artifact.artifact_id),
+      transcript_ref: driverResult.transcript_ref.artifact_id,
+    },
+  });
+  timeline.push({ name: 'DriverRunResult', id: driverResultEvent.event_id });
+
+  // 10. Register artifacts
+  for (const artifact of driverResult.artifacts) {
+    orchestrator.registerArtifact(artifact);
+  }
+  orchestrator.registerArtifact(driverResult.transcript_ref);
+  if (driverResult.artifacts.length > 0) {
+    timeline.push({ name: 'ArtifactRegistered', id: driverResult.artifacts[0]!.artifact_id });
+  }
+
+  // 11. Run gates (D: Gate)
+  orchestrator.updateTaskStatus(task.task_id, 'reviewing');
+  const taskCompletedEvent = orchestrator.appendEvent({
+    event_type: 'task.completed',
+    subject_id: task.task_id,
+    run_id: run.run_id,
+    task_id: task.task_id,
+    payload: {
+      summary: 'Driver completed the task.',
+      artifact_refs: driverResult.artifacts.map((a) => a.artifact_id),
+    },
+  });
+  timeline.push({ name: 'TaskCompleted', id: taskCompletedEvent.event_id });
+
+  const hookEngine = new HookEngine({
+    config: {
+      version: 'hook-0.1',
+      settings: {
+        fail_fast: false,
+        default_timeout: 30,
+        parallel: false,
+        output_format: 'json',
+        emergency_env_var: 'AGENT_EMERGENCY_SKIP',
+      },
+      gates: {
+        'allow-gate': {
+          type: 'command',
+          run: 'node -e "process.exit(0)"',
+          retry_threshold: 1,
+        },
+      },
+      hooks: {
+        'task.completed': [{ gate: 'allow-gate', priority: 100, timeout: 30 }],
+      },
+    },
+    aggregator: new DecisionAggregator(),
+  });
+
+  const hookResult = await hookEngine.handleEvent({
+    ...taskCompletedEvent,
+    event_type: 'task.completed',
+  });
+
+  const hookEvent = orchestrator.appendEvent({
+    event_type: 'hook.matched',
+    subject_id: taskCompletedEvent.event_id,
+    run_id: run.run_id,
+    task_id: task.task_id,
+    payload: {
+      hook_point: hookResult.hook_point,
+      matched: hookResult.matched,
+    },
+  });
+  timeline.push({ name: 'HookMatched', id: hookEvent.event_id });
+
+  const gateResults: GateResult[] = hookResult.gate_results;
+  if (gateResults.length > 0) {
+    const firstGateResult = gateResults[0]!;
+    const gateResultEvent = orchestrator.appendEvent({
+      event_type: 'gate.result',
+      subject_id: firstGateResult.gate_result_id,
+      run_id: run.run_id,
+      task_id: task.task_id,
+      payload: {
+        decision: firstGateResult.decision,
+        reason: firstGateResult.reason,
+      },
+    });
+    timeline.push({ name: 'GateResult', id: gateResultEvent.event_id });
+  }
+
+  // 12. Artifact selection (C: Coordinator)
+  const evidencePack: EvidencePack = {
+    evidence_pack_id: createId('evidence_pack'),
+    context_pack_ref: contextPack.context_pack_id,
+    artifact_refs: driverResult.artifacts.map((a) => a.artifact_id),
+    gate_result_refs: gateResults.map((g) => g.gate_result_id),
+    created_at: nowTimestamp(),
+    schema_version: SCHEMA_VERSION,
+  };
+
+  const selectorOptions: {
+    mode: SelectionMode;
+    councilProvider?: CouncilProvider;
+  } = {
+    mode: options?.enableCouncil ? 'council' : 'single_agent',
+  };
+  if (options?.enableCouncil) {
+    selectorOptions.councilProvider = new MockCouncil();
+  }
+  const selector = new ArtifactSelector(selectorOptions);
+
+  const selectionResult = await selector.selectArtifacts({
+    run_id: run.run_id,
+    task_id: task.task_id,
+    driver_result: driverResult,
+    gate_results: gateResults,
+    evidence_pack: evidencePack,
+  });
+
+  const selectionEvent = orchestrator.appendEvent({
+    event_type: 'artifact.selected',
+    subject_id: selectionResult.selection_id,
+    run_id: run.run_id,
+    task_id: task.task_id,
+    payload: {
+      mode: selectionResult.mode,
+      selected_count: selectionResult.selected_artifacts.length,
+    },
+  });
+  timeline.push({ name: 'ArtifactSelected', id: selectionEvent.event_id });
+
+  // 13. Worktree materialization (C: Coordinator)
+  const materializer = new WorktreeMaterializer({
+    baseWorktreePath: options?.worktreePath || '.newide/worktrees',
+  });
+
+  const materializationResult = await materializer.materialize({
+    task_id: task.task_id,
+    artifacts: selectionResult.selected_artifacts,
+  });
+
+  const materializationEvent = orchestrator.appendEvent({
+    event_type: 'worktree.materialized',
+    subject_id: materializationResult.materialization_id,
+    run_id: run.run_id,
+    task_id: task.task_id,
+    payload: {
+      worktree_path: materializationResult.worktree_path,
+      files_written: materializationResult.files_written.length,
+    },
+  });
+  timeline.push({ name: 'WorktreeMaterialized', id: materializationEvent.event_id });
+
+  // 14. Mark run as completed
+  orchestrator.updateTaskStatus(task.task_id, 'completed');
+  orchestrator.updateRunStatus(run.run_id, 'completed');
+  const runCompletedEvent = orchestrator.appendEvent({
+    event_type: 'run.completed',
+    subject_id: run.run_id,
+    run_id: run.run_id,
+    task_id: task.task_id,
+    payload: {
+      status: 'completed',
+    },
+  });
+  timeline.push({ name: 'RunCompleted', id: runCompletedEvent.event_id });
+
+  // 15. Build summary
+  const summary: IntegrationV0Summary = {
+    run_id: run.run_id,
+    task_id: task.task_id,
+    mode: selectionResult.mode,
+    status: 'completed',
+    worktree_path: materializationResult.worktree_path,
+    artifacts_materialized: materializationResult.materialized_artifacts.length,
+    files_written: materializationResult.files_written,
+    driver_diagnostics: {
+      driver_id: driverResult.diagnostics.driver_id,
+      duration_ms: driverResult.diagnostics.duration_ms,
+    },
+    created_at: nowTimestamp(),
+    schema_version: SCHEMA_VERSION,
+  };
+
+  // 16. Persist summary and timeline to .newide/runs/<run_id>/
+  const runDir = path.join('.newide/runs', run.run_id);
+  await fs.mkdir(runDir, { recursive: true });
+
+  const summaryPath = path.join(runDir, 'summary.json');
+  await fs.writeFile(summaryPath, JSON.stringify(summary, null, 2), 'utf-8');
+
+  const timelinePath = path.join(runDir, 'timeline.json');
+  await fs.writeFile(timelinePath, JSON.stringify(timeline, null, 2), 'utf-8');
+
+  return {
+    run_id: run.run_id,
+    task_id: task.task_id,
+    timeline,
+    driver_result: driverResult,
+    selection_result: selectionResult,
+    materialization_result: materializationResult,
+    summary,
+  };
+}
