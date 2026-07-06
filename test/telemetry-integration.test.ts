@@ -21,9 +21,17 @@ describe('telemetry integration', () => {
     expect(eventTypes).toContain('driver.run_result');
     expect(eventTypes).toContain('checkpoint.saved');
     expect(eventTypes).toContain('coord.checkpoint_observed');
+    expect(eventTypes).toContain('council.decision');
 
     const taskCreated = sink.list().find((record) => record.event_type === 'task.created');
     expect(taskCreated?.owner).toBe('C-owned-observed');
+
+    const councilDecision = sink.list().find((record) => record.event_type === 'council.decision');
+    expect(councilDecision?.owner).toBe('C-owned-observed');
+    expect(councilDecision?.payload).toMatchObject({
+      selected_proposal_id: expect.any(String),
+      verdict: expect.any(String),
+    });
 
     const checkpointObserved = sink
       .list()
@@ -87,6 +95,31 @@ describe('telemetry integration', () => {
       memory_ablation: 'B1',
     });
 
+    await port.recordSweBenchVerifiedEvaluation({
+      case_id: 'django__django-1234',
+      exit_code: 0,
+      fail_to_pass_status: 'all_passed',
+      pass_to_pass_status: 'all_passed',
+      passed: true,
+      scaffold_variant: 'full_system',
+      case_tier: 'easy',
+    });
+
+    await port.recordTestbedRegression({
+      case_id: 'django__django-1234',
+      pass_to_pass_regressed: false,
+      regressed_tests: [],
+    });
+
+    await port.recordProxyUsage({
+      case_id: 'django__django-1234',
+      input_tokens: 500,
+      output_tokens: 100,
+      scaffold_variant: 'full_system',
+      temperature: 0.2,
+      seed: 7,
+    });
+
     await port.recordAgentCrash({
       task_id: 'task_1',
       kill_at: 'after_tool_call',
@@ -98,9 +131,23 @@ describe('telemetry integration', () => {
 
     expect(sink.list().map((record) => record.event_type)).toEqual([
       'harness.swe_evo_evaluated',
+      'harness.swe_bench_verified_evaluated',
+      'harness.testbed_regression_checked',
+      'proxy.llm_usage_recorded',
       'eval.agent_crash',
     ]);
-    expect(sink.list().every((record) => record.owner === 'F')).toBe(true);
+    expect(
+      sink
+        .list()
+        .filter((record) => record.event_type.startsWith('harness.'))
+        .every((r) => r.owner === 'F'),
+    ).toBe(true);
+    expect(
+      sink.list().find((r) => r.event_type === 'proxy.llm_usage_recorded')?.payload,
+    ).toMatchObject({
+      temperature: 0.2,
+      seed: 7,
+    });
   });
 
   it('mirrors orchestrator appendEvent for cataloged C events only', () => {

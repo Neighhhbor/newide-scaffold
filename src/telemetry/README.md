@@ -4,7 +4,7 @@
 
 **边界**：F 只**观测**，不补 B/C 业务逻辑。EventStore 里该 emit 什么、ResumePackage 怎么构建、Buffer 门控策略等，仍由 B/C 方向负责；缺失部分见文末「依赖 B/C 的缺口」。
 
-依据文档：同目录 `埋点清单.md`（RFC §1 记忆纵向 + §2 长程协调）。
+依据文档：同目录 `埋点清单.md`（RFC §1 记忆纵向 + §2 长程协调 + §3 Council 互决策 + §4 端到端打榜）。
 
 ---
 
@@ -34,16 +34,17 @@
 
 ### 模块职责
 
-| 文件                         | 职责                                                                                     |
-| ---------------------------- | ---------------------------------------------------------------------------------------- |
-| `event-catalog.ts`           | 清单中所有 event_type 的注册表与 owner（`F` / `B-owned-observed` / `C-owned-observed`）  |
-| `telemetry-sink.ts`          | `TelemetrySink` 接口、`InMemoryTelemetrySink`、`emitTelemetry`、`mirrorEventToTelemetry` |
-| `event-builders.ts`          | F 自有 L1/L2 信号 builder（Harness、P2 kill 等）                                         |
-| `adapters/b-memory.ts`       | 从 B 实体/返回值**观测**记忆管道信号（不写入 B 存储）                                    |
-| `adapters/c-coordination.ts` | 从 C Event / Checkpoint / ResumePackage 等**观测**协调信号                               |
-| `memory-cycle-observer.ts`   | 将 `runTaskMemoryCycle` 各阶段产物批量转为 B 观测记录                                    |
-| `harness-port.ts`            | 外部 Harness 写入 L1 的统一端口                                                          |
-| `emit.ts`                    | `emitTelemetryBatch` 批量写入辅助                                                        |
+| 文件                         | 职责                                                                                           |
+| ---------------------------- | ---------------------------------------------------------------------------------------------- |
+| `event-catalog.ts`           | 清单中所有 event_type 的注册表与 owner（`F` / `B-owned-observed` / `C-owned-observed`）        |
+| `telemetry-sink.ts`          | `TelemetrySink` 接口、`InMemoryTelemetrySink`、`emitTelemetry`、`mirrorEventToTelemetry`       |
+| `event-builders.ts`          | F 自有 L1/L2 信号 builder（Harness、P2 kill 等）                                               |
+| `adapters/b-memory.ts`       | 从 B 实体/返回值**观测**记忆管道信号（不写入 B 存储）                                          |
+| `adapters/c-coordination.ts` | 从 C Event / Checkpoint / ResumePackage 等**观测**协调信号                                     |
+| `adapters/c-council.ts`      | 从 Council 轮次 / Decision Packet / 审计字段**观测**互决策信号（adapter 就绪，等 C emit 接线） |
+| `memory-cycle-observer.ts`   | 将 `runTaskMemoryCycle` 各阶段产物批量转为 B 观测记录                                          |
+| `harness-port.ts`            | 外部 Harness 写入 L1 的统一端口                                                                |
+| `emit.ts`                    | `emitTelemetryBatch` 批量写入辅助                                                              |
 
 ---
 
@@ -169,28 +170,35 @@ class JsonlTelemetrySink implements TelemetrySink {
 
 ## 已接入 vs 未接入（相对 `埋点清单.md`）
 
-### 已接入（本 PR）
+### 已接入（§1/§2 + §3/§4 本 PR）
 
 | 路径                                 | 清单信号                                                                                                                                                                                                             |
 | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `RuntimeOrchestrator.appendEvent`    | catalog 中所有 C/B L2 事件（随 EventStore 自动 mirror）                                                                                                                                                              |
+| `RuntimeOrchestrator.appendEvent`    | catalog 中所有 C/B L2 事件（随 EventStore 自动 mirror），含 **`council.decision`**                                                                                                                                   |
 | `RuntimeOrchestrator.saveCheckpoint` | `checkpoint.saved` + L3 `coord.checkpoint_observed`                                                                                                                                                                  |
 | `runTaskMemoryCycle`                 | `memory.context_pack_built`, `driver.run_result`, `memory.experience_referenced`, `buffer.report_received`, `memory.extraction_triggered`, `memory.extraction_completed`, `metrics.updated`, `memory.skill_promoted` |
-| `FHarnessTelemetryPort`              | L1 `harness.*`, `proxy.*`；L2 `eval.agent_crash`, `eval.cold_restart`                                                                                                                                                |
+| `FHarnessTelemetryPort`              | L1 `harness.*`（含 **`harness.swe_bench_verified_evaluated`** / **`harness.testbed_regression_checked`**）、`proxy.*`（含 Fair-Setup 字段）；L2 `eval.agent_crash`, `eval.cold_restart`                              |
+| `adapters/c-council.ts`              | `observeCouncilRound` / `observeDecisionPacket` / `observeCoordinationTrace` / `observeTokenTracker`（单测验证 shape；运行时未接线）                                                                                 |
 
-### 依赖 B/C、尚未接入（请在对应方向 PR 中实现，F 侧 adapter 已备好）
+### 依赖 B/C、尚未接入（adapter 已备好或 catalog 已登记）
 
-| 缺口                                    | 说明                                                                 | F 侧准备                                                |
-| --------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------- |
-| C resume 链                             | `task.checkpoint_resume` → ResumePackage → `task.started`            | `observeResumePackage()`                                |
-| C 消息/租约                             | `agent.message_send/recv`, `MessageDelivery`, `FileLease`            | `observeMessageDelivery()`, `observeFileLease()`        |
-| C 系统事件                              | `system.timeout`, `system.budget_exceeded`, `lifecycle.human_gate`   | catalog 已登记，等 C emit                               |
-| Checkpoint 七项                         | `message_thread`, `scheduling`, `se_domain_state`                    | `observeCheckpoint()` 已可承载，需 C 补 schema          |
-| B 置信度/Persona                        | `memory.confidence_updated`, `memory.persona_updated`                | `observeConfidenceUpdated()`, `observePersonaUpdated()` |
-| B 异步门控                              | `memory.extraction_triggered` 真实 trigger（capacity/time/priority） | 当前 MVP 同步处理，trigger=`immediate`                  |
-| B Agent 生命周期                        | `memory.agent_lifecycle`                                             | `observeAgentLifecycle()`                               |
-| Event `subject_type`                    | L2 信封可选字段                                                      | TelemetryRecord 已支持；core `Event` 未扩展             |
-| `checkpoint.saved` → `agent.checkpoint` | C Spec 别名/双写                                                     | catalog 两者均已登记                                    |
+| 缺口                                    | 说明                                                                                                  | F 侧准备                                                  |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| Council 多轮 emit                       | `council.started` / `council.review_round_end` / `council.completed` / `council.extraction_completed` | catalog ✓；`observeCouncilRound()` 就绪；等 C emit        |
+| Council 审计实体                        | Decision Packet / coordination_trace / token_tracker                                                  | `observeDecisionPacket()` 等 L3 adapter 就绪；等 C/B 产出 |
+| `task.escalated`                        | B.2 死锁分子                                                                                          | catalog ✓；等 C Coordinator emit                          |
+| `council.decision` payload 扩展         | `termination_reason`, `current_round_count`, `decision_packet_ref`                                    | mirror ✓；扩 payload 待 C                                 |
+| C resume 链                             | `task.checkpoint_resume` → ResumePackage → `task.started`                                             | `observeResumePackage()`                                  |
+| C 消息/租约                             | `agent.message_send/recv`, `MessageDelivery`, `FileLease`                                             | `observeMessageDelivery()`, `observeFileLease()`          |
+| C 系统事件                              | `system.timeout`, `system.budget_exceeded`, `lifecycle.human_gate`                                    | catalog 已登记，等 C emit                                 |
+| Checkpoint 七项                         | `message_thread`, `scheduling`, `se_domain_state`                                                     | `observeCheckpoint()` 已可承载，需 C 补 schema            |
+| B 置信度/Persona                        | `memory.confidence_updated`, `memory.persona_updated`                                                 | `observeConfidenceUpdated()`, `observePersonaUpdated()`   |
+| B 异步门控                              | `memory.extraction_triggered` 真实 trigger（capacity/time/priority）                                  | 当前 MVP 同步处理，trigger=`immediate`                    |
+| B Agent 生命周期                        | `memory.agent_lifecycle`                                                                              | `observeAgentLifecycle()`                                 |
+| Event `subject_type`                    | L2 信封可选字段                                                                                       | TelemetryRecord 已支持；core `Event` 未扩展               |
+| `checkpoint.saved` → `agent.checkpoint` | C Spec 别名/双写                                                                                      | catalog 两者均已登记                                      |
+| §4 评测侧工程                           | SWE-bench Verified 主控 / Testbed / Docker / 仿真模拟器                                               | L1 builder + port ✓；聚合脚本在 scaffold 外               |
+| `.newide/run_audit.json`                | §3 B.1–B.5 审计落盘                                                                                   | 全无；Coordinator 实现 `dumpFEvalAudit`                   |
 
 ---
 
