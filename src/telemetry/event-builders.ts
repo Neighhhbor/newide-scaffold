@@ -28,6 +28,34 @@ export interface ProxyUsageTelemetryInput {
   input_tokens: number;
   output_tokens: number;
   model?: string;
+  scaffold_variant?: 'air_emulator' | 'zcode_router' | 'full_system' | string;
+  temperature?: number;
+  seed?: number;
+  task_id?: TaskId;
+  run_id?: RunId;
+}
+
+export interface SweBenchVerifiedEvaluationTelemetryInput {
+  case_id: string;
+  exit_code: number;
+  fail_to_pass_status: string;
+  pass_to_pass_status: string;
+  passed: boolean;
+  scaffold_variant: 'air_emulator' | 'zcode_router' | 'full_system' | string;
+  case_tier: 'easy' | 'medium' | 'hard' | string;
+  task_id?: TaskId;
+  run_id?: RunId;
+  bench_harness?: string;
+  council_topology?: string;
+  council_context?: string;
+  council_judge_source?: string;
+  council_anonymize?: string;
+}
+
+export interface TestbedRegressionTelemetryInput {
+  case_id: string;
+  pass_to_pass_regressed: boolean;
+  regressed_tests: string[];
   task_id?: TaskId;
   run_id?: RunId;
 }
@@ -104,8 +132,56 @@ export function buildProxyUsageTelemetry(input: ProxyUsageTelemetryInput): Telem
       input_tokens: input.input_tokens,
       output_tokens: input.output_tokens,
       ...(input.model ? { model: input.model } : {}),
+      ...(input.scaffold_variant ? { scaffold_variant: input.scaffold_variant } : {}),
+      ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+      ...(input.seed !== undefined ? { seed: input.seed } : {}),
     },
     source: { kind: 'proxy', object_type: 'LLM call' },
+  };
+}
+
+export function buildSweBenchVerifiedEvaluationTelemetry(
+  input: SweBenchVerifiedEvaluationTelemetryInput,
+): TelemetryEmission {
+  return {
+    event_type: 'harness.swe_bench_verified_evaluated',
+    subject_id: input.case_id,
+    subject_type: 'swe_bench_verified_case',
+    ...(input.run_id ? { run_id: input.run_id } : {}),
+    ...(input.task_id ? { task_id: input.task_id } : {}),
+    payload: {
+      case_id: input.case_id,
+      exit_code: input.exit_code,
+      fail_to_pass_status: input.fail_to_pass_status,
+      pass_to_pass_status: input.pass_to_pass_status,
+      passed: input.passed,
+      scaffold_variant: input.scaffold_variant,
+      case_tier: input.case_tier,
+      ...(input.bench_harness ? { 'bench.harness': input.bench_harness } : {}),
+      ...(input.council_topology ? { 'council.topology': input.council_topology } : {}),
+      ...(input.council_context ? { 'council.context': input.council_context } : {}),
+      ...(input.council_judge_source ? { 'council.judge_source': input.council_judge_source } : {}),
+      ...(input.council_anonymize ? { 'council.anonymize': input.council_anonymize } : {}),
+    },
+    source: { kind: 'harness', object_type: 'SWE-bench Verified evaluate' },
+  };
+}
+
+export function buildTestbedRegressionTelemetry(
+  input: TestbedRegressionTelemetryInput,
+): TelemetryEmission {
+  return {
+    event_type: 'harness.testbed_regression_checked',
+    subject_id: input.case_id,
+    subject_type: 'swe_bench_verified_case',
+    ...(input.run_id ? { run_id: input.run_id } : {}),
+    ...(input.task_id ? { task_id: input.task_id } : {}),
+    payload: {
+      case_id: input.case_id,
+      pass_to_pass_regressed: input.pass_to_pass_regressed,
+      regressed_tests: input.regressed_tests,
+    },
+    source: { kind: 'harness', object_type: 'Testbed regression check' },
   };
 }
 
