@@ -3,12 +3,16 @@ import {
   buildColdRestartTelemetry,
   buildCooperBenchEvaluationTelemetry,
   buildProxyUsageTelemetry,
+  buildSweBenchVerifiedEvaluationTelemetry,
   buildSweEvoEvaluationTelemetry,
+  buildTestbedRegressionTelemetry,
   type AgentCrashTelemetryInput,
   type ColdRestartTelemetryInput,
   type CooperBenchEvaluationTelemetryInput,
   type ProxyUsageTelemetryInput,
+  type SweBenchVerifiedEvaluationTelemetryInput,
   type SweEvoEvaluationTelemetryInput,
+  type TestbedRegressionTelemetryInput,
 } from './event-builders';
 import { emitTelemetry, type TelemetryRecord, type TelemetrySink } from './telemetry-sink';
 
@@ -35,6 +39,16 @@ export class FHarnessTelemetryPort {
 
   recordProxyUsage(input: ProxyUsageTelemetryInput): Promise<TelemetryRecord> {
     return emitTelemetry(this.sink, buildProxyUsageTelemetry(input));
+  }
+
+  recordSweBenchVerifiedEvaluation(
+    input: SweBenchVerifiedEvaluationTelemetryInput,
+  ): Promise<TelemetryRecord> {
+    return emitTelemetry(this.sink, buildSweBenchVerifiedEvaluationTelemetry(input));
+  }
+
+  recordTestbedRegression(input: TestbedRegressionTelemetryInput): Promise<TelemetryRecord> {
+    return emitTelemetry(this.sink, buildTestbedRegressionTelemetry(input));
   }
 
   recordAgentCrash(input: AgentCrashTelemetryInput): Promise<TelemetryRecord> {
