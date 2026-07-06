@@ -234,6 +234,27 @@ export async function runIntegrationV0Flow(
     id: driverRequestedEvent.event_id,
   });
 
+  // Ack means the receiver got the request; completion is represented later by driver.completed.
+  const ackedDelivery = mailbox.ack(driverRequestedResult.message.message_id, {
+    agent_id: driver.driver_id,
+  });
+
+  const driverRequestedAckEvent = orchestrator.appendEvent({
+    event_type: 'mailbox.message_acked',
+    subject_id: ackedDelivery.delivery_id,
+    run_id: run.run_id,
+    task_id: task.task_id,
+    payload: {
+      message_id: driverRequestedResult.message.message_id,
+      message_type: 'driver.requested',
+      acked_by: driver.driver_id,
+    },
+  });
+  timeline.push({
+    name: 'MailboxMessageAcked (driver.requested)',
+    id: driverRequestedAckEvent.event_id,
+  });
+
   // 8. Call driver (A: Driver)
   const driverResult = await driver.sendPrompt({
     task_id: task.task_id,
@@ -282,28 +303,6 @@ export async function runIntegrationV0Flow(
   timeline.push({
     name: 'MailboxMessageSent (driver.completed)',
     id: driverCompletedEvent.event_id,
-  });
-
-  // Ack the driver.requested message (driver has completed the request)
-  const ackedDelivery = mailbox.ack(driverRequestedResult.message.message_id, {
-    agent_id: driver.driver_id,
-  });
-
-  // Record mailbox ack event
-  const driverRequestedAckEvent = orchestrator.appendEvent({
-    event_type: 'mailbox.message_acked',
-    subject_id: ackedDelivery.delivery_id,
-    run_id: run.run_id,
-    task_id: task.task_id,
-    payload: {
-      message_id: driverRequestedResult.message.message_id,
-      message_type: 'driver.requested',
-      acked_by: driver.driver_id,
-    },
-  });
-  timeline.push({
-    name: 'MailboxMessageAcked (driver.requested)',
-    id: driverRequestedAckEvent.event_id,
   });
 
   const driverResultEvent = orchestrator.appendEvent({
