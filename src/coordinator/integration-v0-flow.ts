@@ -1,5 +1,3 @@
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
 import {
   SCHEMA_VERSION,
   createId,
@@ -26,8 +24,9 @@ import { MockCouncil, type CouncilProvider, type EvidencePack } from '../council
 import { InMemoryMailboxStore, type MessageDelivery } from './mailbox-store';
 import { buildArtifactOutputs, type ArtifactOutput } from './artifact-output';
 import {
+  buildRunOutputPaths,
   buildRunResultManifest,
-  writeRunResultManifest,
+  writeIntegrationRunOutputs,
   type IntegrationRunResultManifest,
 } from './run-result';
 
@@ -567,11 +566,7 @@ export async function runIntegrationV0Flow(
   });
 
   // 17. Build summary
-  const runDir = path.join('.newide/runs', run.run_id);
-  const summaryPath = path.join(runDir, 'summary.json');
-  const timelinePath = path.join(runDir, 'timeline.json');
-  const checkpointPath = path.join(runDir, 'checkpoint.json');
-  const resultPath = path.join(runDir, 'result.json');
+  const outputPaths = buildRunOutputPaths(run.run_id);
   const artifactOutputs = buildArtifactOutputs({
     artifacts: selectionResult.selected_artifacts,
     materialized_record_paths: materializationResult.files_written,
@@ -590,7 +585,7 @@ export async function runIntegrationV0Flow(
       duration_ms: driverResult.diagnostics.duration_ms,
     },
     checkpoint_id: savedCheckpoint.checkpoint_id,
-    checkpoint_path: checkpointPath,
+    checkpoint_path: outputPaths.checkpoint_path,
     mailbox_message_refs: mailboxMessageRefs,
     mailbox_thread_id: threadId,
     created_at: nowTimestamp(),
@@ -605,19 +600,22 @@ export async function runIntegrationV0Flow(
     mode: selectionResult.mode,
     driver_id: driverResult.diagnostics.driver_id,
     artifact_outputs: artifactOutputs,
-    summary_path: summaryPath,
-    timeline_path: timelinePath,
-    checkpoint_path: checkpointPath,
+    result_path: outputPaths.result_path,
+    summary_path: outputPaths.summary_path,
+    timeline_path: outputPaths.timeline_path,
+    checkpoint_path: outputPaths.checkpoint_path,
     created_at: summary.created_at,
     schema_version: SCHEMA_VERSION,
   });
 
   // 18. Persist summary, timeline, checkpoint, and result manifest.
-  await fs.mkdir(runDir, { recursive: true });
-  await fs.writeFile(summaryPath, JSON.stringify(summary, null, 2), 'utf-8');
-  await fs.writeFile(timelinePath, JSON.stringify(timeline, null, 2), 'utf-8');
-  await fs.writeFile(checkpointPath, JSON.stringify(savedCheckpoint, null, 2), 'utf-8');
-  await writeRunResultManifest(resultPath, resultManifest);
+  await writeIntegrationRunOutputs({
+    paths: outputPaths,
+    summary,
+    timeline,
+    checkpoint: savedCheckpoint,
+    result_manifest: resultManifest,
+  });
 
   return {
     run_id: run.run_id,
