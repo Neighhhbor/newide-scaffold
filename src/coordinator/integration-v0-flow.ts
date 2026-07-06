@@ -4,6 +4,7 @@ import {
   SCHEMA_VERSION,
   createId,
   nowTimestamp,
+  type Checkpoint,
   type RoleProfileRef,
   type TaskCreateRequest,
 } from '../core';
@@ -38,6 +39,8 @@ export interface IntegrationV0Summary {
     driver_id: string;
     duration_ms: number;
   };
+  checkpoint_id: string;
+  checkpoint_path: string;
   created_at: string;
   schema_version: string;
 }
@@ -367,26 +370,110 @@ export async function runIntegrationV0Flow(
   });
   timeline.push({ name: 'WorktreeMaterialized', id: materializationEvent.event_id });
 
-  // 14. Mark run as completed
-  orchestrator.updateTaskStatus(task.task_id, 'completed');
-  orchestrator.updateRunStatus(run.run_id, 'completed');
+  // 14. Calculate flow completion status
+  const driverSucceeded = driverResult.status === 'succeeded';
+  const gatesPassed = gateResults.length > 0 && gateResults.every((g) => g.decision === 'allow');
+  const hasSelectedArtifact = selectionResult.selected_artifacts.length > 0;
+  const materialized = materializationResult.files_written.length > 0;
+  const flowCompleted = driverSucceeded && gatesPassed && hasSelectedArtifact && materialized;
+
+  // 15. Save checkpoint (C: Coordinator long-running state)
+  const diffArtifactId =
+    selectionResult.selected_artifacts.length > 0
+      ? selectionResult.selected_artifacts[0]!.artifact_id
+      : undefined;
+
+  const mechanicalSnapshot: Checkpoint['mechanical_snapshot'] = {
+    base_commit: 'demo-head',
+    snapshot_commit: 'demo-head',
+    worktree_path: materializationResult.worktree_path,
+    branch: 'integration-v0-demo',
+    modified_files: materializationResult.files_written,
+  };
+  if (diffArtifactId) {
+    mechanicalSnapshot.diff_artifact_id = diffArtifactId;
+  }
+
+  const doneSteps: string[] = ['task created'];
+  if (driverSucceeded) doneSteps.push('driver completed');
+  if (gatesPassed) doneSteps.push('gates passed');
+  if (hasSelectedArtifact) doneSteps.push('artifacts selected');
+  if (materialized) doneSteps.push('worktree materialized');
+
+  const blockedOn: string[] = [];
+  if (!driverSucceeded) blockedOn.push('driver execution failed');
+  if (!gatesPassed) blockedOn.push('gates blocked or not evaluated');
+  if (!hasSelectedArtifact) blockedOn.push('no artifacts selected');
+  if (!materialized) blockedOn.push('worktree materialization failed');
+
+  const checkpoint: Checkpoint = {
+    checkpoint_id: createId('checkpoint'),
+    checkpoint_type: 'full',
+    task_id: task.task_id,
+    agent_id: driverResult.diagnostics.driver_id,
+    trigger: 'manual',
+    mechanical_snapshot: mechanicalSnapshot,
+    semantic_handoff: {
+      done: doneSteps,
+      in_progress: [],
+      blocked_on: blockedOn,
+      assumptions: flowCompleted
+        ? ['Integration v0 flow completed successfully', 'Artifacts materialized to worktree']
+        : [
+            'Integration v0 flow partially completed',
+            `Driver: ${driverResult.status}`,
+            `Gates: ${gatesPassed ? 'passed' : 'blocked or not evaluated'}`,
+            `Artifacts: ${hasSelectedArtifact ? 'selected' : 'none'}`,
+          ],
+      next_steps: flowCompleted
+        ? ['Ready for user review', 'Can be resumed if needed']
+        : ['Review failure points', 'May need retry or manual intervention'],
+      known_risks: ['Checkpoint is in-memory only', 'Resume not yet implemented'],
+    },
+    runtime_state: {
+      scheduler_policy: selectionResult.mode === 'council' ? 'council' : 'single_agent',
+      current_turn: 1,
+      next_agent_ref: 'user_review',
+      resume_cursor: 'worktree.materialized',
+    },
+    artifact_refs: [
+      ...selectionResult.selected_artifacts.map((a) => a.artifact_id),
+      driverResult.transcript_ref.artifact_id,
+    ],
+    validity_status: 'valid',
+    created_at: nowTimestamp(),
+    schema_version: SCHEMA_VERSION,
+  };
+
+  const savedCheckpoint = orchestrator.saveCheckpoint(checkpoint);
+  timeline.push({ name: 'CheckpointSaved', id: savedCheckpoint.checkpoint_id });
+
+  // 16. Mark run as completed or failed
+  const finalTaskStatus = flowCompleted ? 'completed' : 'failed';
+  const finalRunStatus = flowCompleted ? 'completed' : 'failed';
+  orchestrator.updateTaskStatus(task.task_id, finalTaskStatus);
+  orchestrator.updateRunStatus(run.run_id, finalRunStatus);
   const runCompletedEvent = orchestrator.appendEvent({
-    event_type: 'run.completed',
+    event_type: flowCompleted ? 'run.completed' : 'run.failed',
     subject_id: run.run_id,
     run_id: run.run_id,
     task_id: task.task_id,
     payload: {
-      status: 'completed',
+      status: finalRunStatus,
     },
   });
-  timeline.push({ name: 'RunCompleted', id: runCompletedEvent.event_id });
+  timeline.push({
+    name: flowCompleted ? 'RunCompleted' : 'RunFailed',
+    id: runCompletedEvent.event_id,
+  });
 
-  // 15. Build summary
+  // 17. Build summary
+  const checkpointPath = path.join('.newide/runs', run.run_id, 'checkpoint.json');
   const summary: IntegrationV0Summary = {
     run_id: run.run_id,
     task_id: task.task_id,
     mode: selectionResult.mode,
-    status: 'completed',
+    status: finalRunStatus,
     worktree_path: materializationResult.worktree_path,
     artifacts_materialized: materializationResult.materialized_artifacts.length,
     files_written: materializationResult.files_written,
@@ -394,11 +481,13 @@ export async function runIntegrationV0Flow(
       driver_id: driverResult.diagnostics.driver_id,
       duration_ms: driverResult.diagnostics.duration_ms,
     },
+    checkpoint_id: savedCheckpoint.checkpoint_id,
+    checkpoint_path: checkpointPath,
     created_at: nowTimestamp(),
     schema_version: SCHEMA_VERSION,
   };
 
-  // 16. Persist summary and timeline to .newide/runs/<run_id>/
+  // 17. Persist summary, timeline, and checkpoint to .newide/runs/<run_id>/
   const runDir = path.join('.newide/runs', run.run_id);
   await fs.mkdir(runDir, { recursive: true });
 
@@ -407,6 +496,8 @@ export async function runIntegrationV0Flow(
 
   const timelinePath = path.join(runDir, 'timeline.json');
   await fs.writeFile(timelinePath, JSON.stringify(timeline, null, 2), 'utf-8');
+
+  await fs.writeFile(checkpointPath, JSON.stringify(savedCheckpoint, null, 2), 'utf-8');
 
   return {
     run_id: run.run_id,
