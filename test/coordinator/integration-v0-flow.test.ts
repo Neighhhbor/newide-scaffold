@@ -1,6 +1,10 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { promises as fs } from 'node:fs';
-import { runIntegrationV0Flow } from '../../src/coordinator/integration-v0-flow';
+import {
+  runIntegrationV0Flow,
+  type IntegrationV0Options,
+  type IntegrationV0Result,
+} from '../../src/coordinator/integration-v0-flow';
 import {
   MockDriver,
   type DriverRuntimeHandle,
@@ -10,18 +14,21 @@ import {
 import { SCHEMA_VERSION, createId, type ArtifactRef } from '../../src/core';
 
 describe('runIntegrationV0Flow', () => {
+  const createdRunDirs = new Set<string>();
+  const createdWorktreeDirs = new Set<string>();
+
   afterEach(async () => {
-    // Clean up .newide/runs/ and .newide/worktrees/ test directories
-    try {
-      await fs.rm('.newide/runs', { recursive: true, force: true });
-      await fs.rm('.newide/worktrees', { recursive: true, force: true });
-    } catch {
-      // Ignore if doesn't exist
-    }
+    await Promise.all(
+      [...createdRunDirs, ...createdWorktreeDirs].map((dir) =>
+        fs.rm(dir, { recursive: true, force: true }),
+      ),
+    );
+    createdRunDirs.clear();
+    createdWorktreeDirs.clear();
   });
 
   it('should run complete flow with MockDriver and single_agent mode', async () => {
-    const result = await runIntegrationV0Flow();
+    const result = await runFlow();
 
     expect(result.run_id).toBeDefined();
     expect(result.task_id).toBeDefined();
@@ -66,14 +73,14 @@ describe('runIntegrationV0Flow', () => {
   });
 
   it('should run with council mode when enabled', async () => {
-    const result = await runIntegrationV0Flow({ enableCouncil: true });
+    const result = await runFlow({ enableCouncil: true });
 
     expect(result.summary.mode).toBe('council');
     expect(result.summary.status).toBe('completed');
   });
 
   it('should persist summary and timeline to .newide/runs/', async () => {
-    const result = await runIntegrationV0Flow();
+    const result = await runFlow();
 
     const summaryPath = `.newide/runs/${result.run_id}/summary.json`;
     const timelinePath = `.newide/runs/${result.run_id}/timeline.json`;
@@ -106,8 +113,30 @@ describe('runIntegrationV0Flow', () => {
     expect(timeline.length).toBeGreaterThan(0);
   });
 
+  it('should persist a stable run result manifest', async () => {
+    const result = await runFlow();
+
+    const resultPath = `.newide/runs/${result.run_id}/result.json`;
+    const resultContent = await fs.readFile(resultPath, 'utf-8');
+    const manifest = JSON.parse(resultContent);
+
+    expect(manifest).toMatchObject({
+      run_id: result.run_id,
+      task_id: result.task_id,
+      status: result.summary.status,
+      mode: result.summary.mode,
+      driver_id: result.summary.driver_diagnostics.driver_id,
+      artifact_outputs: result.summary.artifact_outputs,
+      summary_path: `.newide/runs/${result.run_id}/summary.json`,
+      timeline_path: `.newide/runs/${result.run_id}/timeline.json`,
+      checkpoint_path: `.newide/runs/${result.run_id}/checkpoint.json`,
+      schema_version: result.summary.schema_version,
+    });
+    expect(manifest.created_at).toBeDefined();
+  });
+
   it('should materialize artifacts to worktree', async () => {
-    const result = await runIntegrationV0Flow();
+    const result = await runFlow();
 
     expect(result.materialization_result.files_written.length).toBeGreaterThan(0);
 
@@ -125,7 +154,7 @@ describe('runIntegrationV0Flow', () => {
   });
 
   it('should include materialized artifact outputs in summary', async () => {
-    const result = await runIntegrationV0Flow();
+    const result = await runFlow();
     const artifact = result.selection_result.selected_artifacts[0]!;
 
     expect(result.summary.artifact_outputs).toEqual([
@@ -140,14 +169,14 @@ describe('runIntegrationV0Flow', () => {
 
   it('should work with injected driver', async () => {
     const fakeDriver = new MockDriver();
-    const result = await runIntegrationV0Flow({ driver: fakeDriver });
+    const result = await runFlow({ driver: fakeDriver });
 
     expect(result.summary.status).toBe('completed');
     expect(result.driver_result.diagnostics.driver_id).toBe('mock-driver');
   });
 
   it('should include all key timeline events', async () => {
-    const result = await runIntegrationV0Flow();
+    const result = await runFlow();
 
     const timelineNames = result.timeline.map((t) => t.name);
 
@@ -170,7 +199,7 @@ describe('runIntegrationV0Flow', () => {
   });
 
   it('should create summary with correct structure', async () => {
-    const result = await runIntegrationV0Flow();
+    const result = await runFlow();
 
     expect(result.summary).toHaveProperty('run_id');
     expect(result.summary).toHaveProperty('task_id');
@@ -197,7 +226,7 @@ describe('runIntegrationV0Flow', () => {
 
   it('should support custom driver prompt', async () => {
     const customPrompt = 'Custom integration test prompt';
-    const result = await runIntegrationV0Flow({ driverPrompt: customPrompt });
+    const result = await runFlow({ driverPrompt: customPrompt });
 
     expect(result.summary.status).toBe('completed');
     // Verify the prompt was used (indirectly through successful completion)
@@ -205,7 +234,7 @@ describe('runIntegrationV0Flow', () => {
   });
 
   it('should save checkpoint to .newide/runs/<run_id>/checkpoint.json', async () => {
-    const result = await runIntegrationV0Flow();
+    const result = await runFlow();
 
     const checkpointPath = `.newide/runs/${result.run_id}/checkpoint.json`;
 
@@ -236,7 +265,7 @@ describe('runIntegrationV0Flow', () => {
   });
 
   it('should include checkpoint info in summary', async () => {
-    const result = await runIntegrationV0Flow();
+    const result = await runFlow();
 
     expect(result.summary.checkpoint_id).toBeDefined();
     expect(result.summary.checkpoint_path).toBe(`.newide/runs/${result.run_id}/checkpoint.json`);
@@ -250,7 +279,7 @@ describe('runIntegrationV0Flow', () => {
   });
 
   it('should include CheckpointSaved in timeline', async () => {
-    const result = await runIntegrationV0Flow();
+    const result = await runFlow();
 
     const timelineNames = result.timeline.map((t) => t.name);
     expect(timelineNames).toContain('CheckpointSaved');
@@ -270,7 +299,7 @@ describe('runIntegrationV0Flow', () => {
   });
 
   it('should include required checkpoint fields', async () => {
-    const result = await runIntegrationV0Flow();
+    const result = await runFlow();
 
     const checkpointPath = `.newide/runs/${result.run_id}/checkpoint.json`;
     const checkpointContent = await fs.readFile(checkpointPath, 'utf-8');
@@ -355,7 +384,7 @@ describe('runIntegrationV0Flow', () => {
       async close(): Promise<void> {}
     }
 
-    const result = await runIntegrationV0Flow({
+    const result = await runFlow({
       driver: new FailingMockDriver(),
     });
 
@@ -375,10 +404,15 @@ describe('runIntegrationV0Flow', () => {
     expect(checkpoint.validity_status).toBe('valid');
     expect(checkpoint.semantic_handoff.done).not.toContain('driver completed');
     expect(checkpoint.semantic_handoff.blocked_on).toContain('driver execution failed');
+
+    const resultPath = `.newide/runs/${result.run_id}/result.json`;
+    const manifest = JSON.parse(await fs.readFile(resultPath, 'utf-8'));
+    expect(manifest.status).toBe('failed');
+    expect(result.result_manifest.status).toBe('failed');
   });
 
   it('should use real mailbox send/ack mechanism', async () => {
-    const result = await runIntegrationV0Flow();
+    const result = await runFlow();
 
     // Verify mailbox fields exist in summary
     expect(result.summary.mailbox_message_refs).toBeInstanceOf(Array);
@@ -403,4 +437,11 @@ describe('runIntegrationV0Flow', () => {
     expect(driverCompletedIndex).toBeGreaterThan(driverRequestedIndex);
     expect(driverAckedIndex).toBeGreaterThan(driverRequestedIndex);
   });
+
+  async function runFlow(options?: IntegrationV0Options): Promise<IntegrationV0Result> {
+    const result = await runIntegrationV0Flow(options);
+    createdRunDirs.add(`.newide/runs/${result.run_id}`);
+    createdWorktreeDirs.add(result.materialization_result.worktree_path);
+    return result;
+  }
 });

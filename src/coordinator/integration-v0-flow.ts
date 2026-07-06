@@ -25,6 +25,11 @@ import { WorktreeMaterializer, type MaterializationResult } from './worktree-mat
 import { MockCouncil, type CouncilProvider, type EvidencePack } from '../council';
 import { InMemoryMailboxStore, type MessageDelivery } from './mailbox-store';
 import { buildArtifactOutputs, type ArtifactOutput } from './artifact-output';
+import {
+  buildRunResultManifest,
+  writeRunResultManifest,
+  type IntegrationRunResultManifest,
+} from './run-result';
 
 export interface IntegrationV0TimelineItem {
   name: string;
@@ -70,6 +75,7 @@ export interface IntegrationV0Result {
   mailbox_thread: Message[];
   mailbox_deliveries: MessageDelivery[];
   summary: IntegrationV0Summary;
+  result_manifest: IntegrationRunResultManifest;
 }
 
 /**
@@ -83,7 +89,7 @@ export interface IntegrationV0Result {
  *
  * Key features:
  * - Real mailbox send/ack mechanism (task.assigned, driver.requested, driver.completed)
- * - Persistent output to .newide/runs/<run_id>/ (summary.json, timeline.json)
+ * - Persistent output to .newide/runs/<run_id>/ (result.json, summary.json, timeline.json)
  * - Support single_agent (default) and council modes
  * - Support MockDriver (default) and external driver injection
  */
@@ -561,7 +567,11 @@ export async function runIntegrationV0Flow(
   });
 
   // 17. Build summary
-  const checkpointPath = path.join('.newide/runs', run.run_id, 'checkpoint.json');
+  const runDir = path.join('.newide/runs', run.run_id);
+  const summaryPath = path.join(runDir, 'summary.json');
+  const timelinePath = path.join(runDir, 'timeline.json');
+  const checkpointPath = path.join(runDir, 'checkpoint.json');
+  const resultPath = path.join(runDir, 'result.json');
   const artifactOutputs = buildArtifactOutputs({
     artifacts: selectionResult.selected_artifacts,
     materialized_record_paths: materializationResult.files_written,
@@ -588,18 +598,26 @@ export async function runIntegrationV0Flow(
   };
   const mailboxThread = mailbox.listThread(threadId);
   const mailboxDeliveries = mailbox.listDeliveries();
+  const resultManifest = buildRunResultManifest({
+    run_id: run.run_id,
+    task_id: task.task_id,
+    status: finalRunStatus,
+    mode: selectionResult.mode,
+    driver_id: driverResult.diagnostics.driver_id,
+    artifact_outputs: artifactOutputs,
+    summary_path: summaryPath,
+    timeline_path: timelinePath,
+    checkpoint_path: checkpointPath,
+    created_at: summary.created_at,
+    schema_version: SCHEMA_VERSION,
+  });
 
-  // 17. Persist summary, timeline, and checkpoint to .newide/runs/<run_id>/
-  const runDir = path.join('.newide/runs', run.run_id);
+  // 18. Persist summary, timeline, checkpoint, and result manifest.
   await fs.mkdir(runDir, { recursive: true });
-
-  const summaryPath = path.join(runDir, 'summary.json');
   await fs.writeFile(summaryPath, JSON.stringify(summary, null, 2), 'utf-8');
-
-  const timelinePath = path.join(runDir, 'timeline.json');
   await fs.writeFile(timelinePath, JSON.stringify(timeline, null, 2), 'utf-8');
-
   await fs.writeFile(checkpointPath, JSON.stringify(savedCheckpoint, null, 2), 'utf-8');
+  await writeRunResultManifest(resultPath, resultManifest);
 
   return {
     run_id: run.run_id,
@@ -611,5 +629,6 @@ export async function runIntegrationV0Flow(
     mailbox_thread: mailboxThread,
     mailbox_deliveries: mailboxDeliveries,
     summary,
+    result_manifest: resultManifest,
   };
 }
