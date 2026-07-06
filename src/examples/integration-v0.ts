@@ -4,17 +4,20 @@
  * End-to-end integration flow connecting A-B-C-D modules.
  *
  * Usage:
- *   # Default: MockDriver + single_agent
+ *   # Default: MockDriver + single_agent + default prompt
  *   pnpm example:integration-v0
+ *
+ *   # With custom prompt
+ *   pnpm example:integration-v0 "Fix the bug in login.ts"
  *
  *   # With council mode
  *   pnpm example:integration-v0 --enable-council
  *
  *   # With external driver (requires ACP_DRIVER_RUNNER_DIR)
- *   ACP_DRIVER_RUNNER_DIR=/path/to/acp-client-prototype pnpm example:integration-v0 --external-driver
+ *   ACP_DRIVER_RUNNER_DIR=/path/to/acp-client-prototype pnpm example:integration-v0 --external-driver "Add user authentication"
  *
- *   # External driver + council
- *   ACP_DRIVER_RUNNER_DIR=/path/to/acp-client-prototype pnpm example:integration-v0 --external-driver --enable-council
+ *   # External driver + council + custom prompt
+ *   ACP_DRIVER_RUNNER_DIR=/path/to/acp-client-prototype pnpm example:integration-v0 --external-driver --enable-council "Optimize database queries"
  *
  * Environment variables:
  *   - ACP_DRIVER_RUNNER_DIR: Path to acp-client-prototype (required for --external-driver)
@@ -28,12 +31,18 @@ import { CommandDriverTransport } from '../driver/command-driver-transport';
 import type { DriverRuntimeHandle } from '../driver';
 
 // Parse command line arguments
-const enableCouncil = process.argv.includes('--enable-council');
-const useExternalDriver = process.argv.includes('--external-driver');
+const args = process.argv.slice(2);
+const enableCouncil = args.includes('--enable-council');
+const useExternalDriver = args.includes('--external-driver');
+
+// Extract custom prompt (first non-flag argument)
+const customPrompt = args.find((arg) => !arg.startsWith('--'));
+const driverPrompt = customPrompt || 'Produce a mock patch artifact for integration v0 test';
 
 console.log('🚀 Integration v0 Flow\n');
 console.log(`Mode: ${enableCouncil ? 'council' : 'single_agent'}`);
-console.log(`Driver: ${useExternalDriver ? 'external (ACP)' : 'mock'}\n`);
+console.log(`Driver: ${useExternalDriver ? 'external (ACP)' : 'mock'}`);
+console.log(`Prompt: "${driverPrompt}"\n`);
 
 // Setup driver
 let driver: DriverRuntimeHandle | undefined;
@@ -78,7 +87,7 @@ try {
     driverPrompt: string;
   } = {
     enableCouncil,
-    driverPrompt: 'Produce a mock patch artifact for integration v0 test',
+    driverPrompt,
   };
 
   if (driver) {
