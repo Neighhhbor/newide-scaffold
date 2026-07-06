@@ -68,38 +68,41 @@ export class ExternalDriverRuntime implements DriverRuntimeHandle {
   }
 }
 
-function assertDriverRunResult(value: DriverRunResult): asserts value is DriverRunResult {
+export function assertDriverRunResult(
+  value: unknown,
+  source = 'External driver',
+): asserts value is DriverRunResult {
   const result = value as Partial<DriverRunResult>;
 
   if (!result.session_id) {
-    throw malformedResult('session_id is required');
+    throw malformedResult(source, 'session_id is required');
   }
   if (!result.driver_run_result_id) {
-    throw malformedResult('driver_run_result_id is required');
+    throw malformedResult(source, 'driver_run_result_id is required');
   }
   if (!result.status) {
-    throw malformedResult('status is required');
+    throw malformedResult(source, 'status is required');
   }
   if (!Array.isArray(result.artifacts)) {
-    throw malformedResult('artifacts must be an array');
+    throw malformedResult(source, 'artifacts must be an array');
   }
   if (!result.transcript_ref) {
-    throw malformedResult('transcript_ref is required');
+    throw malformedResult(source, 'transcript_ref is required');
   }
   if (!Array.isArray(result.tool_events)) {
-    throw malformedResult('tool_events must be an array');
+    throw malformedResult(source, 'tool_events must be an array');
   }
   if (!result.diagnostics?.driver_id) {
-    throw malformedResult('diagnostics.driver_id is required');
+    throw malformedResult(source, 'diagnostics.driver_id is required');
   }
   if (!result.created_at) {
-    throw malformedResult('created_at is required');
+    throw malformedResult(source, 'created_at is required');
   }
   if (!result.schema_version) {
-    throw malformedResult('schema_version is required');
+    throw malformedResult(source, 'schema_version is required');
   }
 }
 
-function malformedResult(reason: string): Error {
-  return new Error(`External driver returned malformed DriverRunResult: ${reason}`);
+function malformedResult(source: string, reason: string): Error {
+  return new Error(`${source} returned malformed DriverRunResult: ${reason}`);
 }
