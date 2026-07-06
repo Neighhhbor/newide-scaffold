@@ -28,7 +28,7 @@ import type { ExtractionOutput } from '../types';
 // ═══════════════════════════════════════════
 
 const effectivenessScore: Record<string, number> = {
-  fully_effective: 0.9,
+  fully_effective: 0.97,
   partially_effective: 0.6,
   ineffective: 0.2,
   not_applicable: 0.5,
@@ -41,7 +41,7 @@ function computeConfidence(dr: DriverReturn): number {
   const avg =
     refs.reduce((sum, r) => sum + (effectivenessScore[r.effectiveness] ?? 0.5), 0) / refs.length;
   const unresolvedPenalty = dr.blockers.filter((b) => !b.resolved).length * 0.1;
-  return Math.max(0.1, Math.min(0.95, avg - unresolvedPenalty));
+  return Math.max(0.1, Math.min(1.0, avg - unresolvedPenalty));
 }
 
 // ═══════════════════════════════════════════
