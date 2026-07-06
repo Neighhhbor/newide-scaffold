@@ -7,3 +7,6 @@ export * from './mailbox-store';
 export * from './coordinator-facade';
 export * from './orchestrator';
 export * from './basic-flow';
+export * from './artifact-finalizer';
+export * from './worktree-materializer';
+export * from './integration-v0-flow';
