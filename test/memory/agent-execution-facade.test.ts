@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SCHEMA_VERSION } from '../../src/core';
+import { SCHEMA_VERSION, type ArtifactRef } from '../../src/core';
 import { AGENT_EXECUTION_STATUSES } from '../../src/memory';
 import type {
   AgentExecutionFacade,
@@ -39,8 +39,8 @@ describe('AgentExecutionFacade contract', () => {
       role_id: 'proposer_a',
       context_pack_ref: 'context_pack_001',
       driver_run_result_id: 'driver_result_001',
-      artifact_refs: ['artifact_candidate_001'],
-      transcript_ref: 'artifact_transcript_001',
+      artifact_refs: [createArtifact('artifact_candidate_001')],
+      transcript_ref: createArtifact('artifact_transcript_001', 'transcript'),
       diagnostics: {
         driver_id: 'driver_001',
       },
@@ -58,13 +58,25 @@ function createAgentExecutionResult(input: AgentExecutionRequest): AgentExecutio
     role_id: input.role_id,
     context_pack_ref: 'context_pack_001',
     driver_run_result_id: 'driver_result_001',
-    artifact_refs: ['artifact_candidate_001'],
-    transcript_ref: 'artifact_transcript_001',
+    artifact_refs: [createArtifact('artifact_candidate_001')],
+    transcript_ref: createArtifact('artifact_transcript_001', 'transcript'),
     diagnostics: {
       driver_id: 'driver_001',
     },
     status: 'completed',
     memory_buffer_ref: 'memory_buffer_001',
+    created_at: '2026-07-07T00:00:00.000Z',
+    schema_version: SCHEMA_VERSION,
+  };
+}
+
+function createArtifact(artifactId: string, type: ArtifactRef['type'] = 'patch'): ArtifactRef {
+  return {
+    artifact_id: artifactId,
+    type,
+    uri: `artifact://${type}/${artifactId}`,
+    producer_id: 'driver_001',
+    task_id: 'task_001',
     created_at: '2026-07-07T00:00:00.000Z',
     schema_version: SCHEMA_VERSION,
   };

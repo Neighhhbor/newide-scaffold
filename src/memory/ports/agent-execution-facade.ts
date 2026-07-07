@@ -6,6 +6,7 @@
  */
 import type {
   ArtifactId,
+  ArtifactRef,
   ContextPackId,
   DriverRunResultId,
   RoleId,
@@ -41,8 +42,8 @@ export interface AgentExecutionResult {
   role_id: RoleId;
   context_pack_ref: ContextPackId;
   driver_run_result_id: DriverRunResultId;
-  artifact_refs: ArtifactId[];
-  transcript_ref: ArtifactId;
+  artifact_refs: ArtifactRef[];
+  transcript_ref: ArtifactRef;
   diagnostics: AgentExecutionDiagnostics;
   status: AgentExecutionStatus;
   memory_buffer_ref?: string;
