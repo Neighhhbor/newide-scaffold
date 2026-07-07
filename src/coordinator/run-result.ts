@@ -12,6 +12,7 @@ import path from 'node:path';
 import type { SchemaVersion, TaskId, RunId, Timestamp } from '../core';
 import type { SelectionMode } from './artifact-finalizer';
 import type { ArtifactOutput } from './artifact-output';
+import type { CouncilDecision } from '../council';
 
 export type RunResultStatus = 'completed' | 'failed';
 
@@ -38,6 +39,9 @@ export interface IntegrationRunResultManifest {
   checkpoint_path: string;
   message_thread_path: string;
   frontend_snapshot_path: string;
+  council_decision_path?: string;
+  council_verdict?: CouncilDecision['verdict'];
+  council_decision_mode?: CouncilDecision['decision_mode'];
   created_at: Timestamp;
   schema_version: SchemaVersion;
 }
@@ -81,6 +85,9 @@ export interface BuildRunResultManifestInput {
   checkpoint_path: string;
   message_thread_path: string;
   frontend_snapshot_path: string;
+  council_decision_path?: string;
+  council_verdict?: CouncilDecision['verdict'];
+  council_decision_mode?: CouncilDecision['decision_mode'];
   created_at: Timestamp;
   schema_version: SchemaVersion;
 }
@@ -101,6 +108,9 @@ export function buildRunResultManifest(
     checkpoint_path: input.checkpoint_path,
     message_thread_path: input.message_thread_path,
     frontend_snapshot_path: input.frontend_snapshot_path,
+    ...(input.council_decision_path ? { council_decision_path: input.council_decision_path } : {}),
+    ...(input.council_verdict ? { council_verdict: input.council_verdict } : {}),
+    ...(input.council_decision_mode ? { council_decision_mode: input.council_decision_mode } : {}),
     created_at: input.created_at,
     schema_version: input.schema_version,
   };

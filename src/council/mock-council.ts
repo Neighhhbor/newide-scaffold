@@ -17,6 +17,7 @@ export class MockCouncil implements CouncilProvider {
       task_id: input.task_id,
       ...(selectedProposal ? { selected_proposal_id: selectedProposal.proposal_id } : {}),
       decision_mode: input.decision_mode,
+      selected_artifact_refs: selectedProposal?.artifact_refs ?? [],
       verdict: selectedProposal ? 'select' : 'needs_human',
       reason: selectedProposal
         ? 'Mock council selected the first proposal for v0 flow validation.'

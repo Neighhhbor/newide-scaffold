@@ -22,7 +22,16 @@ import {
   type SelectionMode,
 } from './artifact-finalizer';
 import { WorktreeMaterializer, type MaterializationResult } from './worktree-materializer';
-import { MockCouncil, type CouncilProvider, type EvidencePack } from '../council';
+import {
+  MockCouncil,
+  type CouncilDecision,
+  type CouncilProvider,
+  type EvidencePack,
+} from '../council';
+import {
+  buildCouncilDecisionOutputPaths,
+  writeCouncilDecisionOutput,
+} from '../council/council-decision-output';
 import { InMemoryMailboxStore, type MessageDelivery } from './mailbox-store';
 import {
   sendDriverCompletedMessage,
@@ -60,6 +69,12 @@ export interface IntegrationV0Summary {
   checkpoint_path: string;
   mailbox_message_refs: MessageId[];
   mailbox_thread_id: string;
+  council_decision_path?: string;
+  council_decision_id?: string;
+  council_decision_mode?: CouncilDecision['decision_mode'];
+  council_verdict?: CouncilDecision['verdict'];
+  council_selected_artifact_refs?: string[];
+  council_can_create_merge_authorization?: boolean;
   created_at: Timestamp;
   schema_version: SchemaVersion;
 }
@@ -575,6 +590,16 @@ export async function runIntegrationV0Flow(
 
   // 17. Build summary
   const outputPaths = buildRunOutputPaths(run.run_id);
+  const councilDecisionOutputPaths = selectionResult.council_decision
+    ? buildCouncilDecisionOutputPaths(run.run_id)
+    : undefined;
+  if (selectionResult.council_decision && councilDecisionOutputPaths) {
+    await writeCouncilDecisionOutput({
+      paths: councilDecisionOutputPaths,
+      decision: selectionResult.council_decision,
+    });
+  }
+
   const artifactOutputs = buildArtifactOutputs({
     artifacts: selectionResult.selected_artifacts,
     materialized_record_paths: materializationResult.files_written,
@@ -596,6 +621,17 @@ export async function runIntegrationV0Flow(
     checkpoint_path: outputPaths.checkpoint_path,
     mailbox_message_refs: mailboxMessageRefs,
     mailbox_thread_id: threadId,
+    ...(selectionResult.council_decision && councilDecisionOutputPaths
+      ? {
+          council_decision_path: councilDecisionOutputPaths.decision_path,
+          council_decision_id: selectionResult.council_decision.decision_id,
+          council_decision_mode: selectionResult.council_decision.decision_mode,
+          council_verdict: selectionResult.council_decision.verdict,
+          council_selected_artifact_refs: selectionResult.council_decision.selected_artifact_refs,
+          council_can_create_merge_authorization:
+            selectionResult.council_decision.can_create_merge_authorization,
+        }
+      : {}),
     created_at: nowTimestamp(),
     schema_version: SCHEMA_VERSION,
   };
@@ -629,6 +665,13 @@ export async function runIntegrationV0Flow(
     checkpoint_path: outputPaths.checkpoint_path,
     message_thread_path: outputPaths.message_thread_path,
     frontend_snapshot_path: outputPaths.frontend_snapshot_path,
+    ...(summary.council_decision_path
+      ? {
+          council_decision_path: summary.council_decision_path,
+          council_verdict: summary.council_verdict,
+          council_decision_mode: summary.council_decision_mode,
+        }
+      : {}),
     created_at: summary.created_at,
     schema_version: SCHEMA_VERSION,
   });

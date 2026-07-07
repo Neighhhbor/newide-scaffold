@@ -72,6 +72,7 @@ export interface CouncilDecision {
   task_id: TaskId;
   decision_mode: CouncilDecisionMode;
   selected_proposal_id?: string;
+  selected_artifact_refs: ArtifactId[];
   verdict: 'select' | 'needs_human' | 'request_revision' | 'reject';
   reason: string;
   evidence_refs: string[];
