@@ -58,6 +58,32 @@ describe('CommandDriverTransport', () => {
     );
   });
 
+  it('returns structured DriverRunResult stdout when the command exits non-zero', async () => {
+    const transport = new CommandDriverTransport(
+      nodeCommand(`
+        readInput((raw) => {
+          const prompt = JSON.parse(raw);
+          process.stderr.write('external runner returned structured failure');
+          const result = driverRunResult(prompt.task_id);
+          result.status = 'failed';
+          result.error = {
+            code: 'DRIVER_RUNNER_ERROR',
+            message: 'ACP socket closed unexpectedly',
+            retryable: true,
+          };
+          process.stdout.write(JSON.stringify(result));
+          process.exit(1);
+        });
+      `),
+    );
+
+    const result = await transport.run(PROMPT);
+
+    expect(result.status).toBe('failed');
+    expect(result.error?.code).toBe('DRIVER_RUNNER_ERROR');
+    expect(transport.lastStderr).toBe('external runner returned structured failure');
+  });
+
   it('throws a clear error when stdout JSON is not a DriverRunResult', async () => {
     const transport = new CommandDriverTransport(
       nodeCommand(`
