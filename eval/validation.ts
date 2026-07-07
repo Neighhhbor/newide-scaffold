@@ -1,0 +1,36 @@
+import type { MemoryAblation, PredictionMode } from './types';
+
+const PREDICTION_MODES = ['stub', 'oracle', 'gold', 'real'] as const;
+const MEMORY_ABLATIONS = ['B0', 'B1', 'B2', 'B3'] as const;
+
+export function parsePredictionMode(value: string | undefined): PredictionMode {
+  const mode = value ?? 'stub';
+  if ((PREDICTION_MODES as readonly string[]).includes(mode)) {
+    return mode as PredictionMode;
+  }
+  throw new Error(`Invalid --mode "${mode}". Expected one of: ${PREDICTION_MODES.join(', ')}`);
+}
+
+export function parseMemoryAblation(value: string | undefined): MemoryAblation {
+  const ablation = value ?? 'B2';
+  if ((MEMORY_ABLATIONS as readonly string[]).includes(ablation)) {
+    return ablation as MemoryAblation;
+  }
+  throw new Error(
+    `Invalid --ablation "${ablation}". Expected one of: ${MEMORY_ABLATIONS.join(', ')}`,
+  );
+}
+
+export function describePredictionMode(mode: PredictionMode): string {
+  if (mode === 'stub') {
+    return 'deterministic_stub_baseline';
+  }
+  if (mode === 'real') {
+    return 'caller_supplied_model_patch';
+  }
+  return 'oracle_gold_patch_replay';
+}
+
+export function normalizePredictionMode(mode: PredictionMode): PredictionMode {
+  return mode === 'gold' ? 'oracle' : mode;
+}
