@@ -94,9 +94,9 @@ export class CommandDriverTransport implements ExternalDriverTransport {
       if (this.timeoutMs !== undefined) {
         timeout = setTimeout(() => {
           timedOut = true;
-          child.kill('SIGTERM');
+          terminateChild(child.pid, 'SIGTERM');
           forceKillTimeout = setTimeout(() => {
-            child.kill('SIGKILL');
+            terminateChild(child.pid, 'SIGKILL');
           }, 1_000);
         }, this.timeoutMs);
       }
@@ -183,6 +183,10 @@ export class CommandDriverTransport implements ExternalDriverTransport {
       stdio: ['pipe', 'pipe', 'pipe'],
     };
 
+    if (this.timeoutMs !== undefined && process.platform !== 'win32') {
+      options.detached = true;
+    }
+
     if (this.cwd !== undefined) {
       options.cwd = this.cwd;
     }
@@ -231,5 +235,26 @@ function stdoutIsDriverRunResult(stdout: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+function terminateChild(pid: number | undefined, signal: NodeJS.Signals): void {
+  if (pid === undefined) {
+    return;
+  }
+
+  try {
+    if (process.platform !== 'win32') {
+      process.kill(-pid, signal);
+      return;
+    }
+  } catch {
+    // Fall back to killing the direct child below.
+  }
+
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // The process may have already exited.
   }
 }
