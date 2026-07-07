@@ -22,6 +22,11 @@ import {
 import { WorktreeMaterializer, type MaterializationResult } from './worktree-materializer';
 import { MockCouncil, type CouncilProvider, type EvidencePack } from '../council';
 import { InMemoryMailboxStore, type MessageDelivery } from './mailbox-store';
+import {
+  sendDriverCompletedMessage,
+  sendDriverRequestedMessage,
+  sendTaskAssignedMessage,
+} from './mailbox-handoff';
 import { buildArtifactOutputs, type ArtifactOutput } from './artifact-output';
 import {
   buildRunOutputPaths,
@@ -124,17 +129,12 @@ export async function runIntegrationV0Flow(
   const driver = options?.driver ?? new MockDriver();
 
   // 4. Mailbox: send task.assigned
-  const taskAssignedResult = mailbox.send({
+  const taskAssignedResult = sendTaskAssignedMessage({
+    mailbox,
     thread_id: threadId,
-    from_agent_id: 'coordinator',
-    to: [{ agent_id: driver.driver_id }],
-    type: 'task.assigned',
-    payload: {
-      task_id: task.task_id,
-      agent_id: driver.driver_id,
-      session_id: driver.session_id,
-    },
-    requires_ack: false,
+    task_id: task.task_id,
+    driver_id: driver.driver_id,
+    driver_session_id: driver.session_id,
   });
   mailboxMessageRefs.push(taskAssignedResult.message.message_id);
 
@@ -208,18 +208,13 @@ export async function runIntegrationV0Flow(
   timeline.push({ name: 'DriverSessionStarted', id: sessionEvent.event_id });
 
   // 7. Mailbox: send driver.requested
-  const driverRequestedResult = mailbox.send({
+  const driverRequestedResult = sendDriverRequestedMessage({
+    mailbox,
     thread_id: threadId,
-    from_agent_id: 'coordinator',
-    to: [{ agent_id: driver.driver_id }],
-    type: 'driver.requested',
-    payload: {
-      task_id: task.task_id,
-      run_id: run.run_id,
-      prompt: options?.driverPrompt || taskRequest.spec,
-    },
-    requires_ack: true,
-    deadline_seconds: 300, // 5 minutes timeout
+    task_id: task.task_id,
+    run_id: run.run_id,
+    driver_id: driver.driver_id,
+    prompt: options?.driverPrompt || taskRequest.spec,
   });
   mailboxMessageRefs.push(driverRequestedResult.message.message_id);
 
@@ -241,14 +236,9 @@ export async function runIntegrationV0Flow(
     id: driverRequestedEvent.event_id,
   });
 
-  // Ack means the receiver got the request; completion is represented later by driver.completed.
-  const ackedDelivery = mailbox.ack(driverRequestedResult.message.message_id, {
-    agent_id: driver.driver_id,
-  });
-
   const driverRequestedAckEvent = orchestrator.appendEvent({
     event_type: 'mailbox.message_acked',
-    subject_id: ackedDelivery.delivery_id,
+    subject_id: driverRequestedResult.acked_delivery.delivery_id,
     run_id: run.run_id,
     task_id: task.task_id,
     payload: {
@@ -278,19 +268,13 @@ export async function runIntegrationV0Flow(
   });
 
   // 9. Mailbox: send driver.completed
-  const driverCompletedResult = mailbox.send({
+  const driverCompletedResult = sendDriverCompletedMessage({
+    mailbox,
     thread_id: threadId,
-    from_agent_id: driver.driver_id,
-    to: [{ agent_id: 'coordinator' }],
-    type: 'driver.completed',
-    payload: {
-      task_id: task.task_id,
-      run_id: run.run_id,
-      status: driverResult.status,
-      artifact_count: driverResult.artifacts.length,
-      driver_run_result_id: driverResult.driver_run_result_id,
-    },
-    requires_ack: false,
+    task_id: task.task_id,
+    run_id: run.run_id,
+    driver_id: driver.driver_id,
+    driver_result: driverResult,
   });
   mailboxMessageRefs.push(driverCompletedResult.message.message_id);
 
