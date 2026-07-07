@@ -30,6 +30,10 @@ export { LlmContextCleaner } from './adapters/context-cleaner';
 export { LlmSkillPromotion } from './adapters/llm-skill-promotion';
 export { MockLlmClient } from './adapters/mock-llm-client';
 export { DeepSeekLlmClient } from './adapters/deepseek-llm-client';
+export {
+  DriverRuntimeAgentExecutionFacade,
+  type DriverRuntimeAgentExecutionFacadeOptions,
+} from './adapters/driver-runtime-agent-execution-facade';
 
 // Ports — 公开接口类型
 export type { BufferRepository, SaveBufferResult } from './ports/buffer-repository';
