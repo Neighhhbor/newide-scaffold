@@ -152,8 +152,28 @@ describe('runIntegrationV0Flow', () => {
     });
 
     const eventLog = await readJson(`.newide/runs/${result.run_id}/event-log.json`);
+    const eventTypes = eventLog.map((event: { event_type?: string }) => event.event_type);
+    expect(eventTypes.indexOf('council.started')).toBeLessThan(
+      eventTypes.indexOf('council.decision'),
+    );
+    expect(eventTypes.indexOf('council.decision')).toBeLessThan(
+      eventTypes.indexOf('council.completed'),
+    );
     expect(eventLog).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          event_type: 'council.started',
+          subject_id: result.run_id,
+          run_id: result.run_id,
+          task_id: result.task_id,
+          payload: expect.objectContaining({
+            trigger: 'user_choice',
+            decision_mode: 'advisory',
+            candidate_artifact_refs: result.driver_result.artifacts.map(
+              (artifact) => artifact.artifact_id,
+            ),
+          }),
+        }),
         expect.objectContaining({
           event_type: 'council.decision',
           subject_id: result.selection_result.council_decision?.decision_id,
@@ -162,6 +182,23 @@ describe('runIntegrationV0Flow', () => {
           payload: expect.objectContaining({
             verdict: 'select',
             can_create_merge_authorization: false,
+            termination_reason: 'select',
+            current_round_count: 1,
+            decision_packet_ref: result.selection_result.council_decision?.decision_id,
+          }),
+        }),
+        expect.objectContaining({
+          event_type: 'council.completed',
+          subject_id: result.selection_result.council_run_result?.council_run_id,
+          run_id: result.run_id,
+          task_id: result.task_id,
+          payload: expect.objectContaining({
+            decision_id: result.selection_result.council_decision?.decision_id,
+            verdict: 'select',
+            selected_artifact_refs: result.selection_result.selected_artifacts.map(
+              (artifact) => artifact.artifact_id,
+            ),
+            total_rounds: 1,
           }),
         }),
       ]),
@@ -411,8 +448,23 @@ describe('runIntegrationV0Flow', () => {
     expect(result.summary.status).toBe('completed');
 
     const eventLog = await readJson(`.newide/runs/${result.run_id}/event-log.json`);
+    const eventTypes = eventLog.map((event: { event_type?: string }) => event.event_type);
+    expect(eventTypes.indexOf('agent.execution_requested')).toBeLessThan(
+      eventTypes.indexOf('agent.execution_completed'),
+    );
     expect(eventLog).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          event_type: 'agent.execution_requested',
+          subject_id: result.run_id,
+          run_id: result.run_id,
+          task_id: result.task_id,
+          payload: expect.objectContaining({
+            role_id: 'role_ts_engineer',
+            context_policy: 'integration_v0_default',
+            input_artifact_refs: [],
+          }),
+        }),
         expect.objectContaining({
           event_type: 'agent.execution_completed',
           subject_id: 'agent_run_001',
