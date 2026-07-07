@@ -31,6 +31,10 @@ export interface FrontendRunSnapshotSummary {
   mailbox_message_refs: MessageId[];
   mailbox_thread_id: string;
   council_decision_path?: string;
+  council_proposals_path?: string;
+  council_reviews_path?: string;
+  council_synthesis_path?: string;
+  council_output_path?: string;
   council_decision_id?: string;
   council_decision_mode?: CouncilDecision['decision_mode'];
   council_verdict?: CouncilDecision['verdict'];
@@ -100,6 +104,10 @@ export interface FrontendRunSnapshot {
   };
   council?: {
     decision_path: string;
+    proposals_path?: string;
+    reviews_path?: string;
+    synthesis_path?: string;
+    output_path?: string;
     decision_id: string;
     decision_mode: CouncilDecision['decision_mode'];
     verdict: CouncilDecision['verdict'];
@@ -164,6 +172,18 @@ export function buildFrontendRunSnapshot(
       ? {
           council: {
             decision_path: input.summary.council_decision_path,
+            ...(input.summary.council_proposals_path
+              ? { proposals_path: input.summary.council_proposals_path }
+              : {}),
+            ...(input.summary.council_reviews_path
+              ? { reviews_path: input.summary.council_reviews_path }
+              : {}),
+            ...(input.summary.council_synthesis_path
+              ? { synthesis_path: input.summary.council_synthesis_path }
+              : {}),
+            ...(input.summary.council_output_path
+              ? { output_path: input.summary.council_output_path }
+              : {}),
             decision_id: input.summary.council_decision_id,
             decision_mode: input.summary.council_decision_mode,
             verdict: input.summary.council_verdict,

@@ -33,10 +33,7 @@ import {
   type CouncilProvider,
   type EvidencePack,
 } from '../council';
-import {
-  buildCouncilDecisionOutputPaths,
-  writeCouncilDecisionOutput,
-} from '../council/council-decision-output';
+import { buildCouncilRunOutputPaths, writeCouncilRunOutputs } from '../council/council-run-output';
 import { InMemoryMailboxStore, type MessageDelivery } from './mailbox-store';
 import {
   sendDriverCompletedMessage,
@@ -75,6 +72,10 @@ export interface IntegrationV0Summary {
   mailbox_message_refs: MessageId[];
   mailbox_thread_id: string;
   council_decision_path?: string;
+  council_proposals_path?: string;
+  council_reviews_path?: string;
+  council_synthesis_path?: string;
+  council_output_path?: string;
   council_decision_id?: string;
   council_decision_mode?: CouncilDecision['decision_mode'];
   council_verdict?: CouncilDecision['verdict'];
@@ -630,13 +631,13 @@ export async function runIntegrationV0Flow(
 
   // 17. Build summary
   const outputPaths = buildRunOutputPaths(run.run_id);
-  const councilDecisionOutputPaths = selectionResult.council_decision
-    ? buildCouncilDecisionOutputPaths(run.run_id)
+  const councilRunOutputPaths = selectionResult.council_run_result
+    ? buildCouncilRunOutputPaths(run.run_id)
     : undefined;
-  if (selectionResult.council_decision && councilDecisionOutputPaths) {
-    await writeCouncilDecisionOutput({
-      paths: councilDecisionOutputPaths,
-      decision: selectionResult.council_decision,
+  if (selectionResult.council_run_result && councilRunOutputPaths) {
+    await writeCouncilRunOutputs({
+      paths: councilRunOutputPaths,
+      result: selectionResult.council_run_result,
     });
   }
 
@@ -661,9 +662,17 @@ export async function runIntegrationV0Flow(
     checkpoint_path: outputPaths.checkpoint_path,
     mailbox_message_refs: mailboxMessageRefs,
     mailbox_thread_id: threadId,
-    ...(selectionResult.council_decision && councilDecisionOutputPaths
+    ...(selectionResult.council_decision && councilRunOutputPaths
       ? {
-          council_decision_path: councilDecisionOutputPaths.decision_path,
+          council_decision_path: councilRunOutputPaths.decision_path,
+          council_proposals_path: councilRunOutputPaths.proposals_path,
+          council_reviews_path: councilRunOutputPaths.reviews_path,
+          ...(selectionResult.council_run_result?.synthesis
+            ? { council_synthesis_path: councilRunOutputPaths.synthesis_path }
+            : {}),
+          ...(selectionResult.council_run_result?.output
+            ? { council_output_path: councilRunOutputPaths.output_path }
+            : {}),
           council_decision_id: selectionResult.council_decision.decision_id,
           council_decision_mode: selectionResult.council_decision.decision_mode,
           council_verdict: selectionResult.council_decision.verdict,
@@ -708,6 +717,10 @@ export async function runIntegrationV0Flow(
     ...(summary.council_decision_path
       ? {
           council_decision_path: summary.council_decision_path,
+          council_proposals_path: summary.council_proposals_path,
+          council_reviews_path: summary.council_reviews_path,
+          council_synthesis_path: summary.council_synthesis_path,
+          council_output_path: summary.council_output_path,
           council_verdict: summary.council_verdict,
           council_decision_mode: summary.council_decision_mode,
         }

@@ -77,6 +77,9 @@ describe('runIntegrationV0Flow', () => {
   it('should run with council mode when enabled', async () => {
     const result = await runFlow({ enableCouncil: true });
     const councilDecisionPath = `.newide/runs/${result.run_id}/council/decision.json`;
+    const councilProposalsPath = `.newide/runs/${result.run_id}/council/proposals.json`;
+    const councilReviewsPath = `.newide/runs/${result.run_id}/council/reviews.json`;
+    const councilOutputPath = `.newide/runs/${result.run_id}/council/output.json`;
 
     expect(result.summary.mode).toBe('council');
     expect(result.summary.status).toBe('completed');
@@ -114,15 +117,30 @@ describe('runIntegrationV0Flow', () => {
 
     await expect(readJson(`.newide/runs/${result.run_id}/result.json`)).resolves.toMatchObject({
       council_decision_path: councilDecisionPath,
+      council_proposals_path: councilProposalsPath,
+      council_reviews_path: councilReviewsPath,
+      council_output_path: councilOutputPath,
       council_verdict: 'select',
       council_decision_mode: 'advisory',
     });
+    await expect(readJson(councilProposalsPath)).resolves.toEqual(
+      result.selection_result.council_run_result?.proposals,
+    );
+    await expect(readJson(councilReviewsPath)).resolves.toEqual(
+      result.selection_result.council_run_result?.reviews,
+    );
+    await expect(readJson(councilOutputPath)).resolves.toEqual(
+      result.selection_result.council_run_result?.output,
+    );
 
     await expect(
       readJson(`.newide/runs/${result.run_id}/frontend-snapshot.json`),
     ).resolves.toMatchObject({
       council: {
         decision_path: councilDecisionPath,
+        proposals_path: councilProposalsPath,
+        reviews_path: councilReviewsPath,
+        output_path: councilOutputPath,
         decision_id: result.selection_result.council_decision?.decision_id,
         decision_mode: 'advisory',
         verdict: 'select',
