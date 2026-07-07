@@ -289,28 +289,48 @@ export async function runIntegrationV0Flow(
     schema_version: SCHEMA_VERSION,
   };
   let agentExecutionResult: AgentExecutionResult | undefined;
-  const driverResult = options?.agentExecutionFacade
-    ? buildDriverRunResultFromAgentExecution({
-        result: (agentExecutionResult = await options.agentExecutionFacade.runAgent({
-          task_id: task.task_id,
-          run_id: run.run_id,
-          role_id: task.role_id ?? 'role_ts_engineer',
-          instruction: prompt,
-          input_artifact_refs: contextPack.artifact_refs,
-          context_policy: 'integration_v0_default',
-          schema_version: SCHEMA_VERSION,
-        })),
-        session_id: driver.session_id,
-        schema_version: SCHEMA_VERSION,
-      })
-    : await driver.sendPrompt({
-        task_id: task.task_id,
-        run_id: run.run_id,
-        prompt,
-        context_pack_ref: contextPackRef,
-        created_at: nowTimestamp(),
-        schema_version: SCHEMA_VERSION,
-      });
+  let driverResult: DriverRunResult;
+  if (options?.agentExecutionFacade) {
+    const agentExecutionRequest = {
+      task_id: task.task_id,
+      run_id: run.run_id,
+      role_id: task.role_id ?? 'role_ts_engineer',
+      instruction: prompt,
+      input_artifact_refs: contextPack.artifact_refs,
+      context_policy: 'integration_v0_default',
+      schema_version: SCHEMA_VERSION,
+    };
+    const agentExecutionRequestedEvent = orchestrator.appendEvent({
+      event_type: 'agent.execution_requested',
+      subject_id: run.run_id,
+      run_id: run.run_id,
+      task_id: task.task_id,
+      payload: {
+        role_id: agentExecutionRequest.role_id,
+        context_policy: agentExecutionRequest.context_policy,
+        input_artifact_refs: agentExecutionRequest.input_artifact_refs,
+      },
+    });
+    timeline.push({
+      name: 'AgentExecutionRequested',
+      id: agentExecutionRequestedEvent.event_id,
+    });
+    agentExecutionResult = await options.agentExecutionFacade.runAgent(agentExecutionRequest);
+    driverResult = buildDriverRunResultFromAgentExecution({
+      result: agentExecutionResult,
+      session_id: driver.session_id,
+      schema_version: SCHEMA_VERSION,
+    });
+  } else {
+    driverResult = await driver.sendPrompt({
+      task_id: task.task_id,
+      run_id: run.run_id,
+      prompt,
+      context_pack_ref: contextPackRef,
+      created_at: nowTimestamp(),
+      schema_version: SCHEMA_VERSION,
+    });
+  }
 
   if (agentExecutionResult) {
     const agentExecutionEvent = orchestrator.appendEvent({
@@ -471,6 +491,22 @@ export async function runIntegrationV0Flow(
     selectorOptions.councilProvider = options.councilProvider ?? new MockCouncil();
   }
   const selector = new ArtifactSelector(selectorOptions);
+  const councilStartedAtMs = options?.enableCouncil ? Date.now() : undefined;
+  if (options?.enableCouncil) {
+    const councilStartedEvent = orchestrator.appendEvent({
+      event_type: 'council.started',
+      subject_id: run.run_id,
+      run_id: run.run_id,
+      task_id: task.task_id,
+      payload: {
+        trigger: 'user_choice',
+        decision_mode: 'advisory',
+        candidate_artifact_refs: evidencePack.artifact_refs,
+        gate_result_refs: evidencePack.gate_result_refs,
+      },
+    });
+    timeline.push({ name: 'CouncilStarted', id: councilStartedEvent.event_id });
+  }
 
   const selectionResult = await selector.selectArtifacts({
     run_id: run.run_id,
@@ -493,9 +529,34 @@ export async function runIntegrationV0Flow(
         verdict: councilDecision.verdict,
         comparison_ref: councilDecision.comparison_ref,
         can_create_merge_authorization: councilDecision.can_create_merge_authorization,
+        termination_reason: councilDecision.verdict,
+        current_round_count: 1,
+        decision_packet_ref: councilDecision.decision_id,
       },
     });
     timeline.push({ name: 'CouncilDecision', id: councilEvent.event_id });
+  }
+
+  if (selectionResult.council_run_result) {
+    const councilRunResult = selectionResult.council_run_result;
+    const councilCompletedEvent = orchestrator.appendEvent({
+      event_type: 'council.completed',
+      subject_id: councilRunResult.council_run_id,
+      run_id: run.run_id,
+      task_id: task.task_id,
+      payload: {
+        decision_id: councilRunResult.decision.decision_id,
+        synthesis_id: councilRunResult.synthesis?.synthesis_id,
+        verdict: councilRunResult.decision.verdict,
+        selected_artifact_refs: councilRunResult.selected_artifact_refs,
+        generated_artifact_refs: councilRunResult.generated_artifact_refs.map(
+          (artifact) => artifact.artifact_id,
+        ),
+        total_rounds: 1,
+        duration_ms: Date.now() - (councilStartedAtMs ?? Date.now()),
+      },
+    });
+    timeline.push({ name: 'CouncilCompleted', id: councilCompletedEvent.event_id });
   }
 
   const selectionEvent = orchestrator.appendEvent({
