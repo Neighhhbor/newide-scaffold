@@ -53,7 +53,7 @@ export type {
 } from './ports/external-memory-repository';
 
 // Agent runtime types
-export type { AgentTaskRequest, AgentLoopState } from './agent-types';
+export type { AgentTaskRequest, AgentLoopState, AgentLoopTickResult } from './agent-types';
 export type {
   AgentRunDeps,
   DriverInvokeInput,
@@ -85,7 +85,13 @@ export {
 
 // Agent 运行时
 export { Agent } from './runtime/agent';
-export { AgentManager, type SubmitTaskResult } from './runtime/agent-manager';
+export {
+  AgentManager,
+  type AgentManagerOptions,
+  type SubmitTaskResult,
+  type MemoryTaskProjection,
+  toMemoryTaskProjection,
+} from './runtime/agent-manager';
 
 // MVP mock（可整包移除）
 export { defaultMvpAgentRunDeps } from './mvp/default-agent-run-deps';
