@@ -79,6 +79,7 @@ describe('buildFrontendRunSnapshot', () => {
         timeline_path: '.newide/runs/run_001/timeline.json',
         checkpoint_path: '.newide/runs/run_001/checkpoint.json',
         message_thread_path: '.newide/runs/run_001/message-thread.json',
+        event_log_path: '.newide/runs/run_001/event-log.json',
         frontend_snapshot_path: '.newide/runs/run_001/frontend-snapshot.json',
       },
     });
@@ -119,6 +120,7 @@ describe('buildFrontendRunSnapshot', () => {
         message_refs: ['message_001', 'message_002'],
       },
       links: {
+        event_log_path: '.newide/runs/run_001/event-log.json',
         frontend_snapshot_path: '.newide/runs/run_001/frontend-snapshot.json',
       },
     });

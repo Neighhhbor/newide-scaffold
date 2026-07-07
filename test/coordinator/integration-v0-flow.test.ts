@@ -150,6 +150,22 @@ describe('runIntegrationV0Flow', () => {
         can_create_merge_authorization: false,
       },
     });
+
+    const eventLog = await readJson(`.newide/runs/${result.run_id}/event-log.json`);
+    expect(eventLog).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event_type: 'council.decision',
+          subject_id: result.selection_result.council_decision?.decision_id,
+          run_id: result.run_id,
+          task_id: result.task_id,
+          payload: expect.objectContaining({
+            verdict: 'select',
+            can_create_merge_authorization: false,
+          }),
+        }),
+      ]),
+    );
   });
 
   it('should use an injected council provider in council mode', async () => {
@@ -271,6 +287,7 @@ describe('runIntegrationV0Flow', () => {
       timeline_path: `.newide/runs/${result.run_id}/timeline.json`,
       checkpoint_path: `.newide/runs/${result.run_id}/checkpoint.json`,
       message_thread_path: `.newide/runs/${result.run_id}/message-thread.json`,
+      event_log_path: `.newide/runs/${result.run_id}/event-log.json`,
       frontend_snapshot_path: `.newide/runs/${result.run_id}/frontend-snapshot.json`,
       schema_version: result.summary.schema_version,
     });
@@ -286,6 +303,7 @@ describe('runIntegrationV0Flow', () => {
       checkpoint_id: result.summary.checkpoint_id,
     });
     await expect(readJson(manifest.message_thread_path)).resolves.toEqual(result.mailbox_thread);
+    await expect(readJson(manifest.event_log_path)).resolves.toEqual(expect.any(Array));
     await expect(readJson(manifest.frontend_snapshot_path)).resolves.toMatchObject({
       snapshot_type: 'coordinator.frontend_run_snapshot.v0',
       run_id: result.run_id,
@@ -296,6 +314,7 @@ describe('runIntegrationV0Flow', () => {
       },
       links: {
         result_path: manifest.result_path,
+        event_log_path: manifest.event_log_path,
       },
     });
   });
@@ -390,6 +409,18 @@ describe('runIntegrationV0Flow', () => {
     ]);
     expect(result.timeline.map((item) => item.name)).toContain('AgentExecutionCompleted');
     expect(result.summary.status).toBe('completed');
+
+    const eventLog = await readJson(`.newide/runs/${result.run_id}/event-log.json`);
+    expect(eventLog).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event_type: 'agent.execution_completed',
+          subject_id: 'agent_run_001',
+          run_id: result.run_id,
+          task_id: result.task_id,
+        }),
+      ]),
+    );
   });
 
   it('should include all key timeline events', async () => {

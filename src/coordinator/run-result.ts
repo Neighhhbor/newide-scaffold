@@ -3,7 +3,7 @@
  *
  * 这个文件负责 `.newide/runs/<run_id>/` 下的输出路径和结果文件写入：
  * result.json、summary.json、timeline.json、checkpoint.json、message-thread.json、
- * frontend-snapshot.json。
+ * event-log.json、frontend-snapshot.json。
  * 它不生成 checkpoint 语义，不生成 timeline 事件，不修改 task/run 状态，
  * 也不调用 driver、gate、council 或 mailbox。
  */
@@ -23,6 +23,7 @@ export interface IntegrationRunOutputPaths {
   timeline_path: string;
   checkpoint_path: string;
   message_thread_path: string;
+  event_log_path: string;
   frontend_snapshot_path: string;
 }
 
@@ -38,6 +39,7 @@ export interface IntegrationRunResultManifest {
   timeline_path: string;
   checkpoint_path: string;
   message_thread_path: string;
+  event_log_path: string;
   frontend_snapshot_path: string;
   council_decision_path?: string;
   council_proposals_path?: string;
@@ -56,6 +58,7 @@ export interface WriteIntegrationRunOutputsInput {
   timeline: unknown;
   checkpoint: unknown;
   message_thread: unknown;
+  event_log: unknown;
   frontend_snapshot: unknown;
   result_manifest: IntegrationRunResultManifest;
 }
@@ -72,6 +75,7 @@ export function buildRunOutputPaths(
     timeline_path: path.join(runDir, 'timeline.json'),
     checkpoint_path: path.join(runDir, 'checkpoint.json'),
     message_thread_path: path.join(runDir, 'message-thread.json'),
+    event_log_path: path.join(runDir, 'event-log.json'),
     frontend_snapshot_path: path.join(runDir, 'frontend-snapshot.json'),
   };
 }
@@ -88,6 +92,7 @@ export interface BuildRunResultManifestInput {
   timeline_path: string;
   checkpoint_path: string;
   message_thread_path: string;
+  event_log_path: string;
   frontend_snapshot_path: string;
   council_decision_path?: string;
   council_proposals_path?: string;
@@ -115,6 +120,7 @@ export function buildRunResultManifest(
     timeline_path: input.timeline_path,
     checkpoint_path: input.checkpoint_path,
     message_thread_path: input.message_thread_path,
+    event_log_path: input.event_log_path,
     frontend_snapshot_path: input.frontend_snapshot_path,
     ...(input.council_decision_path ? { council_decision_path: input.council_decision_path } : {}),
     ...(input.council_proposals_path
@@ -155,6 +161,7 @@ export async function writeIntegrationRunOutputs(
     JSON.stringify(input.message_thread, null, 2),
     'utf-8',
   );
+  await fs.writeFile(input.paths.event_log_path, JSON.stringify(input.event_log, null, 2), 'utf-8');
   await fs.writeFile(
     input.paths.frontend_snapshot_path,
     JSON.stringify(input.frontend_snapshot, null, 2),
