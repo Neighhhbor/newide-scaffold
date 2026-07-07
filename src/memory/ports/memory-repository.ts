@@ -32,6 +32,9 @@ export interface MemoryRepository {
   /** 按 spec 注册新 Agent（已存在则抛错） */
   initializeAgent(spec: CreateAgentSpec): Promise<void>;
 
+  /** 列出所有已注册的 Agent role_id */
+  listAgentIds(): Promise<string[]>;
+
   /** 获取 Agent 聚合根 */
   getAgent(role_id: string): Promise<AgentHandle>;
   /** 获取当前 Persona 快照 */

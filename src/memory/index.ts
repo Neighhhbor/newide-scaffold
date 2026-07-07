@@ -30,6 +30,7 @@ export { LlmContextCleaner } from './adapters/context-cleaner';
 export { LlmSkillPromotion } from './adapters/llm-skill-promotion';
 export { MockLlmClient } from './adapters/mock-llm-client';
 export { DeepSeekLlmClient } from './adapters/deepseek-llm-client';
+export { RepositoryAgentBoardQuery } from './adapters/agent-board-query';
 
 // Ports — 公开接口类型
 export type { BufferRepository, SaveBufferResult } from './ports/buffer-repository';
@@ -42,6 +43,13 @@ export type { SkillMarketPort, SkillMarketSearchResult } from './ports/skill-mar
 export type { AgentContextCleaner, AgentContextCleanInput } from './ports/agent-context-cleaner';
 export type { BufferTriggerPolicy } from './ports/buffer-trigger-policy';
 export type {
+  AgentBoardQuery,
+  AgentBoardListItem,
+  AgentBoardAgentView,
+  SkillView,
+  ExperienceView,
+} from './ports/agent-board-query';
+export type {
   ExternalMemoryRepository,
   SearchAccessibleMemoriesInput,
   SearchAccessibleMemoriesOutput,
@@ -53,7 +61,7 @@ export type {
 } from './ports/external-memory-repository';
 
 // Agent runtime types
-export type { AgentTaskRequest, AgentLoopState } from './agent-types';
+export type { AgentTaskRequest, AgentLoopState, AgentLoopTickResult } from './agent-types';
 export type {
   AgentRunDeps,
   DriverInvokeInput,
@@ -85,7 +93,13 @@ export {
 
 // Agent 运行时
 export { Agent } from './runtime/agent';
-export { AgentManager, type SubmitTaskResult } from './runtime/agent-manager';
+export {
+  AgentManager,
+  type AgentManagerOptions,
+  type SubmitTaskResult,
+  type MemoryTaskProjection,
+  toMemoryTaskProjection,
+} from './runtime/agent-manager';
 
 // MVP mock（可整包移除）
 export { defaultMvpAgentRunDeps } from './mvp/default-agent-run-deps';
