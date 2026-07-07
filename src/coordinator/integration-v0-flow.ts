@@ -686,12 +686,14 @@ export async function runIntegrationV0Flow(
   };
   const mailboxThread = mailbox.listThread(threadId);
   const mailboxDeliveries = mailbox.listDeliveries();
+  const eventLog = orchestrator.stores.events.list();
   const frontendSnapshotLinks = {
     result_path: outputPaths.result_path,
     summary_path: outputPaths.summary_path,
     timeline_path: outputPaths.timeline_path,
     checkpoint_path: outputPaths.checkpoint_path,
     message_thread_path: outputPaths.message_thread_path,
+    event_log_path: outputPaths.event_log_path,
     frontend_snapshot_path: outputPaths.frontend_snapshot_path,
   };
   const frontendSnapshot = buildFrontendRunSnapshot({
@@ -713,6 +715,7 @@ export async function runIntegrationV0Flow(
     timeline_path: outputPaths.timeline_path,
     checkpoint_path: outputPaths.checkpoint_path,
     message_thread_path: outputPaths.message_thread_path,
+    event_log_path: outputPaths.event_log_path,
     frontend_snapshot_path: outputPaths.frontend_snapshot_path,
     ...(summary.council_decision_path
       ? {
@@ -736,6 +739,7 @@ export async function runIntegrationV0Flow(
     timeline,
     checkpoint: savedCheckpoint,
     message_thread: mailboxThread,
+    event_log: eventLog,
     frontend_snapshot: frontendSnapshot,
     result_manifest: resultManifest,
   });
