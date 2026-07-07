@@ -30,6 +30,7 @@ export { LlmContextCleaner } from './adapters/context-cleaner';
 export { LlmSkillPromotion } from './adapters/llm-skill-promotion';
 export { MockLlmClient } from './adapters/mock-llm-client';
 export { DeepSeekLlmClient } from './adapters/deepseek-llm-client';
+export { RepositoryAgentBoardQuery } from './adapters/agent-board-query';
 
 // Ports — 公开接口类型
 export type { BufferRepository, SaveBufferResult } from './ports/buffer-repository';
@@ -41,6 +42,13 @@ export type { LlmClient, LlmMessage } from './ports/llm-client';
 export type { SkillMarketPort, SkillMarketSearchResult } from './ports/skill-market-port';
 export type { AgentContextCleaner, AgentContextCleanInput } from './ports/agent-context-cleaner';
 export type { BufferTriggerPolicy } from './ports/buffer-trigger-policy';
+export type {
+  AgentBoardQuery,
+  AgentBoardListItem,
+  AgentBoardAgentView,
+  SkillView,
+  ExperienceView,
+} from './ports/agent-board-query';
 export type {
   ExternalMemoryRepository,
   SearchAccessibleMemoriesInput,
