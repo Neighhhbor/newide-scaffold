@@ -1,4 +1,12 @@
-import type { ArtifactId, RunId, SchemaVersion, TaskBudget, TaskId, Timestamp } from '../core';
+import type {
+  ArtifactId,
+  ArtifactRef,
+  RunId,
+  SchemaVersion,
+  TaskBudget,
+  TaskId,
+  Timestamp,
+} from '../core';
 
 export type CouncilDecisionMode =
   | 'advisory'
@@ -83,6 +91,51 @@ export interface CouncilDecision {
   schema_version: SchemaVersion;
 }
 
+export interface CouncilSynthesis {
+  synthesis_id: string;
+  run_id?: RunId;
+  task_id: TaskId;
+  synthesizer_id: string;
+  input_proposal_ids: string[];
+  input_review_ids: string[];
+  artifact_refs: ArtifactId[];
+  summary: string;
+  created_at: Timestamp;
+  schema_version: SchemaVersion;
+}
+
+export interface CouncilOutput {
+  output_id: string;
+  run_id?: RunId;
+  task_id: TaskId;
+  status: 'selected' | 'needs_human' | 'request_revision' | 'rejected';
+  decision_ref: string;
+  selected_artifact_refs: ArtifactId[];
+  generated_artifact_refs: ArtifactRef[];
+  required_next_actions: string[];
+  blocked_by: string[];
+  can_create_merge_authorization: boolean;
+  created_at: Timestamp;
+  schema_version: SchemaVersion;
+}
+
+export interface CouncilRunResult {
+  council_run_id: string;
+  run_id?: RunId;
+  task_id: TaskId;
+  proposals: Proposal[];
+  reviews: Review[];
+  synthesis?: CouncilSynthesis;
+  decision: CouncilDecision;
+  output?: CouncilOutput;
+  generated_artifact_refs: ArtifactRef[];
+  selected_artifact_refs: ArtifactId[];
+  diagnostic_refs?: string[];
+  comparison_refs?: string[];
+  created_at: Timestamp;
+  schema_version: SchemaVersion;
+}
+
 export interface CouncilRunRequest {
   run_id?: RunId;
   task_id: TaskId;
@@ -109,12 +162,12 @@ export interface CouncilRunRequest {
 export type CouncilRoundInput = CouncilRunRequest;
 
 export interface CouncilProvider {
-  runCouncilRound(input: CouncilRoundInput): Promise<CouncilDecision>;
+  runCouncilRound(input: CouncilRoundInput): Promise<CouncilRunResult>;
 }
 
 export async function runCouncilRound(
   provider: CouncilProvider,
   input: CouncilRoundInput,
-): Promise<CouncilDecision> {
+): Promise<CouncilRunResult> {
   return provider.runCouncilRound(input);
 }

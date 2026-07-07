@@ -250,7 +250,7 @@ export async function runBasicFlow(options?: BasicFlowOptions): Promise<BasicFlo
     schema_version: SCHEMA_VERSION,
   };
   const council = new MockCouncil();
-  const councilDecision = await council.runCouncilRound({
+  const councilRunResult = await council.runCouncilRound({
     run_id: run.run_id,
     task_id: task.task_id,
     trigger: 'manual',
@@ -260,6 +260,7 @@ export async function runBasicFlow(options?: BasicFlowOptions): Promise<BasicFlo
     evidence_pack: evidencePack,
     schema_version: SCHEMA_VERSION,
   });
+  const councilDecision = councilRunResult.decision;
   const councilEvent = orchestrator.appendEvent({
     event_type: 'council.decision',
     subject_id: councilDecision.decision_id,
