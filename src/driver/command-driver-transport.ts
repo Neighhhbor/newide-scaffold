@@ -139,6 +139,11 @@ export class CommandDriverTransport implements ExternalDriverTransport {
           return;
         }
 
+        if ((code !== 0 || signal) && stdoutIsDriverRunResult(stdout)) {
+          resolve(stdout);
+          return;
+        }
+
         if (code !== 0) {
           reject(
             new Error(
@@ -214,4 +219,17 @@ function summarizeText(input: string, maxLength = 500): string {
   }
 
   return `${text.slice(0, maxLength - 3)}...`;
+}
+
+function stdoutIsDriverRunResult(stdout: string): boolean {
+  if (!stdout.trim()) {
+    return false;
+  }
+
+  try {
+    assertDriverRunResult(JSON.parse(stdout), 'Command driver');
+    return true;
+  } catch {
+    return false;
+  }
 }
