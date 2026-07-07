@@ -92,6 +92,14 @@ export class PgMemoryRepository implements MemoryRepository {
     }
   }
 
+  async listAgentIds(): Promise<string[]> {
+    await this.ensureSchema();
+    const result = await this.pool.query<{ role_id: string }>(
+      'SELECT role_id FROM memory_agents ORDER BY role_id',
+    );
+    return result.rows.map((row) => row.role_id);
+  }
+
   async getAgent(role_id: string): Promise<AgentHandle> {
     await this.ensureSchema();
     const row = await this.requireAgentRow(role_id);
