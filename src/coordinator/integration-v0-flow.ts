@@ -13,7 +13,11 @@ import {
 import { MockDriver, type DriverRunResult, type DriverRuntimeHandle } from '../driver';
 import { HookEngine } from '../hook';
 import { DecisionAggregator, type GateResult } from '../gate';
-import { MockMemoryProvider } from '../memory';
+import {
+  MockMemoryProvider,
+  type AgentExecutionFacade,
+  type AgentExecutionResult,
+} from '../memory';
 import { RuntimeOrchestrator } from './orchestrator';
 import type { TelemetrySink } from '../telemetry/telemetry-sink';
 import {
@@ -21,6 +25,7 @@ import {
   type ArtifactSelectionResult,
   type SelectionMode,
 } from './artifact-finalizer';
+import { buildDriverRunResultFromAgentExecution } from './agent-execution-driver-result';
 import { WorktreeMaterializer, type MaterializationResult } from './worktree-materializer';
 import {
   MockCouncil,
@@ -82,6 +87,7 @@ export interface IntegrationV0Summary {
 export interface IntegrationV0Options {
   driver?: DriverRuntimeHandle;
   driverPrompt?: string;
+  agentExecutionFacade?: AgentExecutionFacade;
   enableCouncil?: boolean;
   councilProvider?: CouncilProvider;
   worktreePath?: string;
@@ -93,6 +99,7 @@ export interface IntegrationV0Result {
   task_id: string;
   timeline: IntegrationV0TimelineItem[];
   driver_result: DriverRunResult;
+  agent_execution_result?: AgentExecutionResult;
   selection_result: ArtifactSelectionResult;
   materialization_result: MaterializationResult;
   mailbox_thread: Message[];
@@ -272,20 +279,52 @@ export async function runIntegrationV0Flow(
     id: driverRequestedAckEvent.event_id,
   });
 
-  // 8. Call driver (A: Driver)
-  const driverResult = await driver.sendPrompt({
-    task_id: task.task_id,
-    run_id: run.run_id,
-    prompt: options?.driverPrompt || taskRequest.spec,
-    context_pack_ref: {
-      context_pack_id: contextPack.context_pack_id,
-      task_id: contextPack.task_id,
-      uri: `artifact://context/${task.task_id}/${contextPack.context_pack_id}`,
-      schema_version: SCHEMA_VERSION,
-    },
-    created_at: nowTimestamp(),
+  // 8. Call driver directly, or route through B AgentExecutionFacade when explicitly injected.
+  const prompt = options?.driverPrompt || taskRequest.spec;
+  const contextPackRef = {
+    context_pack_id: contextPack.context_pack_id,
+    task_id: contextPack.task_id,
+    uri: `artifact://context/${task.task_id}/${contextPack.context_pack_id}`,
     schema_version: SCHEMA_VERSION,
-  });
+  };
+  let agentExecutionResult: AgentExecutionResult | undefined;
+  const driverResult = options?.agentExecutionFacade
+    ? buildDriverRunResultFromAgentExecution({
+        result: (agentExecutionResult = await options.agentExecutionFacade.runAgent({
+          task_id: task.task_id,
+          run_id: run.run_id,
+          role_id: task.role_id ?? 'role_ts_engineer',
+          instruction: prompt,
+          input_artifact_refs: contextPack.artifact_refs,
+          context_policy: 'integration_v0_default',
+          schema_version: SCHEMA_VERSION,
+        })),
+        session_id: driver.session_id,
+        schema_version: SCHEMA_VERSION,
+      })
+    : await driver.sendPrompt({
+        task_id: task.task_id,
+        run_id: run.run_id,
+        prompt,
+        context_pack_ref: contextPackRef,
+        created_at: nowTimestamp(),
+        schema_version: SCHEMA_VERSION,
+      });
+
+  if (agentExecutionResult) {
+    const agentExecutionEvent = orchestrator.appendEvent({
+      event_type: 'agent.execution_completed',
+      subject_id: agentExecutionResult.agent_run_id,
+      run_id: run.run_id,
+      task_id: task.task_id,
+      payload: {
+        role_id: agentExecutionResult.role_id,
+        status: agentExecutionResult.status,
+        artifact_refs: agentExecutionResult.artifact_refs.map((artifact) => artifact.artifact_id),
+      },
+    });
+    timeline.push({ name: 'AgentExecutionCompleted', id: agentExecutionEvent.event_id });
+  }
 
   // 9. Mailbox: send driver.completed
   const driverCompletedResult = sendDriverCompletedMessage({
@@ -693,6 +732,7 @@ export async function runIntegrationV0Flow(
     task_id: task.task_id,
     timeline,
     driver_result: driverResult,
+    ...(agentExecutionResult ? { agent_execution_result: agentExecutionResult } : {}),
     selection_result: selectionResult,
     materialization_result: materializationResult,
     mailbox_thread: mailboxThread,

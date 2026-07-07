@@ -39,8 +39,8 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
       role_id: 'proposer_a',
       context_pack_ref: expect.stringMatching(/^context_pack_/),
       driver_run_result_id: 'driver_result_001',
-      artifact_refs: ['artifact_output_001'],
-      transcript_ref: 'artifact_transcript_001',
+      artifact_refs: [createArtifact('artifact_output_001')],
+      transcript_ref: createArtifact('artifact_transcript_001', 'transcript'),
       diagnostics: {
         driver_id: 'driver_001',
         driver_status: 'succeeded',

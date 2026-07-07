@@ -13,6 +13,7 @@ import {
 } from '../../src/driver';
 import { SCHEMA_VERSION, createId, type ArtifactRef } from '../../src/core';
 import type { CouncilProvider, CouncilRoundInput } from '../../src/council';
+import type { AgentExecutionFacade, AgentExecutionRequest } from '../../src/memory';
 
 describe('runIntegrationV0Flow', () => {
   const createdRunDirs = new Set<string>();
@@ -310,6 +311,58 @@ describe('runIntegrationV0Flow', () => {
     expect(result.driver_result.diagnostics.driver_id).toBe('mock-driver');
   });
 
+  it('should optionally run single agent through AgentExecutionFacade without replacing the default path', async () => {
+    const requests: AgentExecutionRequest[] = [];
+    const agentExecutionFacade: AgentExecutionFacade = {
+      async runAgent(input) {
+        requests.push(input);
+        return {
+          agent_run_id: 'agent_run_001',
+          role_id: input.role_id,
+          context_pack_ref: 'context_pack_001',
+          driver_run_result_id: 'driver_result_from_agent_001',
+          artifact_refs: [createArtifact('artifact_from_agent_001')],
+          transcript_ref: createArtifact('artifact_transcript_from_agent_001', 'transcript'),
+          diagnostics: {
+            driver_id: 'agent-driver',
+            duration_ms: 42,
+          },
+          status: 'completed',
+          created_at: new Date().toISOString(),
+          schema_version: SCHEMA_VERSION,
+        };
+      },
+    };
+
+    const result = await runFlow({ agentExecutionFacade });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      task_id: result.task_id,
+      run_id: result.run_id,
+      role_id: 'role_ts_engineer',
+      instruction: 'Run the integration v0 flow',
+      context_policy: 'integration_v0_default',
+    });
+    expect(result.agent_execution_result).toMatchObject({
+      agent_run_id: 'agent_run_001',
+      status: 'completed',
+    });
+    expect(result.driver_result).toMatchObject({
+      driver_run_result_id: 'driver_result_from_agent_001',
+      status: 'succeeded',
+      artifacts: [expect.objectContaining({ artifact_id: 'artifact_from_agent_001' })],
+      transcript_ref: expect.objectContaining({
+        artifact_id: 'artifact_transcript_from_agent_001',
+      }),
+    });
+    expect(result.selection_result.selected_artifacts).toEqual([
+      expect.objectContaining({ artifact_id: 'artifact_from_agent_001' }),
+    ]);
+    expect(result.timeline.map((item) => item.name)).toContain('AgentExecutionCompleted');
+    expect(result.summary.status).toBe('completed');
+  });
+
   it('should include all key timeline events', async () => {
     const result = await runFlow();
 
@@ -594,4 +647,16 @@ describe('runIntegrationV0Flow', () => {
 
 async function readJson(filePath: string): Promise<unknown> {
   return JSON.parse(await fs.readFile(filePath, 'utf-8'));
+}
+
+function createArtifact(artifactId: string, type: ArtifactRef['type'] = 'patch'): ArtifactRef {
+  return {
+    artifact_id: artifactId,
+    type,
+    uri: `artifact://${type}/${artifactId}`,
+    producer_id: 'agent-driver',
+    task_id: 'task_001',
+    created_at: '2026-07-07T00:00:00.000Z',
+    schema_version: SCHEMA_VERSION,
+  };
 }
