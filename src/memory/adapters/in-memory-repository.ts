@@ -72,6 +72,10 @@ export class InMemoryRepository implements MemoryRepository {
     });
   }
 
+  async listAgentIds(): Promise<string[]> {
+    return [...this.agents.keys()];
+  }
+
   async getAgent(role_id: string): Promise<AgentHandle> {
     return this.requireStore(role_id).handle;
   }
