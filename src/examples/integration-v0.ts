@@ -22,6 +22,9 @@
  *   # External driver + council + custom prompt
  *   ACP_DRIVER_RUNNER_DIR=/path/to/acp-client-prototype pnpm example:integration-v0 --external-driver --enable-council "Optimize database queries"
  *
+ *   # External driver + council + per-call timeout
+ *   ACP_DRIVER_RUNNER_DIR=/path/to/acp-client-prototype pnpm example:integration-v0 --external-driver --enable-council --council-provider synthesis-agent --external-driver-timeout-ms 60000 "Optimize database queries"
+ *
  * Environment variables:
  *   - ACP_DRIVER_RUNNER_DIR: Path to acp-client-prototype (required for --external-driver)
  *   - ACP_DRIVER_ENV_FILE: Env file loaded for the external runner (default: <ACP_DRIVER_RUNNER_DIR>/.env)
@@ -79,6 +82,9 @@ if (cliOptions.useExternalDriver) {
   console.log(`Using external driver from: ${driverRunnerDir}`);
   console.log(`ACP_AGENT_ID: ${process.env.ACP_AGENT_ID || 'mock-driver'}`);
   console.log(`ACP_WORKSPACE: ${process.env.ACP_WORKSPACE || process.cwd()}`);
+  if (cliOptions.externalDriverTimeoutMs !== undefined) {
+    console.log(`External driver timeout: ${String(cliOptions.externalDriverTimeoutMs)}ms`);
+  }
 
   const driverEnvFile = process.env.ACP_DRIVER_ENV_FILE || path.join(driverRunnerDir, '.env');
   const driverEnv = loadEnvFile(driverEnvFile);
@@ -102,6 +108,9 @@ if (cliOptions.useExternalDriver) {
         ACP_WORKSPACE: process.env.ACP_WORKSPACE || process.cwd(),
       },
       unsetEnv,
+      ...(cliOptions.externalDriverTimeoutMs !== undefined
+        ? { timeoutMs: cliOptions.externalDriverTimeoutMs }
+        : {}),
     }),
   });
 }

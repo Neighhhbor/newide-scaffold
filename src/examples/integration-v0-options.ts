@@ -9,6 +9,7 @@ export interface IntegrationV0CliOptions {
   enableCouncil: boolean;
   useExternalDriver: boolean;
   councilProviderMode: IntegrationV0CouncilProviderMode;
+  externalDriverTimeoutMs?: number;
   driverPrompt: string;
 }
 
@@ -41,14 +42,29 @@ export function parseIntegrationV0CliArgs(args: string[]): IntegrationV0CliOptio
       continue;
     }
 
+    if (arg === '--external-driver-timeout-ms') {
+      const value = args[index + 1];
+      if (!value || value.startsWith('--')) {
+        throw new Error('--external-driver-timeout-ms requires a value');
+      }
+      parsed.set(arg, value);
+      index += 1;
+      continue;
+    }
+
     parsed.set(arg, true);
   }
 
   const councilProviderMode = readCouncilProviderMode(parsed.get('--council-provider'));
+  const externalDriverTimeoutMs = readPositiveInteger(
+    parsed.get('--external-driver-timeout-ms'),
+    '--external-driver-timeout-ms',
+  );
   return {
     enableCouncil: Boolean(parsed.get('--enable-council')) || councilProviderMode !== 'mock',
     useExternalDriver: Boolean(parsed.get('--external-driver')),
     councilProviderMode,
+    ...(externalDriverTimeoutMs !== undefined ? { externalDriverTimeoutMs } : {}),
     driverPrompt: positional[0] ?? DEFAULT_PROMPT,
   };
 }
@@ -63,4 +79,18 @@ function readCouncilProviderMode(
     return value;
   }
   throw new Error(`Unsupported council provider: ${String(value)}`);
+}
+
+function readPositiveInteger(
+  value: string | boolean | undefined,
+  label: string,
+): number | undefined {
+  if (value === undefined || value === false) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return parsed;
 }

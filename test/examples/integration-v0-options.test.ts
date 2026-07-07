@@ -28,6 +28,12 @@ describe('parseIntegrationV0CliArgs', () => {
     });
   });
 
+  it('parses external driver timeout in milliseconds', () => {
+    expect(parseIntegrationV0CliArgs(['--external-driver-timeout-ms', '45000'])).toMatchObject({
+      externalDriverTimeoutMs: 45000,
+    });
+  });
+
   it('keeps mock council as the default provider mode', () => {
     expect(parseIntegrationV0CliArgs(['Refactor task runner'])).toEqual({
       enableCouncil: false,

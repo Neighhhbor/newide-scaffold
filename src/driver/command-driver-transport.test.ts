@@ -43,6 +43,23 @@ describe('CommandDriverTransport', () => {
     await expect(transport.run(PROMPT)).rejects.toThrow('Command driver stdout was not valid JSON');
   });
 
+  it('times out and kills child processes that keep stdio open', async () => {
+    const transport = new CommandDriverTransport({
+      ...nodeCommand(`
+        const { spawn } = require('node:child_process');
+        readInput(() => {
+          spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], {
+            stdio: ['ignore', process.stdout, process.stderr],
+          });
+          setTimeout(() => {}, 60000);
+        });
+      `),
+      timeoutMs: 50,
+    });
+
+    await expect(transport.run(PROMPT)).rejects.toThrow(/Command driver timed out after 50ms/);
+  });
+
   it('throws a clear error with stderr context when the command exits non-zero', async () => {
     const transport = new CommandDriverTransport(
       nodeCommand(`
