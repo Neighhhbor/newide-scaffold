@@ -77,6 +77,24 @@ describe('runIntegrationV0Flow', () => {
 
     expect(result.summary.mode).toBe('council');
     expect(result.summary.status).toBe('completed');
+    expect(result.selection_result.council_decision).toMatchObject({
+      run_id: result.run_id,
+      task_id: result.task_id,
+      decision_mode: 'advisory',
+      verdict: 'select',
+      can_create_merge_authorization: false,
+    });
+    expect(result.selection_result.metadata).toMatchObject({
+      decision_mode: 'advisory',
+      verdict: 'select',
+      can_create_merge_authorization: false,
+    });
+
+    const timelineNames = result.timeline.map((t) => t.name);
+    expect(timelineNames).toContain('CouncilDecision');
+    expect(timelineNames.indexOf('CouncilDecision')).toBeLessThan(
+      timelineNames.indexOf('ArtifactSelected'),
+    );
   });
 
   it('should persist summary and timeline to .newide/runs/', async () => {

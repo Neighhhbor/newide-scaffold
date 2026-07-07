@@ -396,9 +396,11 @@ export async function runIntegrationV0Flow(
   // 12. Artifact selection (C: Coordinator)
   const evidencePack: EvidencePack = {
     evidence_pack_id: createId('evidence_pack'),
+    task_id: task.task_id,
     context_pack_ref: contextPack.context_pack_id,
     artifact_refs: driverResult.artifacts.map((a) => a.artifact_id),
     gate_result_refs: gateResults.map((g) => g.gate_result_id),
+    summary: 'Driver artifacts and gate results for v0 artifact selection.',
     created_at: nowTimestamp(),
     schema_version: SCHEMA_VERSION,
   };
@@ -421,6 +423,24 @@ export async function runIntegrationV0Flow(
     gate_results: gateResults,
     evidence_pack: evidencePack,
   });
+
+  if (selectionResult.council_decision) {
+    const councilDecision = selectionResult.council_decision;
+    const councilEvent = orchestrator.appendEvent({
+      event_type: 'council.decision',
+      subject_id: councilDecision.decision_id,
+      run_id: run.run_id,
+      task_id: task.task_id,
+      payload: {
+        decision_mode: councilDecision.decision_mode,
+        selected_proposal_id: councilDecision.selected_proposal_id,
+        verdict: councilDecision.verdict,
+        comparison_ref: councilDecision.comparison_ref,
+        can_create_merge_authorization: councilDecision.can_create_merge_authorization,
+      },
+    });
+    timeline.push({ name: 'CouncilDecision', id: councilEvent.event_id });
+  }
 
   const selectionEvent = orchestrator.appendEvent({
     event_type: 'artifact.selected',

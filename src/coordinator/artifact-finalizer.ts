@@ -8,7 +8,13 @@ import {
 } from '../core';
 import type { DriverRunResult } from '../driver';
 import type { GateResult } from '../gate';
-import { MockCouncil, type CouncilProvider, type EvidencePack, type Proposal } from '../council';
+import {
+  MockCouncil,
+  type CouncilDecision,
+  type CouncilProvider,
+  type EvidencePack,
+  type Proposal,
+} from '../council';
 
 export type SelectionMode = 'single_agent' | 'council';
 
@@ -20,6 +26,7 @@ export interface ArtifactSelectionResult {
   selected_artifacts: ArtifactRef[];
   reason: string;
   metadata: Record<string, unknown>;
+  council_decision?: CouncilDecision;
   created_at: string;
   schema_version: string;
 }
@@ -104,8 +111,14 @@ export class ArtifactSelector {
       proposal_id: createId('proposal'),
       run_id: input.run_id,
       task_id: input.task_id,
+      agent_id: input.driver_result.diagnostics.driver_id,
       artifact_refs: input.driver_result.artifacts.map((a) => a.artifact_id),
       summary: 'Driver output artifacts for council review',
+      claims: [],
+      affected_paths: [],
+      assumptions: [],
+      known_risks: [],
+      completion_evidence: input.gate_results.map((gate) => gate.gate_result_id),
       created_at: nowTimestamp(),
       schema_version: SCHEMA_VERSION,
     };
@@ -113,13 +126,17 @@ export class ArtifactSelector {
     const councilDecision = await this.options.councilProvider.runCouncilRound({
       run_id: input.run_id,
       task_id: input.task_id,
+      trigger: 'manual',
+      decision_mode: 'advisory',
+      question: 'Select the best driver output artifact for v0 integration.',
       proposals: [proposal],
       evidence_pack: input.evidence_pack,
+      schema_version: SCHEMA_VERSION,
     });
 
     // Convert council verdict to selection
     const selected =
-      councilDecision.verdict === 'accept' && firstArtifact !== undefined ? [firstArtifact] : [];
+      councilDecision.verdict === 'select' && firstArtifact !== undefined ? [firstArtifact] : [];
 
     return {
       selection_id: createId('selection'),
@@ -130,10 +147,14 @@ export class ArtifactSelector {
       reason: councilDecision.reason,
       metadata: {
         council_decision_id: councilDecision.decision_id,
+        decision_mode: councilDecision.decision_mode,
         proposal_id: proposal.proposal_id,
         verdict: councilDecision.verdict,
         selected_proposal_id: councilDecision.selected_proposal_id,
+        comparison_ref: councilDecision.comparison_ref,
+        can_create_merge_authorization: councilDecision.can_create_merge_authorization,
       },
+      council_decision: councilDecision,
       created_at: nowTimestamp(),
       schema_version: SCHEMA_VERSION,
     };
