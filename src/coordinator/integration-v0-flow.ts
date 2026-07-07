@@ -6,7 +6,9 @@ import {
   type Message,
   type MessageId,
   type RoleProfileRef,
+  type SchemaVersion,
   type TaskCreateRequest,
+  type Timestamp,
 } from '../core';
 import { MockDriver, type DriverRunResult, type DriverRuntimeHandle } from '../driver';
 import { HookEngine } from '../hook';
@@ -34,6 +36,7 @@ import {
   writeIntegrationRunOutputs,
   type IntegrationRunResultManifest,
 } from './run-result';
+import { buildFrontendRunSnapshot, type FrontendRunSnapshot } from './frontend-run-snapshot';
 
 export interface IntegrationV0TimelineItem {
   name: string;
@@ -57,8 +60,8 @@ export interface IntegrationV0Summary {
   checkpoint_path: string;
   mailbox_message_refs: MessageId[];
   mailbox_thread_id: string;
-  created_at: string;
-  schema_version: string;
+  created_at: Timestamp;
+  schema_version: SchemaVersion;
 }
 
 export interface IntegrationV0Options {
@@ -79,6 +82,7 @@ export interface IntegrationV0Result {
   mailbox_thread: Message[];
   mailbox_deliveries: MessageDelivery[];
   summary: IntegrationV0Summary;
+  frontend_snapshot: FrontendRunSnapshot;
   result_manifest: IntegrationRunResultManifest;
 }
 
@@ -577,6 +581,21 @@ export async function runIntegrationV0Flow(
   };
   const mailboxThread = mailbox.listThread(threadId);
   const mailboxDeliveries = mailbox.listDeliveries();
+  const frontendSnapshotLinks = {
+    result_path: outputPaths.result_path,
+    summary_path: outputPaths.summary_path,
+    timeline_path: outputPaths.timeline_path,
+    checkpoint_path: outputPaths.checkpoint_path,
+    message_thread_path: outputPaths.message_thread_path,
+    frontend_snapshot_path: outputPaths.frontend_snapshot_path,
+  };
+  const frontendSnapshot = buildFrontendRunSnapshot({
+    summary,
+    timeline,
+    checkpoint: savedCheckpoint,
+    message_thread: mailboxThread,
+    links: frontendSnapshotLinks,
+  });
   const resultManifest = buildRunResultManifest({
     run_id: run.run_id,
     task_id: task.task_id,
@@ -589,6 +608,7 @@ export async function runIntegrationV0Flow(
     timeline_path: outputPaths.timeline_path,
     checkpoint_path: outputPaths.checkpoint_path,
     message_thread_path: outputPaths.message_thread_path,
+    frontend_snapshot_path: outputPaths.frontend_snapshot_path,
     created_at: summary.created_at,
     schema_version: SCHEMA_VERSION,
   });
@@ -600,6 +620,7 @@ export async function runIntegrationV0Flow(
     timeline,
     checkpoint: savedCheckpoint,
     message_thread: mailboxThread,
+    frontend_snapshot: frontendSnapshot,
     result_manifest: resultManifest,
   });
 
@@ -613,6 +634,7 @@ export async function runIntegrationV0Flow(
     mailbox_thread: mailboxThread,
     mailbox_deliveries: mailboxDeliveries,
     summary,
+    frontend_snapshot: frontendSnapshot,
     result_manifest: resultManifest,
   };
 }

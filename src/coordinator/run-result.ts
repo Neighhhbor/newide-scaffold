@@ -2,7 +2,8 @@
  * Coordinator 运行输出模块。
  *
  * 这个文件负责 `.newide/runs/<run_id>/` 下的输出路径和结果文件写入：
- * result.json、summary.json、timeline.json、checkpoint.json、message-thread.json。
+ * result.json、summary.json、timeline.json、checkpoint.json、message-thread.json、
+ * frontend-snapshot.json。
  * 它不生成 checkpoint 语义，不生成 timeline 事件，不修改 task/run 状态，
  * 也不调用 driver、gate、council 或 mailbox。
  */
@@ -21,6 +22,7 @@ export interface IntegrationRunOutputPaths {
   timeline_path: string;
   checkpoint_path: string;
   message_thread_path: string;
+  frontend_snapshot_path: string;
 }
 
 export interface IntegrationRunResultManifest {
@@ -35,6 +37,7 @@ export interface IntegrationRunResultManifest {
   timeline_path: string;
   checkpoint_path: string;
   message_thread_path: string;
+  frontend_snapshot_path: string;
   created_at: Timestamp;
   schema_version: SchemaVersion;
 }
@@ -45,6 +48,7 @@ export interface WriteIntegrationRunOutputsInput {
   timeline: unknown;
   checkpoint: unknown;
   message_thread: unknown;
+  frontend_snapshot: unknown;
   result_manifest: IntegrationRunResultManifest;
 }
 
@@ -60,6 +64,7 @@ export function buildRunOutputPaths(
     timeline_path: path.join(runDir, 'timeline.json'),
     checkpoint_path: path.join(runDir, 'checkpoint.json'),
     message_thread_path: path.join(runDir, 'message-thread.json'),
+    frontend_snapshot_path: path.join(runDir, 'frontend-snapshot.json'),
   };
 }
 
@@ -75,6 +80,7 @@ export interface BuildRunResultManifestInput {
   timeline_path: string;
   checkpoint_path: string;
   message_thread_path: string;
+  frontend_snapshot_path: string;
   created_at: Timestamp;
   schema_version: SchemaVersion;
 }
@@ -94,6 +100,7 @@ export function buildRunResultManifest(
     timeline_path: input.timeline_path,
     checkpoint_path: input.checkpoint_path,
     message_thread_path: input.message_thread_path,
+    frontend_snapshot_path: input.frontend_snapshot_path,
     created_at: input.created_at,
     schema_version: input.schema_version,
   };
@@ -120,6 +127,11 @@ export async function writeIntegrationRunOutputs(
   await fs.writeFile(
     input.paths.message_thread_path,
     JSON.stringify(input.message_thread, null, 2),
+    'utf-8',
+  );
+  await fs.writeFile(
+    input.paths.frontend_snapshot_path,
+    JSON.stringify(input.frontend_snapshot, null, 2),
     'utf-8',
   );
   await writeRunResultManifest(input.paths.result_path, input.result_manifest);
