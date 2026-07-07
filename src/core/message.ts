@@ -19,7 +19,10 @@ export type AgentMessageType =
   | 'handoff'
   | 'status_update'
   | 'decision_request'
-  | 'decision_response';
+  | 'decision_response'
+  | 'task.assigned'
+  | 'driver.requested'
+  | 'driver.completed';
 
 export interface MessageRecipient {
   agent_id?: string;

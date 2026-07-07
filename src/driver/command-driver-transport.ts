@@ -7,6 +7,7 @@ export interface CommandDriverTransportOptions {
   args?: readonly string[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  unsetEnv?: readonly string[];
   timeoutMs?: number;
 }
 
@@ -15,6 +16,7 @@ export class CommandDriverTransport implements ExternalDriverTransport {
   private readonly args: readonly string[];
   private readonly cwd: string | undefined;
   private readonly env: NodeJS.ProcessEnv | undefined;
+  private readonly unsetEnv: readonly string[];
   private readonly timeoutMs: number | undefined;
   private stderr = '';
 
@@ -30,6 +32,7 @@ export class CommandDriverTransport implements ExternalDriverTransport {
     this.args = options.args ?? [];
     this.cwd = options.cwd;
     this.env = options.env;
+    this.unsetEnv = options.unsetEnv ?? [];
     this.timeoutMs = options.timeoutMs;
   }
 
@@ -179,11 +182,15 @@ export class CommandDriverTransport implements ExternalDriverTransport {
       options.cwd = this.cwd;
     }
 
-    if (this.env !== undefined) {
-      options.env = {
+    if (this.env !== undefined || this.unsetEnv.length > 0) {
+      const env = {
         ...process.env,
-        ...this.env,
+        ...(this.env ?? {}),
       };
+      for (const key of this.unsetEnv) {
+        delete env[key];
+      }
+      options.env = env;
     }
 
     return options;
