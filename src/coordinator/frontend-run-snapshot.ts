@@ -8,6 +8,7 @@ import type { Checkpoint, Message, MessageId, SchemaVersion, Timestamp } from '.
 import type { ArtifactOutput } from './artifact-output';
 import type { RunResultStatus, IntegrationRunOutputPaths } from './run-result';
 import type { SelectionMode } from './artifact-finalizer';
+import type { CouncilDecision } from '../council';
 
 export type FrontendStage = 'executing' | 'council' | 'delivery';
 export type FrontendTimelineLevel = 'info' | 'success' | 'warning' | 'council';
@@ -29,6 +30,12 @@ export interface FrontendRunSnapshotSummary {
   checkpoint_path: string;
   mailbox_message_refs: MessageId[];
   mailbox_thread_id: string;
+  council_decision_path?: string;
+  council_decision_id?: string;
+  council_decision_mode?: CouncilDecision['decision_mode'];
+  council_verdict?: CouncilDecision['verdict'];
+  council_selected_artifact_refs?: string[];
+  council_can_create_merge_authorization?: boolean;
   created_at: Timestamp;
   schema_version: SchemaVersion;
 }
@@ -91,6 +98,14 @@ export interface FrontendRunSnapshot {
     message_refs: MessageId[];
     messages: Message[];
   };
+  council?: {
+    decision_path: string;
+    decision_id: string;
+    decision_mode: CouncilDecision['decision_mode'];
+    verdict: CouncilDecision['verdict'];
+    selected_artifact_refs: string[];
+    can_create_merge_authorization: boolean;
+  };
   links: Omit<IntegrationRunOutputPaths, 'run_dir'>;
 }
 
@@ -142,6 +157,22 @@ export function buildFrontendRunSnapshot(
       message_refs: [...input.summary.mailbox_message_refs],
       messages: [...input.message_thread],
     },
+    ...(input.summary.council_decision_path &&
+    input.summary.council_decision_id &&
+    input.summary.council_decision_mode &&
+    input.summary.council_verdict
+      ? {
+          council: {
+            decision_path: input.summary.council_decision_path,
+            decision_id: input.summary.council_decision_id,
+            decision_mode: input.summary.council_decision_mode,
+            verdict: input.summary.council_verdict,
+            selected_artifact_refs: [...(input.summary.council_selected_artifact_refs ?? [])],
+            can_create_merge_authorization:
+              input.summary.council_can_create_merge_authorization ?? false,
+          },
+        }
+      : {}),
     links: input.links,
   };
 }

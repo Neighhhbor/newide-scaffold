@@ -74,6 +74,7 @@ describe('runIntegrationV0Flow', () => {
 
   it('should run with council mode when enabled', async () => {
     const result = await runFlow({ enableCouncil: true });
+    const councilDecisionPath = `.newide/runs/${result.run_id}/council/decision.json`;
 
     expect(result.summary.mode).toBe('council');
     expect(result.summary.status).toBe('completed');
@@ -82,6 +83,9 @@ describe('runIntegrationV0Flow', () => {
       task_id: result.task_id,
       decision_mode: 'advisory',
       verdict: 'select',
+      selected_artifact_refs: result.selection_result.selected_artifacts.map(
+        (artifact) => artifact.artifact_id,
+      ),
       can_create_merge_authorization: false,
     });
     expect(result.selection_result.metadata).toMatchObject({
@@ -95,6 +99,37 @@ describe('runIntegrationV0Flow', () => {
     expect(timelineNames.indexOf('CouncilDecision')).toBeLessThan(
       timelineNames.indexOf('ArtifactSelected'),
     );
+
+    await expect(readJson(councilDecisionPath)).resolves.toMatchObject({
+      decision_id: result.selection_result.council_decision?.decision_id,
+      decision_mode: 'advisory',
+      verdict: 'select',
+      selected_artifact_refs: result.selection_result.selected_artifacts.map(
+        (artifact) => artifact.artifact_id,
+      ),
+      can_create_merge_authorization: false,
+    });
+
+    await expect(readJson(`.newide/runs/${result.run_id}/result.json`)).resolves.toMatchObject({
+      council_decision_path: councilDecisionPath,
+      council_verdict: 'select',
+      council_decision_mode: 'advisory',
+    });
+
+    await expect(
+      readJson(`.newide/runs/${result.run_id}/frontend-snapshot.json`),
+    ).resolves.toMatchObject({
+      council: {
+        decision_path: councilDecisionPath,
+        decision_id: result.selection_result.council_decision?.decision_id,
+        decision_mode: 'advisory',
+        verdict: 'select',
+        selected_artifact_refs: result.selection_result.selected_artifacts.map(
+          (artifact) => artifact.artifact_id,
+        ),
+        can_create_merge_authorization: false,
+      },
+    });
   });
 
   it('should persist summary and timeline to .newide/runs/', async () => {
@@ -154,6 +189,9 @@ describe('runIntegrationV0Flow', () => {
       schema_version: result.summary.schema_version,
     });
     expect(manifest.created_at).toBeDefined();
+    expect(manifest).not.toHaveProperty('council_decision_path');
+    expect(manifest).not.toHaveProperty('council_verdict');
+    expect(manifest).not.toHaveProperty('council_decision_mode');
     await expect(readJson(manifest.summary_path)).resolves.toMatchObject({
       run_id: result.run_id,
     });

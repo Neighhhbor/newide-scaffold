@@ -104,8 +104,6 @@ export class ArtifactSelector {
       throw new Error('evidence_pack is required when mode is "council"');
     }
 
-    const firstArtifact = input.driver_result.artifacts[0];
-
     // Build proposal from driver result artifacts
     const proposal: Proposal = {
       proposal_id: createId('proposal'),
@@ -135,8 +133,13 @@ export class ArtifactSelector {
     });
 
     // Convert council verdict to selection
+    const selectedArtifactIds = new Set(councilDecision.selected_artifact_refs);
     const selected =
-      councilDecision.verdict === 'select' && firstArtifact !== undefined ? [firstArtifact] : [];
+      councilDecision.verdict === 'select'
+        ? input.driver_result.artifacts.filter((artifact) =>
+            selectedArtifactIds.has(artifact.artifact_id),
+          )
+        : [];
 
     return {
       selection_id: createId('selection'),
@@ -151,6 +154,7 @@ export class ArtifactSelector {
         proposal_id: proposal.proposal_id,
         verdict: councilDecision.verdict,
         selected_proposal_id: councilDecision.selected_proposal_id,
+        selected_artifact_refs: councilDecision.selected_artifact_refs,
         comparison_ref: councilDecision.comparison_ref,
         can_create_merge_authorization: councilDecision.can_create_merge_authorization,
       },
