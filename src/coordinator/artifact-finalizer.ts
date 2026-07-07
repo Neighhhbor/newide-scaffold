@@ -13,8 +13,8 @@ import {
   type CouncilDecision,
   type CouncilProvider,
   type EvidencePack,
-  type Proposal,
 } from '../council';
+import { buildCouncilProposalFromDriverResult } from '../council/proposal-adapter';
 
 export type SelectionMode = 'single_agent' | 'council';
 
@@ -104,22 +104,12 @@ export class ArtifactSelector {
       throw new Error('evidence_pack is required when mode is "council"');
     }
 
-    // Build proposal from driver result artifacts
-    const proposal: Proposal = {
-      proposal_id: createId('proposal'),
+    const proposal = buildCouncilProposalFromDriverResult({
       run_id: input.run_id,
       task_id: input.task_id,
-      agent_id: input.driver_result.diagnostics.driver_id,
-      artifact_refs: input.driver_result.artifacts.map((a) => a.artifact_id),
-      summary: 'Driver output artifacts for council review',
-      claims: [],
-      affected_paths: [],
-      assumptions: [],
-      known_risks: [],
-      completion_evidence: input.gate_results.map((gate) => gate.gate_result_id),
-      created_at: nowTimestamp(),
-      schema_version: SCHEMA_VERSION,
-    };
+      driver_result: input.driver_result,
+      gate_results: input.gate_results,
+    });
 
     const councilDecision = await this.options.councilProvider.runCouncilRound({
       run_id: input.run_id,
