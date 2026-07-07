@@ -41,6 +41,15 @@ export type { LlmClient, LlmMessage } from './ports/llm-client';
 export type { SkillMarketPort, SkillMarketSearchResult } from './ports/skill-market-port';
 export type { AgentContextCleaner, AgentContextCleanInput } from './ports/agent-context-cleaner';
 export type { BufferTriggerPolicy } from './ports/buffer-trigger-policy';
+export { AGENT_EXECUTION_STATUSES } from './ports/agent-execution-facade';
+export type {
+  AgentExecutionDiagnostics,
+  AgentExecutionFacade,
+  AgentExecutionRequest,
+  AgentExecutionResult,
+  AgentExecutionStatus,
+  AgentRunId,
+} from './ports/agent-execution-facade';
 export type {
   ExternalMemoryRepository,
   SearchAccessibleMemoriesInput,
