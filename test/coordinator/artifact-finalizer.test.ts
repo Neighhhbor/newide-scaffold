@@ -65,9 +65,11 @@ describe('ArtifactSelector', () => {
 
   const createMockEvidencePack = (): EvidencePack => ({
     evidence_pack_id: createId('evidence_pack'),
+    task_id: 'task-1',
     context_pack_ref: 'context-1',
     artifact_refs: ['artifact-1'],
     gate_result_refs: ['gate-result-1'],
+    summary: 'Mock evidence pack for artifact selection tests',
     created_at: nowTimestamp(),
     schema_version: SCHEMA_VERSION,
   });
@@ -164,8 +166,16 @@ describe('ArtifactSelector', () => {
       expect(result.mode).toBe('council');
       expect(result.selected_artifacts).toHaveLength(1);
       expect(result.metadata.council_decision_id).toBeDefined();
+      expect(result.metadata.decision_mode).toBe('advisory');
       expect(result.metadata.proposal_id).toBeDefined();
-      expect(result.metadata.verdict).toBe('accept');
+      expect(result.metadata.verdict).toBe('select');
+      expect(result.metadata.can_create_merge_authorization).toBe(false);
+      expect(result.council_decision).toMatchObject({
+        task_id: 'task-1',
+        decision_mode: 'advisory',
+        verdict: 'select',
+        can_create_merge_authorization: false,
+      });
     });
 
     it('should not select artifact when no artifacts available', async () => {
@@ -186,8 +196,8 @@ describe('ArtifactSelector', () => {
 
       expect(result.mode).toBe('council');
       expect(result.selected_artifacts).toHaveLength(0);
-      // MockCouncil will accept the proposal, but we have no artifact to select
-      expect(result.metadata.verdict).toBe('accept');
+      // MockCouncil can select the proposal, but there is no driver artifact to materialize.
+      expect(result.metadata.verdict).toBe('select');
     });
 
     it('should throw when councilProvider is missing in council mode', async () => {
