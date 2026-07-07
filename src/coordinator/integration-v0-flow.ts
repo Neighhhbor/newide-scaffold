@@ -83,6 +83,7 @@ export interface IntegrationV0Options {
   driver?: DriverRuntimeHandle;
   driverPrompt?: string;
   enableCouncil?: boolean;
+  councilProvider?: CouncilProvider;
   worktreePath?: string;
   telemetry?: TelemetrySink;
 }
@@ -427,7 +428,7 @@ export async function runIntegrationV0Flow(
     mode: options?.enableCouncil ? 'council' : 'single_agent',
   };
   if (options?.enableCouncil) {
-    selectorOptions.councilProvider = new MockCouncil();
+    selectorOptions.councilProvider = options.councilProvider ?? new MockCouncil();
   }
   const selector = new ArtifactSelector(selectorOptions);
 

@@ -12,6 +12,7 @@ import {
   type DriverRunResult,
 } from '../../src/driver';
 import { SCHEMA_VERSION, createId, type ArtifactRef } from '../../src/core';
+import type { CouncilProvider, CouncilRoundInput } from '../../src/council';
 
 describe('runIntegrationV0Flow', () => {
   const createdRunDirs = new Set<string>();
@@ -129,6 +130,61 @@ describe('runIntegrationV0Flow', () => {
         ),
         can_create_merge_authorization: false,
       },
+    });
+  });
+
+  it('should use an injected council provider in council mode', async () => {
+    const seenInputs: CouncilRoundInput[] = [];
+    const injectedCouncilProvider: CouncilProvider = {
+      async runCouncilRound(input) {
+        seenInputs.push(input);
+        const selectedProposal = input.proposals[0];
+        const selectedArtifactRefs = selectedProposal?.artifact_refs.slice(0, 1) ?? [];
+
+        return {
+          decision_id: 'council_decision_injected',
+          ...(input.run_id ? { run_id: input.run_id } : {}),
+          task_id: input.task_id,
+          ...(selectedProposal ? { selected_proposal_id: selectedProposal.proposal_id } : {}),
+          decision_mode: input.decision_mode,
+          selected_artifact_refs: selectedArtifactRefs,
+          verdict: selectedArtifactRefs.length > 0 ? 'select' : 'needs_human',
+          reason: 'Injected council provider selected the first artifact.',
+          evidence_refs: input.evidence_pack ? [input.evidence_pack.evidence_pack_id] : [],
+          can_create_merge_authorization: false,
+          created_at: new Date().toISOString(),
+          schema_version: SCHEMA_VERSION,
+        };
+      },
+    };
+
+    const result = await runFlow({
+      enableCouncil: true,
+      councilProvider: injectedCouncilProvider,
+    });
+
+    expect(seenInputs).toHaveLength(1);
+    expect(seenInputs[0]).toMatchObject({
+      run_id: result.run_id,
+      task_id: result.task_id,
+      decision_mode: 'advisory',
+    });
+    expect(seenInputs[0]?.proposals[0]?.artifact_refs).toEqual(
+      result.driver_result.artifacts.map((artifact) => artifact.artifact_id),
+    );
+    expect(seenInputs[0]?.evidence_pack).toMatchObject({
+      task_id: result.task_id,
+      artifact_refs: result.driver_result.artifacts.map((artifact) => artifact.artifact_id),
+    });
+    expect(result.selection_result.council_decision).toMatchObject({
+      decision_id: 'council_decision_injected',
+      selected_artifact_refs: [result.driver_result.artifacts[0]?.artifact_id],
+      reason: 'Injected council provider selected the first artifact.',
+    });
+    expect(result.summary.council_decision_id).toBe('council_decision_injected');
+    await expect(readJson(`.newide/runs/${result.run_id}/result.json`)).resolves.toMatchObject({
+      council_decision_mode: 'advisory',
+      council_verdict: 'select',
     });
   });
 
