@@ -132,6 +132,7 @@ describe('runIntegrationV0Flow', () => {
       timeline_path: `.newide/runs/${result.run_id}/timeline.json`,
       checkpoint_path: `.newide/runs/${result.run_id}/checkpoint.json`,
       message_thread_path: `.newide/runs/${result.run_id}/message-thread.json`,
+      frontend_snapshot_path: `.newide/runs/${result.run_id}/frontend-snapshot.json`,
       schema_version: result.summary.schema_version,
     });
     expect(manifest.created_at).toBeDefined();
@@ -143,6 +144,18 @@ describe('runIntegrationV0Flow', () => {
       checkpoint_id: result.summary.checkpoint_id,
     });
     await expect(readJson(manifest.message_thread_path)).resolves.toEqual(result.mailbox_thread);
+    await expect(readJson(manifest.frontend_snapshot_path)).resolves.toMatchObject({
+      snapshot_type: 'coordinator.frontend_run_snapshot.v0',
+      run_id: result.run_id,
+      task_id: result.task_id,
+      current: {
+        stage: 'delivery',
+        task_status: result.summary.status,
+      },
+      links: {
+        result_path: manifest.result_path,
+      },
+    });
   });
 
   it('should materialize artifacts to worktree', async () => {
@@ -224,6 +237,17 @@ describe('runIntegrationV0Flow', () => {
     expect(result.summary).toHaveProperty('schema_version');
     expect(result.summary).toHaveProperty('mailbox_message_refs');
     expect(result.summary).toHaveProperty('mailbox_thread_id');
+    expect(result.frontend_snapshot).toMatchObject({
+      run_id: result.run_id,
+      task_id: result.task_id,
+      current: {
+        stage: 'delivery',
+        task_status: result.summary.status,
+      },
+      mailbox: {
+        thread_id: result.summary.mailbox_thread_id,
+      },
+    });
 
     expect(result.summary.driver_diagnostics).toHaveProperty('driver_id');
     expect(result.summary.driver_diagnostics).toHaveProperty('duration_ms');
