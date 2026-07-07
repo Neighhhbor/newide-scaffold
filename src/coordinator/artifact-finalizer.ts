@@ -12,6 +12,7 @@ import {
   MockCouncil,
   type CouncilDecision,
   type CouncilProvider,
+  type CouncilRunResult,
   type EvidencePack,
 } from '../council';
 import { buildCouncilProposalFromDriverResult } from '../council/proposal-adapter';
@@ -27,6 +28,7 @@ export interface ArtifactSelectionResult {
   reason: string;
   metadata: Record<string, unknown>;
   council_decision?: CouncilDecision;
+  council_run_result?: CouncilRunResult;
   created_at: string;
   schema_version: string;
 }
@@ -111,7 +113,7 @@ export class ArtifactSelector {
       gate_results: input.gate_results,
     });
 
-    const councilDecision = await this.options.councilProvider.runCouncilRound({
+    const councilRunResult = await this.options.councilProvider.runCouncilRound({
       run_id: input.run_id,
       task_id: input.task_id,
       trigger: 'manual',
@@ -121,14 +123,17 @@ export class ArtifactSelector {
       evidence_pack: input.evidence_pack,
       schema_version: SCHEMA_VERSION,
     });
+    const councilDecision = councilRunResult.decision;
 
     // Convert council verdict to selection
     const selectedArtifactIds = new Set(councilDecision.selected_artifact_refs);
+    const selectableArtifacts = [
+      ...input.driver_result.artifacts,
+      ...councilRunResult.generated_artifact_refs,
+    ];
     const selected =
       councilDecision.verdict === 'select'
-        ? input.driver_result.artifacts.filter((artifact) =>
-            selectedArtifactIds.has(artifact.artifact_id),
-          )
+        ? selectableArtifacts.filter((artifact) => selectedArtifactIds.has(artifact.artifact_id))
         : [];
 
     return {
@@ -145,10 +150,14 @@ export class ArtifactSelector {
         verdict: councilDecision.verdict,
         selected_proposal_id: councilDecision.selected_proposal_id,
         selected_artifact_refs: councilDecision.selected_artifact_refs,
+        generated_artifact_refs: councilRunResult.generated_artifact_refs.map(
+          (artifact) => artifact.artifact_id,
+        ),
         comparison_ref: councilDecision.comparison_ref,
         can_create_merge_authorization: councilDecision.can_create_merge_authorization,
       },
       council_decision: councilDecision,
+      council_run_result: councilRunResult,
       created_at: nowTimestamp(),
       schema_version: SCHEMA_VERSION,
     };
