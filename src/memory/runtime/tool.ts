@@ -61,7 +61,7 @@ export interface ToolDefinition {
 /** Tool-calling 调用的返回 */
 export interface ToolCallResult {
   content: string | null;
-  tool_calls?: ToolCall[];
+  tool_calls: ToolCall[] | undefined;
 }
 
 /**

@@ -254,8 +254,8 @@ export class Agent {
       }
     }
 
-    // 3. 后处理：构建 buffer → 提取经验 → 晋升技能
-    return this.finalizeWithPostProcess(task, task_id, call_id, lastDriverReturn, messages);
+    // 3. 写入 pending buffer（仅存储，不做提取/晋升）
+    return this.writeToBuffer(task, task_id, call_id, lastDriverReturn);
   }
 
   /**
@@ -277,17 +277,16 @@ export class Agent {
   }
 
   /**
-   * 后处理：将 LLM tool-calling 的结果转换为 MemoryCycleResult。
+   * 写入 pending buffer，不做提取和晋升。
    *
-   * 使用现有的 BufferRepository + ExperienceExtractor + SkillPromotion 链路，
-   * 确保与 Pipeline 模式的一致性。
+   * 经验提取和技能晋升游离于 Agent 执行循环之外，由后续的 BufferProcessor
+   * 异步处理，确保 Agent 的在线路径不被后处理阻塞。
    */
-  private async finalizeWithPostProcess(
+  private async writeToBuffer(
     task: AgentTaskRequest,
     task_id: string,
     call_id: string,
     lastDriverReturn: DriverReturn | undefined,
-    _messages: ToolCallMessage[],
   ): Promise<MemoryCycleResult> {
     const persona = await this.memory.getPersona();
     const skills_before = await this.memory.listSkills();
@@ -302,7 +301,7 @@ export class Agent {
       assumptions: [],
     };
 
-    // 写入 buffer
+    // 写入 pending buffer（仅存储，不处理）
     const ingested = await writePendingBuffer(
       this.memory,
       {
@@ -318,24 +317,6 @@ export class Agent {
       undefined,
     );
 
-    // 从 buffer 提取经验 + 晋升技能（复用现有流程）
-    const pending = await this.memory.getPendingBuffer(ingested.seq);
-    if (!pending) {
-      throw new Error(`Pending buffer not found: seq=${ingested.seq}`);
-    }
-
-    const extraction = await this.deps.extractor.extract(pending.snapshot, pending.agentContext);
-    for (const experience of extraction.experiences) {
-      await this.memory.saveExperience(experience);
-    }
-
-    const promotion = await this.deps.promote(this.memory, task, extraction.experiences);
-    if (promotion.skill) {
-      extraction.result.skills_promoted = 1;
-    }
-
-    await this.memory.markBufferProcessed(ingested.seq);
-
     return {
       agent_id: this.memory.role_id,
       persona,
@@ -348,8 +329,24 @@ export class Agent {
       },
       buffer_snapshot: ingested.snapshot,
       buffer_seq: ingested.seq,
-      extraction,
-      promotion,
+      // 提取和晋升由离线 BufferProcessor 处理，这里返回空值
+      extraction: {
+        experiences: [],
+        result: {
+          experiences_created: 0,
+          experiences_updated: 0,
+          negative_experiences: 0,
+          skills_promoted: 0,
+        },
+      },
+      promotion: {
+        check: {
+          eligible: false,
+          auto_approved: false,
+          reasons: [],
+          blocking_rules: ['extraction and promotion are handled offline'],
+        },
+      },
     };
   }
 }
