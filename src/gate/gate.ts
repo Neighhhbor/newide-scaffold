@@ -54,6 +54,7 @@ export interface GateDefinition {
   command?: string;
   model?: string;
   prompt?: string;
+  http?: string;
   input?: string;
   gates?: SubGateRef[];
   outputConfig: GateOutputConfig;
@@ -76,3 +77,5 @@ export interface GateScheduler {
   initialize(options: GateSchedulerOptions): void;
   insert(request: GateRequest): Promise<GateResult>;
 }
+
+export const VALID_DECISIONS = new Set<string>(['allow', 'deny', 'ask', 'defer']);
