@@ -54,6 +54,7 @@ export interface GateDefinition {
   command?: string;
   model?: string;
   prompt?: string;
+  http?: string;
   input?: string;
   gates?: SubGateRef[];
   outputConfig: GateOutputConfig;
