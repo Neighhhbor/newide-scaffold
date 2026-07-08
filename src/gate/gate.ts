@@ -77,3 +77,5 @@ export interface GateScheduler {
   initialize(options: GateSchedulerOptions): void;
   insert(request: GateRequest): Promise<GateResult>;
 }
+
+export const VALID_DECISIONS = new Set<string>(['allow', 'deny', 'ask', 'defer']);

@@ -1,5 +1,11 @@
 import { BaseGateRunner } from './runner';
-import type { GateRequest, GateResult, GateDefinition, GateDecision } from './gate';
+import {
+  type GateRequest,
+  type GateResult,
+  type GateDefinition,
+  type GateDecision,
+  VALID_DECISIONS,
+} from './gate';
 
 export class HttpRunner extends BaseGateRunner {
   constructor(
@@ -134,8 +140,6 @@ export class HttpRunner extends BaseGateRunner {
     return 'defer';
   }
 }
-
-const VALID_DECISIONS = new Set<string>(['allow', 'deny', 'ask', 'defer']);
 
 function isGateDecision(value: string): value is GateDecision {
   return VALID_DECISIONS.has(value);
