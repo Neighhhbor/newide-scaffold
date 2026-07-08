@@ -4,6 +4,7 @@
  * 管理 Agent 生命周期：createAgent、start/stop、竞标派单 submitTask。
  * 持有共享 MemoryRepository 与 BufferRepository，为每个 Agent 创建独立 AgentMemoryScope。
  * 支持通过 AgentManagerOptions.deps 注入 AgentRunDeps，替代默认 MVP 组合。
+ * 支持通过 AgentManagerOptions.tools 注入 AgentToolConfig，启用 tool-calling 模式。
  */
 import type { AgentHandle, CreateAgentSpec } from '../schemas';
 import type { BufferRepository } from '../ports/buffer-repository';
@@ -11,16 +12,20 @@ import type { MemoryRepository } from '../ports/memory-repository';
 import type { AgentTaskRequest } from '../agent-types';
 import type { MemoryCycleResult } from '../types';
 import type { AgentRunDeps } from './agent-run-deps';
+import type { AgentToolConfig } from './agent';
 import { createAgentMemoryScope } from '../adapters/agent-memory-scope';
+import { QueryMemoryTool } from './tools/query-memory-tool';
 import { Agent } from './agent';
 
 /**
  * AgentManager 构造选项
  *
  * - `deps`: 可选的自定义 AgentRunDeps，覆盖默认 MVP 依赖（如注入真实 Driver / LLM 实现）
+ * - `tools`: 可选的 tool-calling 配置，启用时 Agent 使用 LLM tool-calling 替代固定 pipeline
  */
 export interface AgentManagerOptions {
   deps?: AgentRunDeps;
+  tools?: AgentToolConfig;
 }
 
 /** submitTask 的返回：中标 Agent、竞标分数与记忆周期结果 */
@@ -91,6 +96,7 @@ export class AgentManager {
    *
    * - `AgentManager.create(repo, buf)` — 向后兼容，使用默认 MVP deps
    * - `AgentManager.create(repo, buf, { deps })` — 注入自定义 deps
+   * - `AgentManager.create(repo, buf, { tools })` — 启用 tool-calling 模式
    */
   static create(
     repository: MemoryRepository,
@@ -104,7 +110,16 @@ export class AgentManager {
     await this.repository.initializeAgent(spec);
     await this.bufferRepository.ensureAgent(spec.role_id);
     const memory = createAgentMemoryScope(this.repository, this.bufferRepository, spec.role_id);
-    const agent = new Agent(memory, this.options.deps);
+
+    // 工具模式：自动注入 QueryMemoryTool（需要 AgentMemoryScope，只能在这里创建）
+    const tools = this.options.tools
+      ? {
+          ...this.options.tools,
+          tools: [new QueryMemoryTool(memory), ...this.options.tools.tools],
+        }
+      : undefined;
+
+    const agent = new Agent(memory, this.options.deps, tools);
     this.agents.set(spec.role_id, agent);
     if (this.started) {
       agent.startLoop();
