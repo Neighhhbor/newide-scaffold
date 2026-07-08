@@ -69,6 +69,30 @@ export type {
   TaskInstructionPlanner,
 } from './runtime/agent-run-deps';
 
+// Tool-calling types
+export type {
+  Tool,
+  ToolDefinition,
+  ToolCall,
+  ToolCallMessage,
+  ToolCallResult,
+  ToolCallingClient,
+} from './runtime/tool';
+export { ToolRegistry } from './runtime/tool';
+
+// AgentToolConfig
+export type { AgentToolConfig } from './runtime/agent';
+
+// Tools
+export { QueryMemoryTool } from './runtime/tools/query-memory-tool';
+export type { QueryMemoryInput, QueryMemoryOutput } from './runtime/tools/query-memory-tool';
+export { InvokeDriverTool } from './runtime/tools/invoke-driver-tool';
+export type { DriverTask, DriverHandler } from './runtime/tools/invoke-driver-tool';
+
+// Production runtime bootstrap
+export { createAgentRuntime } from './runtime/create-agent-runtime';
+export type { AgentRuntimeConfig } from './runtime/create-agent-runtime';
+
 // 正式服务
 export { writePendingBuffer } from './services/buffer-writer';
 export {
