@@ -29,9 +29,19 @@ export { LlmExperienceExtractor } from './adapters/llm-experience-extractor';
 export { LlmTaskInstructionPlanner } from './adapters/llm-task-instruction-planner';
 export { LlmContextCleaner } from './adapters/context-cleaner';
 export { LlmSkillPromotion } from './adapters/llm-skill-promotion';
+export { LlmDriverResultMapper } from './adapters/llm-driver-result-mapper';
 export { MockLlmClient } from './adapters/mock-llm-client';
 export { DeepSeekLlmClient } from './adapters/deepseek-llm-client';
 export { RepositoryAgentBoardQuery } from './adapters/agent-board-query';
+export {
+  DriverAdapter,
+  createDriverInvoker,
+  serializeDriverContext,
+  mapRunResultToDriverReturn,
+  type DriverAdapterOptions,
+  type DriverContextSerializer,
+  type DriverResultMapper,
+} from './adapters/driver-adapter';
 
 // Ports — 公开接口类型
 export type { BufferRepository, SaveBufferResult } from './ports/buffer-repository';
