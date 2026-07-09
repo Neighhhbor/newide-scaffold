@@ -11,6 +11,7 @@
  */
 import type { LlmClient } from '../ports/llm-client';
 import type { AgentTaskRequest } from '../agent-types';
+import { PLANNER_SYSTEM_PROMPT } from '../prompts/planner';
 export class LlmTaskInstructionPlanner {
   constructor(private readonly llm: LlmClient) {}
 
@@ -20,18 +21,7 @@ export class LlmTaskInstructionPlanner {
         messages: [
           {
             role: 'system',
-            content: [
-              'You are a task instruction planner for an AI agent system.',
-              'Your job is to read the full task specification (spec) and produce a concise,',
-              'execution-oriented instruction for a downstream Driver component.',
-              '',
-              'Rules:',
-              '- Output plain text only (no JSON wrapping).',
-              '- The instruction should be a focused subset or refinement of the spec,',
-              '  optimized for execution rather than analysis.',
-              '- Keep it under 3 paragraphs.',
-              '- If the spec is already clear and actionable, you may repeat it verbatim.',
-            ].join('\n'),
+            content: PLANNER_SYSTEM_PROMPT,
           },
           {
             role: 'user',
