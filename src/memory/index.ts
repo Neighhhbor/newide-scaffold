@@ -8,6 +8,7 @@
 export * from './contract';
 export * from './types';
 export * as schemas from './schemas';
+export { QueryMemoryTool, SaveMemoryTool, createMemoryTools } from './litellm-memory-tools';
 export { MockMemoryProvider } from './mock-memory';
 export { RepositoryMemoryProvider } from './adapters/repository-memory-provider';
 export { InMemoryRepository } from './adapters/in-memory-repository';

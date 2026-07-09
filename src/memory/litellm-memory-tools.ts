@@ -1,29 +1,17 @@
 /**
  * ================================================
- * Built-in Memory Tools
+ * Built-in Memory Tools (LiteLLM-compatible)
  * ================================================
  * Pre-built tools for memory operations.
- * Extend BaseTool for type-safe, self-contained tool definitions.
+ * Extend BaseTool from litellm for type-safe, self-contained tool definitions.
+ *
+ * These live in the memory module (not litellm) because memory is a
+ * domain concept owned by the memory subsystem — litellm only provides
+ * the tool interface contract.
  */
 
-import { BaseTool, objectParam, stringParam, numberParam } from './tool-interface';
-
-/** Interface for memory storage (injected by scaffold) */
-export interface MemoryStore {
-  search(query: string, limit?: number): Promise<MemoryEntry[]>;
-  save(entry: MemoryEntry): Promise<void>;
-  get(id: string): Promise<MemoryEntry | null>;
-}
-
-export interface MemoryEntry {
-  id: string;
-  type: 'experience' | 'skill' | 'fact' | 'context';
-  content: string;
-  tags?: string[];
-  importance?: number;
-  timestamp?: string;
-  source?: string;
-}
+import { BaseTool, objectParam, stringParam, numberParam } from '../litellm/tools/tool-interface';
+import type { MemoryStore, MemoryEntry } from './types';
 
 /** Tool: Query memory store for relevant entries */
 export class QueryMemoryTool extends BaseTool {
