@@ -7,7 +7,7 @@
  */
 
 import { MethodRegistry } from './method-registry';
-import type { MethodHandler, MethodName, MethodContext, MethodResult } from './types';
+import type { MethodHandler, MethodName, MethodContext, MethodResult } from '../contract';
 
 export class MethodRouter {
   readonly registry = new MethodRegistry();

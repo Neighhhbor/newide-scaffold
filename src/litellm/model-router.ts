@@ -11,8 +11,50 @@ import type {
   ModelEntry,
   ModelSelectionStrategy,
   LiteLLMTaskConfig,
-} from './types';
-import { isProviderAvailable } from './model-preset';
+} from './contract';
+
+// ──────────────────────────────────────────────────────────
+// Provider Detection Utilities
+// ──────────────────────────────────────────────────────────
+
+const ENV_KEYS: Record<string, string> = {
+  openai: 'OPENAI_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY',
+  google: 'GOOGLE_API_KEY',
+  azure: 'AZURE_API_KEY',
+  ollama: 'OLLAMA_HOST',
+};
+
+/** Check which providers are available in environment */
+export function detectAvailableProviders(): string[] {
+  const available: string[] = [];
+  for (const [provider, envKey] of Object.entries(ENV_KEYS)) {
+    if (process.env[envKey]) {
+      available.push(provider);
+    }
+  }
+  return available;
+}
+
+/** Check if a specific provider is available */
+export function isProviderAvailable(provider: string): boolean {
+  const envKey = ENV_KEYS[provider.toLowerCase()];
+  if (!envKey) return false;
+  return !!process.env[envKey];
+}
+
+/**
+ * Auto-select models based on available API keys.
+ * Disabled entries for unavailable providers are filtered out.
+ */
+export function autoSelectModels(entries: ModelEntry[]): ModelEntry[] {
+  return entries
+    .filter((e) => {
+      if (e.provider === 'ollama') return true;
+      return isProviderAvailable(e.provider);
+    })
+    .map((e, i) => ({ ...e, order: i + 1 }));
+}
 
 export interface ModelSelection {
   /** Selected model entry */
@@ -38,7 +80,7 @@ export class ModelRouter {
   /** Select a model for the given task */
   select(task: LiteLLMTaskType, config: LiteLLMTaskConfig): ModelSelection {
     const strategy = config.strategy ?? 'order';
-    const candidates = getEnabledCandidates(config.models);
+    const candidates = getEnabledCandidates(config.models ?? []);
 
     if (candidates.length === 0) {
       throw new NoModelAvailableError(task, 'no enabled models');
@@ -67,14 +109,14 @@ export class ModelRouter {
     config: LiteLLMTaskConfig,
     attemptIndex: number,
   ): ModelSelection {
-    const candidates = getEnabledCandidates(config.models);
+    const candidates = getEnabledCandidates(config.models ?? []);
     if (attemptIndex >= candidates.length) {
       throw new NoModelAvailableError(task, `no fallback model at index ${attemptIndex}`);
     }
     const entry = candidates[attemptIndex]!;
     return {
       entry,
-      strategy: { type: 'explicit', model: entry.litellmModel },
+      strategy: { type: 'explicit', model: entry.model },
       index: attemptIndex,
     };
   }
@@ -138,11 +180,11 @@ export class ModelRouter {
   ): ModelSelection {
     // Heuristic: smaller context = faster; known fast models = faster
     const latencyScore = (m: ModelEntry): number => {
-      if (m.litellmModel.includes('flash-lite')) return 1;
-      if (m.litellmModel.includes('mini')) return 2;
-      if (m.litellmModel.includes('flash')) return 3;
-      if (m.litellmModel.includes('haiku')) return 4;
-      if (m.litellmModel.includes('sonnet')) return 5;
+      if (m.model.includes('flash-lite')) return 1;
+      if (m.model.includes('mini')) return 2;
+      if (m.model.includes('flash')) return 3;
+      if (m.model.includes('haiku')) return 4;
+      if (m.model.includes('sonnet')) return 5;
       return 10;
     };
     const sorted = [...candidates].sort((a, b) => latencyScore(a) - latencyScore(b));
@@ -158,7 +200,7 @@ export class ModelRouter {
     candidates: ModelEntry[],
     modelName: string,
   ): ModelSelection {
-    const idx = candidates.findIndex((m) => m.litellmModel === modelName);
+    const idx = candidates.findIndex((m) => m.model === modelName);
     if (idx === -1) {
       throw new NoModelAvailableError(task, `explicit model "${modelName}" not found`);
     }
