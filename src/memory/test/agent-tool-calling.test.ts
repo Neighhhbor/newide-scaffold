@@ -270,7 +270,9 @@ describe('Agent tool-calling mode', () => {
       source_driver: 'tool-agent',
     });
 
+    // executeTask 同步执行完成，返回完整 cycle
     expect(result.winner_role_id).toBe(role_id);
+    expect(result.status).toBe('completed');
     expect(result.cycle.buffer_snapshot.task_id).toBe('task_mgr_tc_001');
   });
 });

@@ -10,6 +10,7 @@ import type { AgentHandle, CreateAgentSpec } from '../schemas';
 import type { BufferRepository } from '../ports/buffer-repository';
 import type { MemoryRepository } from '../ports/memory-repository';
 import type { AgentTaskRequest } from '../agent-types';
+import type { AgentLoopTickResult } from '../agent-types';
 import type { MemoryCycleResult } from '../types';
 import type { AgentRunDeps } from './agent-run-deps';
 import type { AgentToolConfig } from './agent';
@@ -32,7 +33,10 @@ export interface AgentManagerOptions {
 export interface SubmitTaskResult {
   winner_role_id: string;
   scores: Record<string, number>;
+  /** 记忆周期结果（执行完成后的完整结果） */
   cycle: MemoryCycleResult;
+  /** 执行状态 */
+  status: 'completed';
 }
 
 /**
@@ -165,8 +169,32 @@ export class AgentManager {
       throw new Error(`Winner agent not found: ${winner_role_id}`);
     }
 
-    const cycle = await winner.runOnce(request);
-    return { winner_role_id, scores, cycle };
+    // executeTask 是 Agent 自驱执行入口：
+    // - Tool-calling 模式：内部逐 tick 循环（LLM 自主决策 → buffer 写入），不含提取/晋升
+    // - Pipeline 模式：降级为 runTaskMemoryCycle（向后兼容）
+    const cycle = await winner.executeTask(request);
+    return { winner_role_id, scores, cycle, status: 'completed' };
+  }
+
+  /**
+   * 驱动所有正在运行（running）的 Agent 走一步循环。
+   *
+   * 应在外部调度循环中定期调用，例如：
+   * ```ts
+   * while (agents.some(a => a.getState() === 'running')) {
+   *   await manager.tickAll();
+   *   await sleep(100);
+   * }
+   * ```
+   */
+  async tickAll(): Promise<Map<string, AgentLoopTickResult>> {
+    const results = new Map<string, AgentLoopTickResult>();
+    for (const [role_id, agent] of this.agents) {
+      if (agent.getState() === 'running') {
+        results.set(role_id, await agent.runLoopTick());
+      }
+    }
+    return results;
   }
 
   getAgent(role_id: string): Agent | undefined {

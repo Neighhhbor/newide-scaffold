@@ -12,10 +12,16 @@
  *    拥有 query_memory/invoke_driver 等工具，自主决策执行流程。
  *    Driver 作为插槽由外部注入，memory 模块不关心其内部实现。
  *
+ * ## 两种执行路径
+ *
+ * - `runOnce(task)` — 同步一次性执行（Pipeline / Tool-calling 均可），向后兼容
+ * - `assignTask(task)` + 多次 `runLoopTick()` — 异步逐 tick 执行（仅 Tool-calling 模式）
+ *
  * ## 向后兼容
  *
  * - `new Agent(memory)` 或 `new Agent(memory, deps)` → Pipeline 模式
  * - `new Agent(memory, deps, { llm, tools })` → Tool-calling 模式
+ * - `runOnce()` 在两种模式下均可用
  * - 所有现有代码和测试不受影响
  */
 import type { AgentHandle } from '../schemas';
@@ -28,6 +34,7 @@ import { defaultMvpAgentRunDeps } from '../mvp/default-agent-run-deps';
 import { ToolRegistry, type Tool, type ToolCallMessage, type ToolCallingClient } from './tool';
 import { createId, nowTimestamp } from '../../core';
 import { writePendingBuffer } from '../services/buffer-writer';
+import { buildAgentSystemPrompt } from '../prompts/agent-system-prompt';
 import type { DriverReturn } from '../schemas';
 
 // ──────────────────────────────────────────────
@@ -45,7 +52,7 @@ export interface AgentToolConfig {
   tools: Tool[];
   /** 顶层 Agent 的系统提示词 */
   systemPrompt?: string;
-  /** 单次 runOnce 最大 tool-calling 轮次（防死循环，默认 20） */
+  /** 单次任务最大 tool-calling 轮次（防死循环，默认 20） */
   maxToolCalls?: number;
 }
 
@@ -57,6 +64,18 @@ export class Agent {
   private state: AgentLoopState = 'idle';
   private readonly toolConfig: AgentToolConfig | undefined;
   private readonly toolRegistry: ToolRegistry | undefined;
+
+  // ── 持久循环状态（跨 tick 存活） ──
+  /** 当前处理的 task；null 表示空闲 */
+  private currentTask: AgentTaskRequest | null = null;
+  /** 跨 tick 累积的 tool-calling 对话消息 */
+  private loopMessages: ToolCallMessage[] | null = null;
+  /** 最后一次 invoke_driver 的返回（写入 buffer 时需要） */
+  private lastDriverReturn: DriverReturn | undefined;
+  /** 已执行轮次（防死循环） */
+  private loopRound: number = 0;
+  /** 任务完成后的 cycle 结果，供 runOnce 包装使用 */
+  private lastCycleResult: MemoryCycleResult | null = null;
 
   constructor(
     private readonly memory: AgentMemoryScope,
@@ -81,11 +100,16 @@ export class Agent {
     return this.memory.getAgent();
   }
 
+  /** 是否有待处理的任务 */
+  hasPendingTask(): boolean {
+    return this.currentTask !== null;
+  }
+
   /**
-   * 目标态持久 run loop 入口占位。
+   * 目标态持久 run loop 入口。
    *
    * 当前不会启动后台 worker 或任务队列，只把 Agent 放入 sleeping 状态，等待
-   * AgentManager.submitTask 通过 MVP runOnce 路径显式派发任务。
+   * AgentManager.submitTask 通过 assignTask 显式派发任务。
    */
   startLoop(): void {
     if (this.state !== 'stopped') {
@@ -101,27 +125,170 @@ export class Agent {
 
   stop(): void {
     this.state = 'stopped';
+    this.clearLoopState();
   }
 
   async bid(_task: AgentTaskRequest): Promise<number> {
     return 0.5;
   }
 
+  // ────────────────────────────────────────────
+  // 持久循环（逐 tick）
+  // ────────────────────────────────────────────
+
   /**
-   * 目标态持久 run loop 的单步执行占位。
+   * 持久 run loop 的单步执行。
+   *
+   * 只有 Tool-calling 模式支持逐 tick 循环；Pipeline 模式应使用 runOnce。
+   * 每次 tick 做一次 LLM 调用 → 解析回复 → 执行工具 → 积累 messages。
+   *
+   * 调用前必须先通过 assignTask 设置任务。
    */
   async runLoopTick(): Promise<AgentLoopTickResult> {
-    return {
-      status: 'skipped',
-      reason:
-        'Persistent agent run loop is not implemented yet; runOnce is the MVP synchronous path.',
-    };
+    // 没有任务 → idle
+    if (!this.currentTask) {
+      return { status: 'idle', reason: 'No pending task.' };
+    }
+
+    // 仅 tool-calling 模式支持逐 tick 循环
+    if (!this.toolConfig || !this.toolRegistry || !this.loopMessages) {
+      return {
+        status: 'skipped',
+        reason: 'Pipeline mode does not support tick-by-tick loop; use runOnce instead.',
+      };
+    }
+
+    // 检查最大轮次
+    const maxCalls = this.toolConfig.maxToolCalls ?? 20;
+    if (this.loopRound >= maxCalls) {
+      await this.finalizeLoop();
+      return {
+        status: 'completed',
+        reason: `Max tool calls (${maxCalls}) reached.`,
+      };
+    }
+
+    // 单步：一次 LLM 调用
+    const response = await this.toolConfig.llm.completeWithTools({
+      messages: this.loopMessages,
+      tools: this.toolRegistry.toToolDefinitions(),
+      tool_choice: 'auto',
+    });
+
+    this.loopRound++;
+
+    if (response.tool_calls && response.tool_calls.length > 0) {
+      // LLM 调用了工具 → 执行并将结果加入 messages
+      const assistantMsg: ToolCallMessage = {
+        role: 'assistant',
+        content: response.content,
+        tool_calls: response.tool_calls,
+      };
+      this.loopMessages.push(assistantMsg);
+
+      for (const toolCall of response.tool_calls) {
+        const tool = this.toolRegistry.get(toolCall.function.name);
+        if (!tool) {
+          this.loopMessages.push({
+            role: 'tool',
+            content: `Error: unknown tool "${toolCall.function.name}"`,
+            tool_call_id: toolCall.id,
+          });
+          continue;
+        }
+
+        try {
+          const args = JSON.parse(toolCall.function.arguments);
+          const result = await tool.execute(args);
+
+          // 记录最后一次 invoke_driver 的返回
+          if (tool.name === 'invoke_driver') {
+            this.lastDriverReturn = result as DriverReturn;
+          }
+
+          const content =
+            typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result);
+
+          this.loopMessages.push({
+            role: 'tool',
+            content,
+            tool_call_id: toolCall.id,
+          });
+        } catch (error) {
+          this.loopMessages.push({
+            role: 'tool',
+            content: `Error executing ${tool.name}: ${error instanceof Error ? error.message : String(error)}`,
+            tool_call_id: toolCall.id,
+          });
+        }
+      }
+    } else {
+      // LLM 返回文本（没有 tool_call）
+      this.loopMessages.push({
+        role: 'assistant',
+        content: response.content,
+      });
+
+      // 检查 LLM 是否表示任务完成
+      if (response.content && this.isTaskComplete(response.content)) {
+        await this.finalizeLoop();
+        return {
+          status: 'completed',
+          reason: 'Agent reported task complete.',
+        };
+      }
+    }
+
+    return { status: 'running', reason: `Round ${this.loopRound} completed.` };
+  }
+
+  /**
+   * 将任务派发给 Agent，由 Agent 自行通过 runLoopTick 逐 tick 处理。
+   *
+   * 仅 Tool-calling 模式支持；Pipeline 模式仍使用 runOnce。
+   *
+   * @throws 如果 Agent 已有正在运行的任务
+   */
+  assignTask(task: AgentTaskRequest): void {
+    if (this.currentTask) {
+      throw new Error(
+        `Agent ${this.memory.role_id} already has a running task (${this.currentTask.task_id}). ` +
+          'Stop or wait for completion before assigning a new task.',
+      );
+    }
+
+    this.currentTask = task;
+    this.state = 'running';
+    this.lastDriverReturn = undefined;
+    this.loopRound = 0;
+    this.lastCycleResult = null;
+
+    if (this.toolConfig && this.toolRegistry) {
+      // Tool-calling 模式：构建初始 messages
+      const systemPromptContent =
+        this.toolConfig.systemPrompt ??
+        buildAgentSystemPrompt(this.memory, this.toolRegistry.toToolDefinitions());
+
+      this.loopMessages = [
+        {
+          role: 'system',
+          content: systemPromptContent,
+        },
+        {
+          role: 'user',
+          content: `Task: ${task.spec}`,
+        },
+      ];
+    } else {
+      // Pipeline 模式不使用 loopMessages
+      this.loopMessages = null;
+    }
   }
 
   /**
    * 单轮任务同步执行入口。
    *
-   * - 配置了 toolConfig 时 → Tool-calling 模式（LLM 自主决策）
+   * - 配置了 toolConfig 时 → Tool-calling 模式（LLM 自主决策，内部逐 tick 循环）
    * - 未配置时 → Pipeline 模式（固定流程，向后兼容）
    */
   async runOnce(task: AgentTaskRequest): Promise<MemoryCycleResult> {
@@ -136,126 +303,101 @@ export class Agent {
     }
   }
 
+  /**
+   * Agent 自驱执行入口（区别于 runOnce —— runOnce 的 Pipeline 路径把提取/
+   * 晋升等不属于 Agent 职责的流程也集成了进来）。
+   *
+   * - **Tool-calling 模式**：Agent 内部逐 tick 循环（LLM 自主决策 → 工具调用 →
+   *   buffer 写入），**不含经验提取和技能晋升**（由离线 Processor 处理）
+   * - **Pipeline 模式**：降级为 runTaskMemoryCycle（向后兼容）
+   *
+   * Tool-calling 路径的流程：
+   * ```
+   * assignTask → [runLoopTick × N] → writeToBuffer → 完成
+   * ```
+   */
+  async executeTask(task: AgentTaskRequest): Promise<MemoryCycleResult> {
+    this.state = 'running';
+    try {
+      if (this.toolConfig && this.toolRegistry) {
+        this.assignTask(task);
+
+        while (this.state === 'running') {
+          const tick = await this.runLoopTick();
+          if (tick.status === 'completed' || tick.status === 'idle') {
+            break;
+          }
+        }
+
+        const result = this.lastCycleResult;
+        if (!result) {
+          await this.finalizeLoop();
+          return this.lastCycleResult!;
+        }
+        return result;
+      }
+
+      // Pipeline 降级
+      return await runTaskMemoryCycle(this.memory, task, this.deps);
+    } finally {
+      this.state = 'sleeping';
+    }
+  }
+
   // ────────────────────────────────────────────
-  // Tool-calling 模式
+  // 内部方法
   // ────────────────────────────────────────────
 
   /**
-   * LLM tool-calling 执行主循环。
+   * 完成当前任务：写入 buffer → 清理状态。
+   */
+  private async finalizeLoop(): Promise<void> {
+    if (!this.currentTask) return;
+
+    const result = await this.writeToBuffer(
+      this.currentTask,
+      this.currentTask.task_id ?? createId('task'),
+      this.currentTask.call_id ?? createId('call'),
+      this.lastDriverReturn,
+    );
+
+    this.lastCycleResult = result;
+    this.clearLoopState();
+    this.state = 'sleeping';
+  }
+
+  /**
+   * 清理持久循环状态（不改变 state）。
+   */
+  private clearLoopState(): void {
+    this.currentTask = null;
+    this.loopMessages = null;
+    this.lastDriverReturn = undefined;
+    this.loopRound = 0;
+  }
+
+  /**
+   * LLM tool-calling 同步执行包装。
    *
-   * 流程：
-   * 1. 构建 system prompt（含工具描述）+ user message（含 task spec）
-   * 2. LLM 自主 tool-calling 循环：
-   *    a. LLM 返回 tool_call → 执行对应工具 → 结果加入 messages → 继续
-   *    b. LLM 返回文本 → 加入 messages → 继续（LLM 可能在思考）
-   *    c. 达到 maxToolCalls 或 LLM 输出完成信号 → 退出
-   * 3. 后处理：从最终结果构建 BufferSnapshot → 提取经验 → 晋升技能
+   * 通过 assignTask + runLoopTick 循环实现，与持久循环共享同一套逻辑。
    */
   private async runOnceWithTools(task: AgentTaskRequest): Promise<MemoryCycleResult> {
-    const config = this.toolConfig!;
-    const registry = this.toolRegistry!;
-    const task_id = task.task_id ?? createId('task');
-    const call_id = task.call_id ?? createId('call');
+    this.assignTask(task);
 
-    // 1. 构建初始 messages
-    const messages: ToolCallMessage[] = [
-      {
-        role: 'system',
-        content:
-          config.systemPrompt ??
-          [
-            'You are an AI agent with access to tools. Your job is to complete the task.',
-            '',
-            'Available tools:',
-            ...registry
-              .toToolDefinitions()
-              .map((def) => `- ${def.function.name}: ${def.function.description}`),
-            '',
-            'Rules:',
-            '- Use query_memory to check relevant past experiences and skills before acting.',
-            '- Use invoke_driver to dispatch concrete sub-tasks to the Driver Agent.',
-            '- Keep track of what the driver returns and use it to inform next steps.',
-            '- When the task is complete, summarize the result clearly.',
-          ].join('\n'),
-      },
-      {
-        role: 'user',
-        content: `Task: ${task.spec}`,
-      },
-    ];
-
-    // 2. Tool-calling 循环
-    const maxCalls = config.maxToolCalls ?? 20;
-    let lastDriverReturn: DriverReturn | undefined;
-
-    for (let round = 0; round < maxCalls; round++) {
-      const response = await config.llm.completeWithTools({
-        messages,
-        tools: registry.toToolDefinitions(),
-        tool_choice: 'auto',
-      });
-
-      if (response.tool_calls && response.tool_calls.length > 0) {
-        // 2a. LLM 调用了工具 → 执行
-        const assistantMsg: ToolCallMessage = {
-          role: 'assistant',
-          content: response.content,
-          tool_calls: response.tool_calls,
-        };
-        messages.push(assistantMsg);
-
-        for (const toolCall of response.tool_calls) {
-          const tool = registry.get(toolCall.function.name);
-          if (!tool) {
-            messages.push({
-              role: 'tool',
-              content: `Error: unknown tool "${toolCall.function.name}"`,
-              tool_call_id: toolCall.id,
-            });
-            continue;
-          }
-
-          try {
-            const args = JSON.parse(toolCall.function.arguments);
-            const result = await tool.execute(args);
-
-            // 记录最后一次 invoke_driver 的返回
-            if (tool.name === 'invoke_driver') {
-              lastDriverReturn = result as DriverReturn;
-            }
-
-            const content =
-              typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result);
-
-            messages.push({
-              role: 'tool',
-              content,
-              tool_call_id: toolCall.id,
-            });
-          } catch (error) {
-            messages.push({
-              role: 'tool',
-              content: `Error executing ${tool.name}: ${error instanceof Error ? error.message : String(error)}`,
-              tool_call_id: toolCall.id,
-            });
-          }
-        }
-      } else {
-        // 2b. LLM 返回文本（没有 tool_call）
-        messages.push({
-          role: 'assistant',
-          content: response.content,
-        });
-
-        // 检查 LLM 是否表示任务完成
-        if (response.content && this.isTaskComplete(response.content)) {
-          break;
-        }
+    while (this.state === 'running') {
+      const tick = await this.runLoopTick();
+      if (tick.status === 'completed' || tick.status === 'idle') {
+        break;
       }
     }
 
-    // 3. 写入 pending buffer（仅存储，不做提取/晋升）
-    return this.writeToBuffer(task, task_id, call_id, lastDriverReturn);
+    const result = this.lastCycleResult;
+    if (!result) {
+      // 兜底：正常情况下不应进入此分支
+      await this.finalizeLoop();
+      return this.lastCycleResult!;
+    }
+    return result;
   }
 
   /**

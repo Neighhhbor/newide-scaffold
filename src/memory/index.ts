@@ -31,6 +31,9 @@ export { LlmSkillPromotion } from './adapters/llm-skill-promotion';
 export { MockLlmClient } from './adapters/mock-llm-client';
 export { DeepSeekLlmClient } from './adapters/deepseek-llm-client';
 export { RepositoryAgentBoardQuery } from './adapters/agent-board-query';
+export { BatchBufferTriggerPolicy } from './adapters/batch-buffer-trigger-policy';
+export { AlwaysExtractPolicy } from './adapters/always-extract-policy';
+export { DefaultPromotionTriggerPolicy } from './adapters/default-promotion-trigger-policy';
 
 // Ports — 公开接口类型
 export type { BufferRepository, SaveBufferResult } from './ports/buffer-repository';
@@ -42,6 +45,7 @@ export type { LlmClient, LlmMessage } from './ports/llm-client';
 export type { SkillMarketPort, SkillMarketSearchResult } from './ports/skill-market-port';
 export type { AgentContextCleaner, AgentContextCleanInput } from './ports/agent-context-cleaner';
 export type { BufferTriggerPolicy } from './ports/buffer-trigger-policy';
+export type { PromotionTriggerPolicy } from './ports/promotion-trigger-policy';
 export type {
   AgentBoardQuery,
   AgentBoardListItem,
@@ -93,6 +97,9 @@ export type { DriverTask, DriverHandler } from './runtime/tools/invoke-driver-to
 export { createAgentRuntime } from './runtime/create-agent-runtime';
 export type { AgentRuntimeConfig } from './runtime/create-agent-runtime';
 
+// Prompts
+export { buildAgentSystemPrompt } from './prompts/agent-system-prompt';
+
 // 正式服务
 export { writePendingBuffer } from './services/buffer-writer';
 export {
@@ -114,6 +121,10 @@ export {
   processPendingBuffer,
   runTaskMemoryCycle,
 } from './services/memory-cycle';
+
+// BufferProcessor 运行时
+export { ExperienceExtractorProcessor } from './runtime/experience-extractor-processor';
+export { SkillPromotionProcessor } from './runtime/skill-promotion-processor';
 
 // Agent 运行时
 export { Agent } from './runtime/agent';

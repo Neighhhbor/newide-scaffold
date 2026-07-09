@@ -18,6 +18,7 @@ import type { AgentTaskRequest } from '../agent-types';
 import type { PromotionOutcome } from '../types';
 import type { AgentMemoryScope } from '../ports/agent-memory-scope';
 import { ruleBasedSkillPromotion } from '../services/skill-promotion';
+import { PROMOTER_SYSTEM_PROMPT } from '../prompts/skill-promotion';
 
 const PROMOTION_CONFIDENCE_THRESHOLD = 0.95;
 
@@ -72,21 +73,7 @@ Tags: ${candidate.tags.join(', ')}`);
   return sections.join('\n\n');
 }
 
-const SYSTEM_PROMPT = `You are a skill refinement specialist. Your job is to promote a verified experience into a reusable, generalized skill.
-
-The experience represents a lesson learned from a concrete task. Your job is to generalize it so it becomes applicable beyond that single task.
-
-Requirements:
-1. description — a concise, reusable skill name (one line, actionable)
-2. content — structured skill description covering: when to use, steps, context, and why it works
-3. tags — expand from task-level tags to more general classification tags
-
-Output JSON only:
-{
-  "description": "Reusable skill name",
-  "content": "Structured skill description",
-  "tags": ["generalized", "tags"]
-}`;
+// Prompt 已移至 prompts/skill-promotion.ts
 
 // ═══════════════════════════════════════════
 //  Main promoter
@@ -114,7 +101,7 @@ export class LlmSkillPromotion {
 
       const raw = await this.llm.complete({
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: PROMOTER_SYSTEM_PROMPT },
           { role: 'user', content: userPrompt },
         ],
         responseFormat: { type: 'json_object' },
