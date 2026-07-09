@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MethodRegistry, BaseMethod } from '../../src/litellm/contract';
-import type { MethodContext, MethodResult } from '../../src/litellm/contract';
+import type { MethodContext, MethodResult } from '../../src/litellm/types';
 
 class MockMethod extends BaseMethod {
   readonly name = 'mock_method';

@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ModelConfigManager } from '../../src/litellm/model-config';
-import type { LiteLLMTaskConfig, ModelEntry } from '../../src/litellm/contract';
+import type { LiteLLMTaskConfig, ModelEntry } from '../../src/litellm/types';
 
 const mockModels: ModelEntry[] = [
-  { model: 'openai/gpt-4o-mini', provider: 'openai', order: 1 },
-  { model: 'anthropic/claude-haiku', provider: 'anthropic', order: 2 },
+  { litellmModel: 'openai/gpt-4o-mini', provider: 'openai', order: 1 },
+  { litellmModel: 'anthropic/claude-haiku', provider: 'anthropic', order: 2 },
 ];
 
 const mockConfig: LiteLLMTaskConfig = {
@@ -90,7 +90,7 @@ describe('ModelConfigManager', () => {
   it('should update model entries', () => {
     manager.register(mockConfig);
     const newModels: ModelEntry[] = [
-      { model: 'google/gemini-flash', provider: 'google', order: 1 },
+      { litellmModel: 'google/gemini-flash', provider: 'google', order: 1 },
     ];
     expect(manager.setModels('memory-compact', newModels)).toBe(true);
     expect(manager.get('memory-compact')?.models).toEqual(newModels);

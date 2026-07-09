@@ -1,7 +1,0 @@
-# Global defaults — inherited by all tasks unless overridden.
-
-defaults:
-  timeoutMs: 30000
-  maxRetries: 3
-  temperature: 0.3
-  maxTokens: 2000

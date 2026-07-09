@@ -8,13 +8,11 @@
 
 import { ModelConfigManager } from './model-config';
 import { ModelRouter, type ModelSelection } from './model-router';
-import type { LiteLLMTaskType, LiteLLMTaskConfig, ModelEntry } from './contract';
+import type { LiteLLMTaskType, LiteLLMTaskConfig, ModelEntry } from './types';
 
 export interface ResolvedModel {
-  /** Provider name: "openai", "anthropic", "google" */
-  provider: string;
-  /** Model identifier: "gpt-4o-mini", "claude-sonnet-4-20250514" */
-  model: string;
+  /** The LiteLLM model identifier to send in API requests */
+  litellmModel: string;
   /** Resolved timeout for this task */
   timeoutMs: number;
   /** Resolved max retries for this task */
@@ -56,8 +54,7 @@ export class ModelPool {
     const selection = this.router.select(task, cfg);
 
     return {
-      provider: selection.entry.provider,
-      model: selection.entry.model,
+      litellmModel: selection.entry.litellmModel,
       timeoutMs: cfg.timeoutMs ?? this.globalDefaults.defaultTimeoutMs,
       maxRetries: cfg.maxRetries ?? this.globalDefaults.defaultMaxRetries,
       temperature: cfg.temperature ?? this.globalDefaults.defaultTemperature,
@@ -76,8 +73,7 @@ export class ModelPool {
     const selection = this.router.selectFallback(task, cfg, attemptIndex);
 
     return {
-      provider: selection.entry.provider,
-      model: selection.entry.model,
+      litellmModel: selection.entry.litellmModel,
       timeoutMs: cfg.timeoutMs ?? this.globalDefaults.defaultTimeoutMs,
       maxRetries: cfg.maxRetries ?? this.globalDefaults.defaultMaxRetries,
       temperature: cfg.temperature ?? this.globalDefaults.defaultTemperature,
@@ -95,7 +91,7 @@ export class ModelPool {
   getAvailableModels(task: LiteLLMTaskType): ModelEntry[] {
     const cfg = this.config.get(task);
     if (!cfg) return [];
-    return (cfg.models ?? []).filter((m) => m.enabled !== false);
+    return cfg.models.filter((m) => m.enabled !== false);
   }
 
   /** Register new task configuration (fluent API) */

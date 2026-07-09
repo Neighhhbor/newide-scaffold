@@ -1,6 +1,0 @@
-tasks:
-  extract-entities:
-    profile: balanced
-    timeoutMs: 20000
-    maxRetries: 3
-    temperature: 0.1

@@ -6,8 +6,8 @@
  * Supports both BaseTool instances and ad-hoc tool definitions.
  */
 
-import type { Tool, ToolHandler } from '../contract';
-import type { BaseTool } from './tool-interface';
+import type { Tool, ToolHandler } from './types';
+import type { BaseTool} from './tool-interface';
 import { createTool } from './tool-interface';
 
 export class ToolRegistry {

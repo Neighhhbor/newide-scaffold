@@ -1,7 +1,0 @@
-tasks:
-  classify-intent:
-    profile: cheap
-    timeoutMs: 8000
-    maxRetries: 2
-    temperature: 0.1
-    maxTokens: 500

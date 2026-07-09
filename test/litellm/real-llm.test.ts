@@ -4,7 +4,7 @@
  * ## Setup
  * 1. Fill in LITELLM_BASE_URL and LITELLM_API_KEY below (or set env vars).
  * 2. Make sure your LiteLLM proxy is running and has at least one model
- *    a configured model (e.g. openai/gpt-4o-mini).
+ *    from the QUICK_CHEAP_MODELS preset (e.g. openai/gpt-4o-mini).
  * 3. Run:
  *      pnpm vitest run test/litellm/real-llm.test.ts
  *
@@ -30,7 +30,8 @@ describe('Real LLM calls (manual)', () => {
 
   beforeAll(() => {
     client = new LiteLLMClient({ baseUrl: BASE_URL, apiKey: API_KEY });
-    client.loadConfig(); // reads src/litellm/config/
+    client.loadConfig(); // reads src/litellm/litellm-config.yaml
+    client.enableConsoleAudit();
   });
 
   // ── 1. Basic completion ─────────────────────────────────
