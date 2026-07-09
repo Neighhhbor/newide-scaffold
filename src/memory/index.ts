@@ -30,6 +30,8 @@ export { LlmContextCleaner } from './adapters/context-cleaner';
 export { LlmSkillPromotion } from './adapters/llm-skill-promotion';
 export { MockLlmClient } from './adapters/mock-llm-client';
 export { DeepSeekLlmClient } from './adapters/deepseek-llm-client';
+export { DeepSeekToolCallingClient } from './adapters/deepseek-tool-calling-client';
+export type { DeepSeekToolCallingClientOptions } from './adapters/deepseek-tool-calling-client';
 export { RepositoryAgentBoardQuery } from './adapters/agent-board-query';
 export { BatchBufferTriggerPolicy } from './adapters/batch-buffer-trigger-policy';
 export { AlwaysExtractPolicy } from './adapters/always-extract-policy';
