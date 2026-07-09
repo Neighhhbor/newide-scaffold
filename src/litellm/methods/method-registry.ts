@@ -6,7 +6,7 @@
  * Methods are registered by name and can be looked up at runtime.
  */
 
-import type { MethodHandler, MethodName } from './types';
+import type { MethodHandler, MethodName } from '../contract';
 
 export class MethodRegistry {
   private readonly methods = new Map<MethodName, MethodHandler>();

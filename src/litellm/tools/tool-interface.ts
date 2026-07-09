@@ -6,7 +6,7 @@
  * Each tool is self-contained with schema + handler.
  */
 
-import type { Tool, ToolHandler } from './types';
+import type { Tool, ToolHandler } from '../contract';
 
 /** A tool that can be registered and invoked */
 export abstract class BaseTool {
