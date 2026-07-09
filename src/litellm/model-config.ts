@@ -11,7 +11,7 @@ import type {
   LiteLLMTaskType,
   ModelEntry,
   ModelSelectionStrategy,
-} from './types';
+} from './contract';
 
 export class ModelConfigManager {
   private readonly configs = new Map<LiteLLMTaskType, LiteLLMTaskConfig>();
