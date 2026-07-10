@@ -115,4 +115,8 @@ export {
 // MVP mock（可整包移除）
 export { defaultMvpAgentRunDeps } from './mvp/default-agent-run-deps';
 export { createDefaultLlmAgentRunDeps } from './mvp/default-llm-agent-run-deps';
+export {
+  createDriverAdapterDeps,
+  type DriverAdapterDepsOptions,
+} from './mvp/default-driver-adapter-deps';
 export { MockExperienceExtractor } from './mvp/adapters/mock-experience-extractor';
