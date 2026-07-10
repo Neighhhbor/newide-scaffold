@@ -109,11 +109,11 @@ describe('ExperienceExtractorProcessor', () => {
       const results = await processor.extractAll(memory);
 
       expect(results).toHaveLength(2);
-      expect(results[0].extraction.experiences).toHaveLength(1);
-      expect(results[1].extraction.experiences).toHaveLength(1);
+      expect(results[0]!.extraction.experiences).toHaveLength(1);
+      expect(results[1]!.extraction.experiences).toHaveLength(1);
       // 晋升被跳过
-      expect(results[0].promotion.check.eligible).toBe(false);
-      expect(results[0].promotion.check.reasons).toContain(
+      expect(results[0]!.promotion.check.eligible).toBe(false);
+      expect(results[0]!.promotion.check.reasons).toContain(
         'Promotion deferred to SkillPromotionProcessor',
       );
 

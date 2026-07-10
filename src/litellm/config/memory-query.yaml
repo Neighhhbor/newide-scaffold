@@ -1,0 +1,6 @@
+tasks:
+  memory-query:
+    profile: cheap
+    timeoutMs: 60000
+    maxRetries: 2
+    temperature: 0.1
