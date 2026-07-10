@@ -49,10 +49,12 @@ export type AgentLoopState = 'idle' | 'sleeping' | 'running' | 'stopped';
 /**
  * 目标态持久 Agent run loop 的单步执行结果。
  *
- * 当前实现只用于占位，声明 runOnce 仍是 MVP 同步单轮路径；后续接入任务队列、
- * 异步 buffer processor 或事件调度时，可扩展这个结果结构。
+ * - idle      : Agent 没有待处理的任务，保持 sleeping 状态
+ * - skipped   : 当前不支持逐 tick 模式（如 Pipeline 模式），应使用 runOnce
+ * - running   : 本轮 tick 执行完毕，仍有工作未完成，可继续 tick
+ * - completed : 任务已完成，Agent 已写 buffer 并回到 sleeping
  */
 export interface AgentLoopTickResult {
-  status: 'idle' | 'skipped';
+  status: 'idle' | 'skipped' | 'running' | 'completed';
   reason: string;
 }
