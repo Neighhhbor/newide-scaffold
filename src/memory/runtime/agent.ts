@@ -24,18 +24,20 @@
  * - `runOnce()` 在两种模式下均可用
  * - 所有现有代码和测试不受影响
  */
-import type { AgentHandle } from '../schemas';
+import type { AgentHandle, DriverReturn, AgentStatus } from '../schemas';
 import type { AgentMemoryScope } from '../ports/agent-memory-scope';
 import type { AgentLoopState, AgentLoopTickResult, AgentTaskRequest } from '../agent-types';
 import type { MemoryCycleResult } from '../types';
 import type { AgentRunDeps } from './agent-run-deps';
+import type { CompetitionClaimEvaluator } from '../ports/competition-claim-evaluator';
+import type { AgentCompetitionClaim } from '../competition-types';
+import { createMockCompetitionClaimEvaluator } from '../adapters/mock-competition-claim-evaluator';
 import { runTaskMemoryCycle } from '../services/memory-cycle';
 import { defaultMvpAgentRunDeps } from '../mvp/default-agent-run-deps';
 import { ToolRegistry, type Tool, type ToolCallMessage, type ToolCallingClient } from './tool';
 import { createId, nowTimestamp } from '../../core';
 import { writePendingBuffer } from '../services/buffer-writer';
 import { buildAgentSystemPrompt } from '../prompts/agent-system-prompt';
-import type { DriverReturn } from '../schemas';
 
 // ──────────────────────────────────────────────
 // Tool-calling 配置
@@ -64,6 +66,7 @@ export class Agent {
   private state: AgentLoopState = 'idle';
   private readonly toolConfig: AgentToolConfig | undefined;
   private readonly toolRegistry: ToolRegistry | undefined;
+  private readonly evaluator: CompetitionClaimEvaluator;
 
   // ── 持久循环状态（跨 tick 存活） ──
   /** 当前处理的 task；null 表示空闲 */
@@ -81,11 +84,13 @@ export class Agent {
     private readonly memory: AgentMemoryScope,
     private readonly deps: AgentRunDeps = defaultMvpAgentRunDeps,
     toolConfig?: AgentToolConfig,
+    evaluator?: CompetitionClaimEvaluator,
   ) {
     this.toolConfig = toolConfig;
     if (toolConfig) {
       this.toolRegistry = new ToolRegistry(toolConfig.tools);
     }
+    this.evaluator = evaluator ?? createMockCompetitionClaimEvaluator('participate');
   }
 
   get role_id(): string {
@@ -128,6 +133,93 @@ export class Agent {
     this.clearLoopState();
   }
 
+  /**
+   * 根据任务机会生成参选声明。
+   *
+   * 流程：
+   * 1. 检查 Agent 可用状态（running/draining/retired → unavailable）
+   * 2. 检索 Persona、Skills、Experiences
+   * 3. 调用 CompetitionClaimEvaluator
+   * 4. 返回结构化声明
+   *
+   * 约束：
+   * - 不写 Buffer、不创建 Experience、不进入任务执行状态
+   * - 不改变 Agent 的 state（保持当前 idle/sleeping 状态）
+   */
+  async createCompetitionClaim(task: AgentTaskRequest): Promise<AgentCompetitionClaim> {
+    const role_id = this.memory.role_id;
+    const agentHandle = await this.memory.getAgent();
+    const agent_status: AgentStatus = agentHandle.status;
+    const loop_state = this.state;
+    const now = nowTimestamp();
+
+    // 不可用状态 → 直接返回 unavailable
+    if (
+      agent_status === 'draining' ||
+      agent_status === 'retired' ||
+      loop_state === 'running' ||
+      loop_state === 'stopped'
+    ) {
+      return {
+        role_id,
+        decision: 'unavailable',
+        confidence: null,
+        rationale: `Agent is currently ${agent_status === 'draining' || agent_status === 'retired' ? agent_status : loop_state}.`,
+        evidence: {
+          persona_version: 0,
+          persona_summary: '',
+          skill_ids: [],
+          experience_ids: [],
+        },
+        risks: [],
+        availability: { agent_status, loop_state: this.state },
+        generated_at: now,
+      };
+    }
+
+    try {
+      // 检索相关记忆
+      const persona = await this.memory.getPersona();
+      const skills = await this.memory.listSkills();
+      const experiences = await this.memory.listExperiences();
+
+      // 调用 evaluator 生成声明内容
+      const content = await this.evaluator.evaluate({
+        task,
+        persona,
+        relevant_skills: skills,
+        relevant_experiences: experiences,
+      });
+
+      return {
+        role_id,
+        ...content,
+        availability: { agent_status, loop_state: this.state },
+        generated_at: now,
+      };
+    } catch (err) {
+      return {
+        role_id,
+        decision: 'error',
+        confidence: null,
+        rationale: `Evaluation error: ${err instanceof Error ? err.message : String(err)}`,
+        evidence: {
+          persona_version: 0,
+          persona_summary: '',
+          skill_ids: [],
+          experience_ids: [],
+        },
+        risks: [],
+        availability: { agent_status, loop_state: this.state },
+        generated_at: now,
+      };
+    }
+  }
+
+  /**
+   * @deprecated 请使用 createCompetitionClaim() 替代。
+   * 旧竞标接口，始终返回 0.5（向后兼容占位）。
+   */
   async bid(_task: AgentTaskRequest): Promise<number> {
     return 0.5;
   }

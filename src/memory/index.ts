@@ -134,6 +134,7 @@ export {
   AgentManager,
   type AgentManagerOptions,
   type SubmitTaskResult,
+  type DispatchTaskResult,
   type MemoryTaskProjection,
   toMemoryTaskProjection,
 } from './runtime/agent-manager';
@@ -142,3 +143,14 @@ export {
 export { defaultMvpAgentRunDeps } from './mvp/default-agent-run-deps';
 export { createDefaultLlmAgentRunDeps } from './mvp/default-llm-agent-run-deps';
 export { MockExperienceExtractor } from './mvp/adapters/mock-experience-extractor';
+
+// Competition Claim
+export type {
+  CompetitionDecision,
+  AgentCompetitionClaimContent,
+  AgentCompetitionClaim,
+  CompetitionClaimBatch,
+  CollectCompetitionClaimsOptions,
+} from './competition-types';
+export type { CompetitionClaimEvaluator } from './ports/competition-claim-evaluator';
+export { createMockCompetitionClaimEvaluator } from './adapters/mock-competition-claim-evaluator';

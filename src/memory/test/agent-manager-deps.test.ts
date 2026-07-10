@@ -156,8 +156,7 @@ describe('AgentManager deps injection', () => {
 
     // 基本字段
     expect(projection.task_id).toBe('task_proj_001');
-    expect(projection.winner_role_id).toBe('role_proj_default');
-    expect(projection.scores).toEqual({ role_proj_default: 0.5 });
+    expect(projection.role_id).toBe('role_proj_default');
 
     // driver_summary 来自 buffer_snapshot.driver_return.summary
     expect(projection.driver_summary).toBeTruthy();
@@ -270,7 +269,7 @@ describe('AgentManager deps injection', () => {
     const projection: MemoryTaskProjection = toMemoryTaskProjection(result);
 
     expect(projection.task_id).toBe('task_proj_promo_001');
-    expect(projection.winner_role_id).toBe(role_id);
+    expect(projection.role_id).toBe(role_id);
 
     // 晋升分支
     expect(projection.extraction.experiences_created).toBe(1);
