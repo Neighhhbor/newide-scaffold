@@ -92,15 +92,12 @@ const manager = AgentManager.create(repo, bufRepo, { deps });
 
 const agentHandle = await manager.createAgent({
   role_id: 'demo-agent',
-  persona: {
-    name: 'Demo Agent',
-    role: 'software engineer',
-    description: 'An agent that learns from its own experiences.',
-  },
+  name: 'Demo Agent',
+  persona_seed: 'A software engineer agent that learns from its own experiences.',
 });
 
 console.log(`Created agent: ${agentHandle.role_id}`);
-console.log(`Persona: ${agentHandle.persona.role} — ${agentHandle.persona.description}\n`);
+console.log(`Persona: ${agentHandle.persona.summary}\n`);
 
 // ═══════════════════════════════════════════════════════════════
 // 提交任务

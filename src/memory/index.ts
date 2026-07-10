@@ -65,13 +65,6 @@ export type {
   ExperienceView,
 } from './ports/agent-board-query';
 export type {
-  AgentBoardQuery,
-  AgentBoardListItem,
-  AgentBoardAgentView,
-  SkillView,
-  ExperienceView,
-} from './ports/agent-board-query';
-export type {
   ExternalMemoryRepository,
   SearchAccessibleMemoriesInput,
   SearchAccessibleMemoriesOutput,
@@ -106,8 +99,7 @@ export { ToolRegistry } from './runtime/tool';
 export type { AgentToolConfig } from './runtime/agent';
 
 // Tools
-export { QueryMemoryTool } from './runtime/tools/query-memory-tool';
-export type { QueryMemoryInput, QueryMemoryOutput } from './runtime/tools/query-memory-tool';
+export { QueryMemoryTool as AgentQueryMemoryTool } from './runtime/tools/query-memory-tool';
 export { InvokeDriverTool } from './runtime/tools/invoke-driver-tool';
 export type { DriverTask, DriverHandler } from './runtime/tools/invoke-driver-tool';
 
