@@ -85,52 +85,6 @@ export function toMemoryTaskProjection(result: SubmitTaskResult): MemoryTaskProj
   };
 }
 
-/**
- * 稳定的公开任务投影，供 Council / frontend 使用。
- * 从 SubmitTaskResult 派生，不触发额外存储读取。
- */
-export interface MemoryTaskProjection {
-  task_id: string;
-  winner_role_id: string;
-  scores: Record<string, number>;
-  driver_summary: string;
-  context: {
-    skill_count: number;
-    experience_count: number;
-  };
-  extraction: {
-    experiences_created: number;
-    experiences_updated: number;
-    negative_experiences: number;
-    skills_promoted: number;
-  };
-  promoted_skill_ids: string[];
-  buffer_seq: number;
-}
-
-/** 将 SubmitTaskResult 映射为公开投影 */
-export function toMemoryTaskProjection(result: SubmitTaskResult): MemoryTaskProjection {
-  const { cycle } = result;
-  return {
-    task_id: cycle.buffer_snapshot.task_id,
-    winner_role_id: result.winner_role_id,
-    scores: result.scores,
-    driver_summary: cycle.buffer_snapshot.driver_return.summary,
-    context: {
-      skill_count: cycle.driver_context.skills?.length ?? 0,
-      experience_count: cycle.driver_context.experiences?.length ?? 0,
-    },
-    extraction: {
-      experiences_created: cycle.extraction.result.experiences_created,
-      experiences_updated: cycle.extraction.result.experiences_updated,
-      negative_experiences: cycle.extraction.result.negative_experiences,
-      skills_promoted: cycle.extraction.result.skills_promoted,
-    },
-    promoted_skill_ids: cycle.promotion.skill ? [cycle.promotion.skill.id] : [],
-    buffer_seq: cycle.buffer_seq,
-  };
-}
-
 export class AgentManager {
   private readonly agents = new Map<string, Agent>();
   private started = false;

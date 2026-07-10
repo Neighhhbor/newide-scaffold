@@ -174,14 +174,23 @@ export function createDriverAdapterDeps(options: DriverAdapterDepsOptions): Agen
 // ═══════════════════════════════════════════════════════════════
 
 function buildDriverRuntime(options: DriverAdapterDepsOptions): DriverRuntimeHandle {
-  const transport = new CommandDriverTransport({
+  const transportOptions: {
+    command: string;
+    args: string[];
+    timeoutMs: number;
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    unsetEnv?: string[];
+  } = {
     command: options.driverCommand,
     args: options.driverArgs ?? [],
     timeoutMs: options.driverTimeoutMs ?? 120_000,
-    cwd: options.driverCwd,
-    env: options.driverEnv,
-    unsetEnv: options.driverUnsetEnv,
-  });
+  };
+  if (options.driverCwd !== undefined) transportOptions.cwd = options.driverCwd;
+  if (options.driverEnv !== undefined) transportOptions.env = options.driverEnv;
+  if (options.driverUnsetEnv !== undefined) transportOptions.unsetEnv = options.driverUnsetEnv;
+
+  const transport = new CommandDriverTransport(transportOptions);
 
   return new ExternalDriverRuntime({
     driver_id: options.driverId ?? 'acp-agent',
