@@ -1,0 +1,142 @@
+import { describe, expect, it } from 'vitest';
+import { SCHEMA_VERSION } from '../../src/core';
+import { buildFrontendRunSnapshot } from '../../src/coordinator/frontend-run-snapshot';
+
+describe('buildFrontendRunSnapshot', () => {
+  it('should build a frontend-readable run snapshot from integration outputs', () => {
+    const snapshot = buildFrontendRunSnapshot({
+      summary: {
+        run_id: 'run_001',
+        task_id: 'task_001',
+        mode: 'single_agent',
+        status: 'completed',
+        worktree_path: '.newide/worktrees/task_001',
+        artifacts_materialized: 1,
+        files_written: ['.newide/worktrees/task_001/artifact_001.json'],
+        artifact_outputs: [
+          {
+            artifact_id: 'artifact_001',
+            type: 'patch',
+            uri: 'artifact://patch/task_001/result.patch',
+            materialized_record_path: '.newide/worktrees/task_001/artifact_001.json',
+          },
+        ],
+        driver_diagnostics: {
+          driver_id: 'mock-driver',
+          duration_ms: 120,
+        },
+        checkpoint_id: 'checkpoint_001',
+        checkpoint_path: '.newide/runs/run_001/checkpoint.json',
+        mailbox_message_refs: ['message_001', 'message_002'],
+        mailbox_thread_id: 'run_001',
+        created_at: '2026-07-07T00:00:00.000Z',
+        schema_version: SCHEMA_VERSION,
+      },
+      timeline: [
+        { name: 'TaskCreated', id: 'task_001' },
+        { name: 'RunCompleted', id: 'event_001' },
+      ],
+      checkpoint: {
+        checkpoint_id: 'checkpoint_001',
+        checkpoint_type: 'full',
+        task_id: 'task_001',
+        trigger: 'manual',
+        mechanical_snapshot: {
+          base_commit: 'demo-head',
+          worktree_path: '.newide/worktrees/task_001',
+          branch: 'integration-v0-demo',
+          modified_files: ['.newide/worktrees/task_001/artifact_001.json'],
+        },
+        semantic_handoff: {
+          done: ['driver completed'],
+          in_progress: [],
+          blocked_on: [],
+          assumptions: [],
+          next_steps: ['Ready for user review'],
+          known_risks: [],
+        },
+        artifact_refs: ['artifact_001'],
+        validity_status: 'valid',
+        created_at: '2026-07-07T00:00:00.000Z',
+        schema_version: SCHEMA_VERSION,
+      },
+      message_thread: [
+        {
+          message_id: 'message_001',
+          thread_id: 'run_001',
+          from_agent_id: 'coordinator',
+          to: [{ agent_id: 'mock-driver' }],
+          type: 'task.assigned',
+          payload: { task_id: 'task_001' },
+          requires_ack: false,
+          created_at: '2026-07-07T00:00:00.000Z',
+          schema_version: SCHEMA_VERSION,
+        },
+      ],
+      links: {
+        result_path: '.newide/runs/run_001/result.json',
+        summary_path: '.newide/runs/run_001/summary.json',
+        timeline_path: '.newide/runs/run_001/timeline.json',
+        checkpoint_path: '.newide/runs/run_001/checkpoint.json',
+        message_thread_path: '.newide/runs/run_001/message-thread.json',
+        frontend_snapshot_path: '.newide/runs/run_001/frontend-snapshot.json',
+      },
+    });
+
+    expect(snapshot).toMatchObject({
+      snapshot_type: 'coordinator.frontend_run_snapshot.v0',
+      schema_version: SCHEMA_VERSION,
+      run_id: 'run_001',
+      task_id: 'task_001',
+      current: {
+        stage: 'delivery',
+        task_status: 'completed',
+        active_node_code: 'N18',
+      },
+      run: {
+        mode: 'single_agent',
+        driver_id: 'mock-driver',
+      },
+      delivery_report: {
+        worktree_path: '.newide/worktrees/task_001',
+        artifacts_materialized: 1,
+      },
+      artifacts: [
+        {
+          artifact_id: 'artifact_001',
+          materialized_record_path: '.newide/worktrees/task_001/artifact_001.json',
+        },
+      ],
+      checkpoint: {
+        checkpoint_id: 'checkpoint_001',
+        semantic_handoff: {
+          done: ['driver completed'],
+          next_steps: ['Ready for user review'],
+        },
+      },
+      mailbox: {
+        thread_id: 'run_001',
+        message_refs: ['message_001', 'message_002'],
+      },
+      links: {
+        frontend_snapshot_path: '.newide/runs/run_001/frontend-snapshot.json',
+      },
+    });
+    expect(snapshot.timeline).toEqual([
+      {
+        id: 'task_001',
+        name: 'TaskCreated',
+        level: 'info',
+        source: 'Coordinator',
+        text: 'TaskCreated',
+      },
+      {
+        id: 'event_001',
+        name: 'RunCompleted',
+        level: 'success',
+        source: 'Coordinator',
+        text: 'RunCompleted',
+      },
+    ]);
+  });
+});

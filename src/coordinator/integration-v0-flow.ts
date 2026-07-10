@@ -1,12 +1,14 @@
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
 import {
   SCHEMA_VERSION,
   createId,
   nowTimestamp,
   type Checkpoint,
+  type Message,
+  type MessageId,
   type RoleProfileRef,
+  type SchemaVersion,
   type TaskCreateRequest,
+  type Timestamp,
 } from '../core';
 import { MockDriver, type DriverRunResult, type DriverRuntimeHandle } from '../driver';
 import { HookEngine } from '../hook';
@@ -21,6 +23,20 @@ import {
 } from './artifact-finalizer';
 import { WorktreeMaterializer, type MaterializationResult } from './worktree-materializer';
 import { MockCouncil, type CouncilProvider, type EvidencePack } from '../council';
+import { InMemoryMailboxStore, type MessageDelivery } from './mailbox-store';
+import {
+  sendDriverCompletedMessage,
+  sendDriverRequestedMessage,
+  sendTaskAssignedMessage,
+} from './mailbox-handoff';
+import { buildArtifactOutputs, type ArtifactOutput } from './artifact-output';
+import {
+  buildRunOutputPaths,
+  buildRunResultManifest,
+  writeIntegrationRunOutputs,
+  type IntegrationRunResultManifest,
+} from './run-result';
+import { buildFrontendRunSnapshot, type FrontendRunSnapshot } from './frontend-run-snapshot';
 
 export interface IntegrationV0TimelineItem {
   name: string;
@@ -35,14 +51,17 @@ export interface IntegrationV0Summary {
   worktree_path: string;
   artifacts_materialized: number;
   files_written: string[];
+  artifact_outputs: ArtifactOutput[];
   driver_diagnostics: {
     driver_id: string;
     duration_ms: number;
   };
   checkpoint_id: string;
   checkpoint_path: string;
-  created_at: string;
-  schema_version: string;
+  mailbox_message_refs: MessageId[];
+  mailbox_thread_id: string;
+  created_at: Timestamp;
+  schema_version: SchemaVersion;
 }
 
 export interface IntegrationV0Options {
@@ -60,7 +79,11 @@ export interface IntegrationV0Result {
   driver_result: DriverRunResult;
   selection_result: ArtifactSelectionResult;
   materialization_result: MaterializationResult;
+  mailbox_thread: Message[];
+  mailbox_deliveries: MessageDelivery[];
   summary: IntegrationV0Summary;
+  frontend_snapshot: FrontendRunSnapshot;
+  result_manifest: IntegrationRunResultManifest;
 }
 
 /**
@@ -69,12 +92,12 @@ export interface IntegrationV0Result {
  * This is a v0 runner that connects A-B-C-D modules:
  * - A: Driver (MockDriver or ExternalDriverRuntime)
  * - B: Memory (MockMemoryProvider)
- * - C: Coordinator (RuntimeOrchestrator, ArtifactSelector)
+ * - C: Coordinator (RuntimeOrchestrator, ArtifactSelector, InMemoryMailboxStore)
  * - D: Gate (HookEngine)
  *
  * Key features:
- * - Explicit mailbox events (task.assigned, driver.requested, driver.completed)
- * - Persistent output to .newide/runs/<run_id>/ (summary.json, timeline.json)
+ * - Real mailbox send/ack mechanism (task.assigned, driver.requested, driver.completed)
+ * - Persistent output to .newide/runs/<run_id>/ (result.json, summary.json, timeline.json)
  * - Support single_agent (default) and council modes
  * - Support MockDriver (default) and external driver injection
  */
@@ -84,7 +107,9 @@ export async function runIntegrationV0Flow(
   const orchestrator = new RuntimeOrchestrator(
     options?.telemetry ? { telemetry: options.telemetry } : undefined,
   );
+  const mailbox = new InMemoryMailboxStore();
   const timeline: IntegrationV0TimelineItem[] = [];
+  const mailboxMessageRefs: MessageId[] = [];
 
   // 1. Create task
   const taskRequest: TaskCreateRequest = {
@@ -99,6 +124,7 @@ export async function runIntegrationV0Flow(
 
   // 2. Create run
   const run = orchestrator.createRun(task.task_id);
+  const threadId = run.run_id; // Use run_id as thread_id for v0
   timeline.push({ name: 'RunCreated', id: run.run_id });
   orchestrator.updateRunStatus(run.run_id, 'running');
   orchestrator.updateTaskStatus(task.task_id, 'running');
@@ -106,18 +132,29 @@ export async function runIntegrationV0Flow(
   // 3. Select driver (injected or default MockDriver)
   const driver = options?.driver ?? new MockDriver();
 
-  // 4. Mailbox event: task.assigned
+  // 4. Mailbox: send task.assigned
+  const taskAssignedResult = sendTaskAssignedMessage({
+    mailbox,
+    thread_id: threadId,
+    task_id: task.task_id,
+    driver_id: driver.driver_id,
+    driver_session_id: driver.session_id,
+  });
+  mailboxMessageRefs.push(taskAssignedResult.message.message_id);
+
+  // Record mailbox message sent event
   const taskAssignedEvent = orchestrator.appendEvent({
-    event_type: 'task.assigned',
-    subject_id: task.task_id,
+    event_type: 'mailbox.message_sent',
+    subject_id: taskAssignedResult.message.message_id,
     run_id: run.run_id,
     task_id: task.task_id,
     payload: {
-      agent_id: driver.driver_id,
-      session_id: driver.session_id,
+      message_type: 'task.assigned',
+      from_agent_id: 'coordinator',
+      to_agent_id: driver.driver_id,
     },
   });
-  timeline.push({ name: 'task.assigned', id: taskAssignedEvent.event_id });
+  timeline.push({ name: 'MailboxMessageSent (task.assigned)', id: taskAssignedEvent.event_id });
 
   // 5. Build context pack (B: Memory)
   const roleProfileRef: RoleProfileRef = {
@@ -174,17 +211,50 @@ export async function runIntegrationV0Flow(
   });
   timeline.push({ name: 'DriverSessionStarted', id: sessionEvent.event_id });
 
-  // 7. Mailbox event: driver.requested
+  // 7. Mailbox: send driver.requested
+  const driverRequestedResult = sendDriverRequestedMessage({
+    mailbox,
+    thread_id: threadId,
+    task_id: task.task_id,
+    run_id: run.run_id,
+    driver_id: driver.driver_id,
+    prompt: options?.driverPrompt || taskRequest.spec,
+  });
+  mailboxMessageRefs.push(driverRequestedResult.message.message_id);
+
+  // Record mailbox message sent event
   const driverRequestedEvent = orchestrator.appendEvent({
-    event_type: 'driver.requested',
-    subject_id: driver.session_id,
+    event_type: 'mailbox.message_sent',
+    subject_id: driverRequestedResult.message.message_id,
     run_id: run.run_id,
     task_id: task.task_id,
     payload: {
-      prompt: options?.driverPrompt || taskRequest.spec,
+      message_type: 'driver.requested',
+      from_agent_id: 'coordinator',
+      to_agent_id: driver.driver_id,
+      requires_ack: true,
     },
   });
-  timeline.push({ name: 'driver.requested', id: driverRequestedEvent.event_id });
+  timeline.push({
+    name: 'MailboxMessageSent (driver.requested)',
+    id: driverRequestedEvent.event_id,
+  });
+
+  const driverRequestedAckEvent = orchestrator.appendEvent({
+    event_type: 'mailbox.message_acked',
+    subject_id: driverRequestedResult.acked_delivery.delivery_id,
+    run_id: run.run_id,
+    task_id: task.task_id,
+    payload: {
+      message_id: driverRequestedResult.message.message_id,
+      message_type: 'driver.requested',
+      acked_by: driver.driver_id,
+    },
+  });
+  timeline.push({
+    name: 'MailboxMessageAcked (driver.requested)',
+    id: driverRequestedAckEvent.event_id,
+  });
 
   // 8. Call driver (A: Driver)
   const driverResult = await driver.sendPrompt({
@@ -201,18 +271,34 @@ export async function runIntegrationV0Flow(
     schema_version: SCHEMA_VERSION,
   });
 
-  // 9. Mailbox event: driver.completed
+  // 9. Mailbox: send driver.completed
+  const driverCompletedResult = sendDriverCompletedMessage({
+    mailbox,
+    thread_id: threadId,
+    task_id: task.task_id,
+    run_id: run.run_id,
+    driver_id: driver.driver_id,
+    driver_result: driverResult,
+  });
+  mailboxMessageRefs.push(driverCompletedResult.message.message_id);
+
+  // Record mailbox message sent event
   const driverCompletedEvent = orchestrator.appendEvent({
-    event_type: 'driver.completed',
-    subject_id: driverResult.driver_run_result_id,
+    event_type: 'mailbox.message_sent',
+    subject_id: driverCompletedResult.message.message_id,
     run_id: run.run_id,
     task_id: task.task_id,
     payload: {
+      message_type: 'driver.completed',
+      from_agent_id: driver.driver_id,
+      to_agent_id: 'coordinator',
       status: driverResult.status,
-      artifact_count: driverResult.artifacts.length,
     },
   });
-  timeline.push({ name: 'driver.completed', id: driverCompletedEvent.event_id });
+  timeline.push({
+    name: 'MailboxMessageSent (driver.completed)',
+    id: driverCompletedEvent.event_id,
+  });
 
   const driverResultEvent = orchestrator.appendEvent({
     event_type: 'driver.run_result',
@@ -468,7 +554,11 @@ export async function runIntegrationV0Flow(
   });
 
   // 17. Build summary
-  const checkpointPath = path.join('.newide/runs', run.run_id, 'checkpoint.json');
+  const outputPaths = buildRunOutputPaths(run.run_id);
+  const artifactOutputs = buildArtifactOutputs({
+    artifacts: selectionResult.selected_artifacts,
+    materialized_record_paths: materializationResult.files_written,
+  });
   const summary: IntegrationV0Summary = {
     run_id: run.run_id,
     task_id: task.task_id,
@@ -477,27 +567,62 @@ export async function runIntegrationV0Flow(
     worktree_path: materializationResult.worktree_path,
     artifacts_materialized: materializationResult.materialized_artifacts.length,
     files_written: materializationResult.files_written,
+    artifact_outputs: artifactOutputs,
     driver_diagnostics: {
       driver_id: driverResult.diagnostics.driver_id,
       duration_ms: driverResult.diagnostics.duration_ms,
     },
     checkpoint_id: savedCheckpoint.checkpoint_id,
-    checkpoint_path: checkpointPath,
+    checkpoint_path: outputPaths.checkpoint_path,
+    mailbox_message_refs: mailboxMessageRefs,
+    mailbox_thread_id: threadId,
     created_at: nowTimestamp(),
     schema_version: SCHEMA_VERSION,
   };
+  const mailboxThread = mailbox.listThread(threadId);
+  const mailboxDeliveries = mailbox.listDeliveries();
+  const frontendSnapshotLinks = {
+    result_path: outputPaths.result_path,
+    summary_path: outputPaths.summary_path,
+    timeline_path: outputPaths.timeline_path,
+    checkpoint_path: outputPaths.checkpoint_path,
+    message_thread_path: outputPaths.message_thread_path,
+    frontend_snapshot_path: outputPaths.frontend_snapshot_path,
+  };
+  const frontendSnapshot = buildFrontendRunSnapshot({
+    summary,
+    timeline,
+    checkpoint: savedCheckpoint,
+    message_thread: mailboxThread,
+    links: frontendSnapshotLinks,
+  });
+  const resultManifest = buildRunResultManifest({
+    run_id: run.run_id,
+    task_id: task.task_id,
+    status: finalRunStatus,
+    mode: selectionResult.mode,
+    driver_id: driverResult.diagnostics.driver_id,
+    artifact_outputs: artifactOutputs,
+    result_path: outputPaths.result_path,
+    summary_path: outputPaths.summary_path,
+    timeline_path: outputPaths.timeline_path,
+    checkpoint_path: outputPaths.checkpoint_path,
+    message_thread_path: outputPaths.message_thread_path,
+    frontend_snapshot_path: outputPaths.frontend_snapshot_path,
+    created_at: summary.created_at,
+    schema_version: SCHEMA_VERSION,
+  });
 
-  // 17. Persist summary, timeline, and checkpoint to .newide/runs/<run_id>/
-  const runDir = path.join('.newide/runs', run.run_id);
-  await fs.mkdir(runDir, { recursive: true });
-
-  const summaryPath = path.join(runDir, 'summary.json');
-  await fs.writeFile(summaryPath, JSON.stringify(summary, null, 2), 'utf-8');
-
-  const timelinePath = path.join(runDir, 'timeline.json');
-  await fs.writeFile(timelinePath, JSON.stringify(timeline, null, 2), 'utf-8');
-
-  await fs.writeFile(checkpointPath, JSON.stringify(savedCheckpoint, null, 2), 'utf-8');
+  // 18. Persist summary, timeline, checkpoint, and result manifest.
+  await writeIntegrationRunOutputs({
+    paths: outputPaths,
+    summary,
+    timeline,
+    checkpoint: savedCheckpoint,
+    message_thread: mailboxThread,
+    frontend_snapshot: frontendSnapshot,
+    result_manifest: resultManifest,
+  });
 
   return {
     run_id: run.run_id,
@@ -506,6 +631,10 @@ export async function runIntegrationV0Flow(
     driver_result: driverResult,
     selection_result: selectionResult,
     materialization_result: materializationResult,
+    mailbox_thread: mailboxThread,
+    mailbox_deliveries: mailboxDeliveries,
     summary,
+    frontend_snapshot: frontendSnapshot,
+    result_manifest: resultManifest,
   };
 }

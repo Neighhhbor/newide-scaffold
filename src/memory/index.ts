@@ -8,6 +8,7 @@
 export * from './contract';
 export * from './types';
 export * as schemas from './schemas';
+export { QueryMemoryTool, SaveMemoryTool, createMemoryTools } from './litellm-memory-tools';
 export { MockMemoryProvider } from './mock-memory';
 export { RepositoryMemoryProvider } from './adapters/repository-memory-provider';
 export { InMemoryRepository } from './adapters/in-memory-repository';
@@ -28,9 +29,19 @@ export { LlmExperienceExtractor } from './adapters/llm-experience-extractor';
 export { LlmTaskInstructionPlanner } from './adapters/llm-task-instruction-planner';
 export { LlmContextCleaner } from './adapters/context-cleaner';
 export { LlmSkillPromotion } from './adapters/llm-skill-promotion';
+export { LlmDriverResultMapper } from './adapters/llm-driver-result-mapper';
 export { MockLlmClient } from './adapters/mock-llm-client';
 export { DeepSeekLlmClient } from './adapters/deepseek-llm-client';
 export { RepositoryAgentBoardQuery } from './adapters/agent-board-query';
+export {
+  DriverAdapter,
+  createDriverInvoker,
+  serializeDriverContext,
+  mapRunResultToDriverReturn,
+  type DriverAdapterOptions,
+  type DriverContextSerializer,
+  type DriverResultMapper,
+} from './adapters/driver-adapter';
 export { BatchBufferTriggerPolicy } from './adapters/batch-buffer-trigger-policy';
 export { AlwaysExtractPolicy } from './adapters/always-extract-policy';
 export { DefaultPromotionTriggerPolicy } from './adapters/default-promotion-trigger-policy';
@@ -88,8 +99,7 @@ export { ToolRegistry } from './runtime/tool';
 export type { AgentToolConfig } from './runtime/agent';
 
 // Tools
-export { QueryMemoryTool } from './runtime/tools/query-memory-tool';
-export type { QueryMemoryInput, QueryMemoryOutput } from './runtime/tools/query-memory-tool';
+export { QueryMemoryTool as AgentQueryMemoryTool } from './runtime/tools/query-memory-tool';
 export { InvokeDriverTool } from './runtime/tools/invoke-driver-tool';
 export type { DriverTask, DriverHandler } from './runtime/tools/invoke-driver-tool';
 
@@ -139,4 +149,8 @@ export {
 // MVP mock（可整包移除）
 export { defaultMvpAgentRunDeps } from './mvp/default-agent-run-deps';
 export { createDefaultLlmAgentRunDeps } from './mvp/default-llm-agent-run-deps';
+export {
+  createDriverAdapterDeps,
+  type DriverAdapterDepsOptions,
+} from './mvp/default-driver-adapter-deps';
 export { MockExperienceExtractor } from './mvp/adapters/mock-experience-extractor';

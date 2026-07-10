@@ -249,7 +249,7 @@ export class Agent {
    *
    * @throws 如果 Agent 已有正在运行的任务
    */
-  assignTask(task: AgentTaskRequest): void {
+  async assignTask(task: AgentTaskRequest): Promise<void> {
     if (this.currentTask) {
       throw new Error(
         `Agent ${this.memory.role_id} already has a running task (${this.currentTask.task_id}). ` +
@@ -267,7 +267,7 @@ export class Agent {
       // Tool-calling 模式：构建初始 messages
       const systemPromptContent =
         this.toolConfig.systemPrompt ??
-        buildAgentSystemPrompt(this.memory, this.toolRegistry.toToolDefinitions());
+        (await buildAgentSystemPrompt(this.memory, this.toolRegistry.toToolDefinitions()));
 
       this.loopMessages = [
         {
@@ -320,7 +320,7 @@ export class Agent {
     this.state = 'running';
     try {
       if (this.toolConfig && this.toolRegistry) {
-        this.assignTask(task);
+        await this.assignTask(task);
 
         while (this.state === 'running') {
           const tick = await this.runLoopTick();
@@ -382,7 +382,7 @@ export class Agent {
    * 通过 assignTask + runLoopTick 循环实现，与持久循环共享同一套逻辑。
    */
   private async runOnceWithTools(task: AgentTaskRequest): Promise<MemoryCycleResult> {
-    this.assignTask(task);
+    await this.assignTask(task);
 
     while (this.state === 'running') {
       const tick = await this.runLoopTick();

@@ -71,6 +71,34 @@ describe('CommandDriverTransport', () => {
       'Command driver returned malformed DriverRunResult: session_id is required',
     );
   });
+
+  it('can remove inherited environment variables from the child process', async () => {
+    const key = 'BCD_COMMAND_DRIVER_REMOVE_ME';
+    process.env[key] = 'poison';
+
+    try {
+      const transport = new CommandDriverTransport({
+        ...nodeCommand(`
+          readInput((raw) => {
+            if (process.env.BCD_COMMAND_DRIVER_REMOVE_ME) {
+              process.stderr.write('inherited env leaked');
+              process.exit(13);
+            }
+
+            const prompt = JSON.parse(raw);
+            process.stdout.write(JSON.stringify(driverRunResult(prompt.task_id)));
+          });
+        `),
+        unsetEnv: [key],
+      });
+
+      const result = await transport.run(PROMPT);
+
+      expect(result.status).toBe('succeeded');
+    } finally {
+      delete process.env[key];
+    }
+  });
 });
 
 function nodeCommand(body: string): { command: string; args: string[] } {

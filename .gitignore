@@ -31,3 +31,5 @@ src/memory/docs/
 **/CLAUDE.md
 .claude/
 .newide/
+
+/.npmrc
