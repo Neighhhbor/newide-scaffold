@@ -18,6 +18,7 @@
     "verify": "pnpm lint && pnpm typecheck && pnpm test",
     "example:basic": "tsx src/examples/basic-flow.ts",
     "example:integration-v0": "tsx src/examples/integration-v0.ts",
+    "example:driver-adapter": "tsx src/examples/driver-adapter-flow.ts",
     "prepare": "husky"
   },
   "lint-staged": {
