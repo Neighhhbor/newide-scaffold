@@ -133,7 +133,7 @@ describe('SkillPromotionProcessor', () => {
 
       const results = await processor.promoteAll(memory);
       expect(results).toHaveLength(1);
-      expect(results[0].check.eligible).toBe(true);
+      expect(results[0]!.check.eligible).toBe(true);
     });
 
     it('跳过负经验（type=negative）', async () => {
@@ -207,7 +207,7 @@ describe('SkillPromotionProcessor', () => {
       // 虽然 eligible_count=1 < 10, 但 has_high_confidence=true => 触发
       // 只有 confidence 0.99 的会被晋升（0.5 和 0.3 低于 0.95 门槛）
       expect(results).toHaveLength(1);
-      expect(results[0].check.eligible).toBe(true);
+      expect(results[0]!.check.eligible).toBe(true);
     });
 
     it('使用已有技能的 promoted_at 计算 last_promotion_at', async () => {
