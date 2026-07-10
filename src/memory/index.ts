@@ -42,6 +42,9 @@ export {
   type DriverContextSerializer,
   type DriverResultMapper,
 } from './adapters/driver-adapter';
+export { BatchBufferTriggerPolicy } from './adapters/batch-buffer-trigger-policy';
+export { AlwaysExtractPolicy } from './adapters/always-extract-policy';
+export { DefaultPromotionTriggerPolicy } from './adapters/default-promotion-trigger-policy';
 
 // Ports — 公开接口类型
 export type { BufferRepository, SaveBufferResult } from './ports/buffer-repository';
@@ -53,6 +56,14 @@ export type { LlmClient, LlmMessage } from './ports/llm-client';
 export type { SkillMarketPort, SkillMarketSearchResult } from './ports/skill-market-port';
 export type { AgentContextCleaner, AgentContextCleanInput } from './ports/agent-context-cleaner';
 export type { BufferTriggerPolicy } from './ports/buffer-trigger-policy';
+export type { PromotionTriggerPolicy } from './ports/promotion-trigger-policy';
+export type {
+  AgentBoardQuery,
+  AgentBoardListItem,
+  AgentBoardAgentView,
+  SkillView,
+  ExperienceView,
+} from './ports/agent-board-query';
 export type {
   AgentBoardQuery,
   AgentBoardListItem,
@@ -80,6 +91,33 @@ export type {
   TaskInstructionPlanner,
 } from './runtime/agent-run-deps';
 
+// Tool-calling types
+export type {
+  Tool,
+  ToolDefinition,
+  ToolCall,
+  ToolCallMessage,
+  ToolCallResult,
+  ToolCallingClient,
+} from './runtime/tool';
+export { ToolRegistry } from './runtime/tool';
+
+// AgentToolConfig
+export type { AgentToolConfig } from './runtime/agent';
+
+// Tools
+export { QueryMemoryTool } from './runtime/tools/query-memory-tool';
+export type { QueryMemoryInput, QueryMemoryOutput } from './runtime/tools/query-memory-tool';
+export { InvokeDriverTool } from './runtime/tools/invoke-driver-tool';
+export type { DriverTask, DriverHandler } from './runtime/tools/invoke-driver-tool';
+
+// Production runtime bootstrap
+export { createAgentRuntime } from './runtime/create-agent-runtime';
+export type { AgentRuntimeConfig } from './runtime/create-agent-runtime';
+
+// Prompts
+export { buildAgentSystemPrompt } from './prompts/agent-system-prompt';
+
 // 正式服务
 export { writePendingBuffer } from './services/buffer-writer';
 export {
@@ -101,6 +139,10 @@ export {
   processPendingBuffer,
   runTaskMemoryCycle,
 } from './services/memory-cycle';
+
+// BufferProcessor 运行时
+export { ExperienceExtractorProcessor } from './runtime/experience-extractor-processor';
+export { SkillPromotionProcessor } from './runtime/skill-promotion-processor';
 
 // Agent 运行时
 export { Agent } from './runtime/agent';
