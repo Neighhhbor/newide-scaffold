@@ -147,11 +147,46 @@ describe('NewideBackendService', () => {
     expect(finalizeCalls).toBe(1);
 
     finishTerminal();
-    await Promise.all([service.waitForTerminal('run_race'), cancellation]);
+    await service.waitForTerminal('run_race');
+    await expect(cancellation).rejects.toThrow('Run run_race already reached completed');
     const snapshot = service.getSnapshot('run_race');
     expect(snapshot.status).toBe('completed');
     expect(snapshot.events.filter((event) => event.type.startsWith('run.'))).toHaveLength(2);
     expect(snapshot.events.some((event) => event.type === 'run.cancelled')).toBe(false);
+  });
+
+  it('keeps a durable completed result when terminal audit append fails', async () => {
+    let durableStatus: string | undefined;
+    const service = new NewideBackendService(
+      {
+        run: async (request) => {
+          request.onRunCreated?.({ run_id: 'run_audit_failed', task_id: 'task_audit_failed' });
+          return completedResult('run_audit_failed', 'task_audit_failed');
+        },
+      },
+      new InMemoryRunRegistry(),
+      {
+        initialize: async () => undefined,
+        append: async (event) => {
+          if (event.type === 'run.completed') throw new Error('audit unavailable');
+        },
+        flush: async () => undefined,
+      },
+      {
+        finalize: async (snapshot) => {
+          durableStatus = snapshot.status;
+        },
+      },
+    );
+
+    const created = await service.createRun({ prompt: 'Keep durable terminal result' });
+    await service.waitForTerminal(created.run_id);
+    await Promise.resolve();
+
+    expect(durableStatus).toBe('completed');
+    const snapshot = service.getSnapshot(created.run_id);
+    expect(snapshot.status).toBe('completed');
+    expect(snapshot.events.some((event) => event.type === 'run.completed')).toBe(true);
   });
 
   it('publishes one persistence failure and keeps the background promise observed', async () => {
