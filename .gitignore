@@ -32,4 +32,7 @@ src/memory/docs/
 .claude/
 .newide/
 
+# ZCode 本地计划文件
+.zcode/
+
 /.npmrc
