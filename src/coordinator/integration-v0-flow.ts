@@ -93,6 +93,7 @@ export interface IntegrationV0Options {
   councilProvider?: CouncilProvider;
   worktreePath?: string;
   telemetry?: TelemetrySink;
+  onRunCreated?: (identity: { run_id: string; task_id: string }) => void;
 }
 
 export interface IntegrationV0Result {
@@ -148,6 +149,7 @@ export async function runIntegrationV0Flow(
 
   // 2. Create run
   const run = orchestrator.createRun(task.task_id);
+  options?.onRunCreated?.({ run_id: run.run_id, task_id: task.task_id });
   const threadId = run.run_id; // Use run_id as thread_id for v0
   timeline.push({ name: 'RunCreated', id: run.run_id });
   orchestrator.updateRunStatus(run.run_id, 'running');
