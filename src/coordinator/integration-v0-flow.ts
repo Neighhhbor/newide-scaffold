@@ -510,8 +510,8 @@ export async function runIntegrationV0Flow(
   });
   timeline.push({ name: 'HookMatched', id: hookEvent.event_id });
 
-  const gateResults: GateResult[] = [...hookResult.gate_results];
-  for (const gateResult of gateResults) {
+  const preGateResults: GateResult[] = [...hookResult.gate_results];
+  for (const gateResult of preGateResults) {
     const gateResultEvent = orchestrator.appendEvent({
       event_type: 'gate.result',
       subject_id: gateResult.gate_result_id,
@@ -537,7 +537,7 @@ export async function runIntegrationV0Flow(
     task_id: task.task_id,
     context_pack_ref: contextPack.context_pack_id,
     artifact_refs: driverResult.artifacts.map((a) => a.artifact_id),
-    gate_result_refs: gateResults.map((g) => g.gate_result_id),
+    gate_result_refs: preGateResults.map((g) => g.gate_result_id),
     summary: 'Driver artifacts and gate results for v0 artifact selection.',
     created_at: nowTimestamp(),
     schema_version: SCHEMA_VERSION,
@@ -575,7 +575,7 @@ export async function runIntegrationV0Flow(
       run_id: run.run_id,
       task_id: task.task_id,
       driver_result: driverResult,
-      gate_results: gateResults,
+      gate_results: preGateResults,
       evidence_pack: evidencePack,
     },
     { ...(options?.signal ? { signal: options.signal } : {}) },
@@ -638,22 +638,22 @@ export async function runIntegrationV0Flow(
   });
   timeline.push({ name: 'ArtifactSelected', id: selectionEvent.event_id });
 
-  const postCouncilGateResultIds = new Set<string>();
-  let postCouncilGatesRequired = false;
-  let postCouncilGatesPassed = true;
+  const postCouncilGateResults: GateResult[] = [];
+  const postCouncilGatesRequired = Boolean(councilCompletedEvent);
   if (councilCompletedEvent) {
-    postCouncilGatesRequired = true;
     const postCouncilHookResult = await hookEngine.handleEvent({
       ...councilCompletedEvent,
       event_type: 'council.completed',
     });
     options?.signal?.throwIfAborted();
-    postCouncilGatesPassed =
-      postCouncilHookResult.gate_results.length > 0 &&
-      postCouncilHookResult.gate_results.every((gate) => gate.decision === 'allow');
-    for (const gateResult of postCouncilHookResult.gate_results) {
-      gateResults.push(gateResult);
-      postCouncilGateResultIds.add(gateResult.gate_result_id);
+    const usedGateResultIds = new Set(preGateResults.map((gate) => gate.gate_result_id));
+    for (const sourceGateResult of postCouncilHookResult.gate_results) {
+      const duplicateId = usedGateResultIds.has(sourceGateResult.gate_result_id);
+      const gateResult = duplicateId
+        ? { ...sourceGateResult, gate_result_id: createId('gate_result') }
+        : sourceGateResult;
+      usedGateResultIds.add(gateResult.gate_result_id);
+      postCouncilGateResults.push(gateResult);
       const gateResultEvent = orchestrator.appendEvent({
         event_type: 'gate.result',
         subject_id: gateResult.gate_result_id,
@@ -661,6 +661,7 @@ export async function runIntegrationV0Flow(
         task_id: task.task_id,
         payload: {
           phase: 'post_council',
+          ...(duplicateId ? { source_gate_result_id: sourceGateResult.gate_result_id } : {}),
           gate_result_id: gateResult.gate_result_id,
           gate_id: gateResult.gate_id,
           request_id: gateResult.request_id,
@@ -672,8 +673,15 @@ export async function runIntegrationV0Flow(
       });
       timeline.push({ name: 'PostCouncilGateResult', id: gateResultEvent.event_id });
     }
-    evidencePack.gate_result_refs = gateResults.map((gate) => gate.gate_result_id);
   }
+
+  const preGatesPassed =
+    preGateResults.length > 0 && preGateResults.every((gate) => gate.decision === 'allow');
+  const postCouncilGatesPassed =
+    !postCouncilGatesRequired ||
+    (postCouncilGateResults.length > 0 &&
+      postCouncilGateResults.every((gate) => gate.decision === 'allow'));
+  const combinedGateResults = [...preGateResults, ...postCouncilGateResults];
 
   // 13. Worktree materialization (C: Coordinator)
   const materializer =
@@ -683,12 +691,8 @@ export async function runIntegrationV0Flow(
     });
 
   let materializationResult: MaterializationResult;
-  try {
-    materializationResult = await materializer.materialize({
-      task_id: task.task_id,
-      artifacts: postCouncilGatesPassed ? selectionResult.selected_artifacts : [],
-    });
-  } catch {
+  const materializationSkipped = postCouncilGatesRequired && !postCouncilGatesPassed;
+  if (materializationSkipped) {
     materializationResult = {
       materialization_id: createId('materialization'),
       task_id: task.task_id,
@@ -700,12 +704,37 @@ export async function runIntegrationV0Flow(
       failures: [
         {
           artifact_id: selectionResult.selected_artifacts[0]?.artifact_id ?? 'materializer',
-          reason: 'Materializer failed',
+          reason: 'Post-council gate did not allow materialization',
         },
       ],
       created_at: nowTimestamp(),
       schema_version: SCHEMA_VERSION,
     };
+  } else {
+    try {
+      materializationResult = await materializer.materialize({
+        task_id: task.task_id,
+        artifacts: selectionResult.selected_artifacts,
+      });
+    } catch {
+      materializationResult = {
+        materialization_id: createId('materialization'),
+        task_id: task.task_id,
+        worktree_path: path.join(options?.worktreePath ?? '.newide/worktrees', task.task_id),
+        materialized_artifacts: [],
+        files_written: [],
+        changed_files: [],
+        status: 'failed',
+        failures: [
+          {
+            artifact_id: selectionResult.selected_artifacts[0]?.artifact_id ?? 'materializer',
+            reason: 'Materializer failed',
+          },
+        ],
+        created_at: nowTimestamp(),
+        schema_version: SCHEMA_VERSION,
+      };
+    }
   }
   options?.signal?.throwIfAborted();
 
@@ -720,21 +749,22 @@ export async function runIntegrationV0Flow(
       changed_files: materializationResult.changed_files,
       status: materializationResult.status,
       failures: materializationResult.failures,
+      ...(materializationSkipped ? { skipped: true } : {}),
     },
   });
   timeline.push({ name: 'WorktreeMaterialized', id: materializationEvent.event_id });
 
   // 14. Calculate flow completion status
   const driverSucceeded = driverResult.status === 'succeeded';
-  const gatesPassed = gateResults.length > 0 && gateResults.every((g) => g.decision === 'allow');
+  const gatesPassed = preGatesPassed && (!postCouncilGatesRequired || postCouncilGatesPassed);
   const hasSelectedArtifact = selectionResult.selected_artifacts.length > 0;
   const materialized =
     materializationResult.status === 'completed' && materializationResult.files_written.length > 0;
   const flowCompleted = driverSucceeded && gatesPassed && hasSelectedArtifact && materialized;
   const failure = buildIntegrationFailure({
     driverResult,
-    gateResults,
-    postCouncilGateResultIds,
+    preGateResults,
+    postCouncilGateResults,
     postCouncilGatesRequired,
     hasSelectedArtifact,
     materializationResult,
@@ -781,12 +811,17 @@ export async function runIntegrationV0Flow(
       in_progress: [],
       blocked_on: blockedOn,
       assumptions: flowCompleted
-        ? ['Integration v0 flow completed successfully', 'Artifacts materialized to worktree']
+        ? [
+            'Integration v0 flow completed successfully',
+            'Artifacts materialized to worktree',
+            `Gate results: ${combinedGateResults.map((gate) => gate.gate_result_id).join(', ')}`,
+          ]
         : [
             'Integration v0 flow partially completed',
             `Driver: ${driverResult.status}`,
             `Gates: ${gatesPassed ? 'passed' : 'blocked or not evaluated'}`,
             `Artifacts: ${hasSelectedArtifact ? 'selected' : 'none'}`,
+            `Gate results: ${combinedGateResults.map((gate) => gate.gate_result_id).join(', ')}`,
           ],
       next_steps: flowCompleted
         ? ['Ready for user review', 'Can be resumed if needed']
@@ -978,8 +1013,8 @@ export async function runIntegrationV0Flow(
 
 function buildIntegrationFailure(input: {
   driverResult: DriverRunResult;
-  gateResults: GateResult[];
-  postCouncilGateResultIds: Set<string>;
+  preGateResults: GateResult[];
+  postCouncilGateResults: GateResult[];
   postCouncilGatesRequired: boolean;
   hasSelectedArtifact: boolean;
   materializationResult: MaterializationResult;
@@ -991,47 +1026,62 @@ function buildIntegrationFailure(input: {
       details: { phase: 'driver', ...(input.driverResult.error ?? {}) },
     };
   }
-  if (input.gateResults.length === 0) {
+  if (input.preGateResults.length === 0) {
     return {
       code: 'GATE_BLOCKED',
       message: 'Required gates were not evaluated',
-      details: { phase: 'gate', gate_results: [] },
+      details: { phase: 'gate', gate_phase: 'pre_selection', gate_results: [] },
     };
   }
-  if (input.postCouncilGatesRequired && input.postCouncilGateResultIds.size === 0) {
+  const preGatePhase = input.postCouncilGatesRequired ? 'pre_council' : 'pre_selection';
+  const preDenied = input.preGateResults.find((gate) => gate.decision === 'deny');
+  if (preDenied) {
+    return {
+      code: 'GATE_DENIED',
+      message: `Gate ${preDenied.gate_id} denied the run`,
+      details: { phase: 'gate', gate_phase: preGatePhase, gate_results: input.preGateResults },
+    };
+  }
+  const preBlocked = input.preGateResults.find(
+    (gate) => gate.decision === 'ask' || gate.decision === 'defer',
+  );
+  if (preBlocked) {
+    return {
+      code: 'GATE_BLOCKED',
+      message: `Gate ${preBlocked.gate_id} blocked the run`,
+      details: { phase: 'gate', gate_phase: preGatePhase, gate_results: input.preGateResults },
+    };
+  }
+  if (input.postCouncilGatesRequired && input.postCouncilGateResults.length === 0) {
     return {
       code: 'GATE_BLOCKED',
       message: 'Required post-council gates were not evaluated',
-      details: { phase: 'gate', gate_phase: 'post_council', gate_results: input.gateResults },
+      details: { phase: 'gate', gate_phase: 'post_council', gate_results: [] },
     };
   }
-  const denied = input.gateResults.find((gate) => gate.decision === 'deny');
-  if (denied) {
+  const postDenied = input.postCouncilGateResults.find((gate) => gate.decision === 'deny');
+  if (postDenied) {
     return {
       code: 'GATE_DENIED',
-      message: `Gate ${denied.gate_id} denied the run`,
+      message: `Gate ${postDenied.gate_id} denied the run`,
       details: {
         phase: 'gate',
-        ...(input.postCouncilGateResultIds.has(denied.gate_result_id)
-          ? { gate_phase: 'post_council' }
-          : {}),
-        gate_results: input.gateResults,
+        gate_phase: 'post_council',
+        gate_results: input.postCouncilGateResults,
       },
     };
   }
-  const blocked = input.gateResults.find(
+  const postBlocked = input.postCouncilGateResults.find(
     (gate) => gate.decision === 'ask' || gate.decision === 'defer',
   );
-  if (blocked) {
+  if (postBlocked) {
     return {
       code: 'GATE_BLOCKED',
-      message: `Gate ${blocked.gate_id} blocked the run`,
+      message: `Gate ${postBlocked.gate_id} blocked the run`,
       details: {
         phase: 'gate',
-        ...(input.postCouncilGateResultIds.has(blocked.gate_result_id)
-          ? { gate_phase: 'post_council' }
-          : {}),
-        gate_results: input.gateResults,
+        gate_phase: 'post_council',
+        gate_results: input.postCouncilGateResults,
       },
     };
   }

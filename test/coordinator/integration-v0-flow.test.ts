@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import {
@@ -145,7 +145,7 @@ describe('runIntegrationV0Flow', () => {
     expect(result.summary.failure).toEqual({
       code: 'GATE_BLOCKED',
       message: 'Required gates were not evaluated',
-      details: { phase: 'gate', gate_results: [] },
+      details: { phase: 'gate', gate_phase: 'pre_selection', gate_results: [] },
     });
   });
 
@@ -398,7 +398,7 @@ describe('runIntegrationV0Flow', () => {
 
   it('blocks council-selected artifacts when the post-council gate denies', async () => {
     const hookPoints: string[] = [];
-    const materializedInputs: MaterializationInput[] = [];
+    const worktreeRoot = path.join('.newide', 'worktrees', `post-gate-deny-${createId('test')}`);
     const hookEngine = {
       handleEvent: async (event: { event_type: string }): Promise<HookResult> => {
         hookPoints.push(event.event_type);
@@ -406,31 +406,23 @@ describe('runIntegrationV0Flow', () => {
         return gateHookResult(event.event_type, decision, `gate-${hookPoints.length}`);
       },
     };
-    const materializer = {
-      materialize: async (input: MaterializationInput): Promise<MaterializationResult> => {
-        materializedInputs.push(input);
-        return {
-          materialization_id: createId('materialization'),
-          task_id: input.task_id,
-          worktree_path: '.newide/worktrees/post-gate-deny',
-          materialized_artifacts: input.artifacts,
-          files_written: input.artifacts.length > 0 ? ['candidate.patch'] : [],
-          changed_files: input.artifacts.length > 0 ? ['candidate.patch'] : [],
-          status: 'completed',
-          failures: [],
-          created_at: new Date().toISOString(),
-          schema_version: SCHEMA_VERSION,
-        };
-      },
-    };
+    const materialize = vi.fn(fakeMaterializer('completed', []).materialize);
 
-    const result = await runFlow({ enableCouncil: true, hookEngine, materializer });
+    const result = await runFlow({
+      enableCouncil: true,
+      hookEngine,
+      materializer: { materialize },
+      worktreePath: worktreeRoot,
+    });
 
     expect(hookPoints).toEqual(['task.completed', 'council.completed']);
     expect(result.selection_result.selected_artifacts.length).toBeGreaterThan(0);
-    expect(materializedInputs).toHaveLength(1);
-    expect(materializedInputs[0]?.artifacts).toEqual([]);
+    expect(materialize).not.toHaveBeenCalled();
     expect(result.materialization_result.files_written).toEqual([]);
+    expect(result.materialization_result.failures).toEqual([
+      expect.objectContaining({ reason: 'Post-council gate did not allow materialization' }),
+    ]);
+    await expect(fs.access(path.join(worktreeRoot, result.task_id))).rejects.toThrow();
     expect(result.summary.failure).toMatchObject({
       code: 'GATE_DENIED',
       details: { phase: 'gate', gate_phase: 'post_council' },
@@ -459,6 +451,43 @@ describe('runIntegrationV0Flow', () => {
       reason: 'deny at council.completed',
       target_state: 'blocked',
       required_actions: ['fix-policy'],
+    });
+    expect(
+      eventLog.find((event) => event.event_type === 'worktree.materialized')?.payload,
+    ).toMatchObject({ skipped: true, files_written: 0 });
+  });
+
+  it('rewrites duplicate post gate result ids without misclassifying a pre deny', async () => {
+    let invocation = 0;
+    const hookEngine = {
+      handleEvent: async (event: { event_type: string }): Promise<HookResult> => {
+        invocation += 1;
+        return gateHookResult(event.event_type, invocation === 1 ? 'deny' : 'allow', 'duplicate');
+      },
+    };
+    const materialize = vi.fn(fakeMaterializer('completed', []).materialize);
+
+    const result = await runFlow({
+      enableCouncil: true,
+      hookEngine,
+      materializer: { materialize },
+    });
+
+    expect(result.summary.failure).toMatchObject({
+      code: 'GATE_DENIED',
+      details: { gate_phase: 'pre_council' },
+    });
+    const eventLog = (await readJson(`.newide/runs/${result.run_id}/event-log.json`)) as Array<{
+      event_type: string;
+      subject_id: string;
+      payload: Record<string, unknown>;
+    }>;
+    const gateEvents = eventLog.filter((event) => event.event_type === 'gate.result');
+    expect(gateEvents.map((event) => event.subject_id)).toHaveLength(2);
+    expect(new Set(gateEvents.map((event) => event.subject_id)).size).toBe(2);
+    expect(gateEvents[1]?.payload).toMatchObject({
+      phase: 'post_council',
+      source_gate_result_id: 'gate_result_duplicate',
     });
   });
 
