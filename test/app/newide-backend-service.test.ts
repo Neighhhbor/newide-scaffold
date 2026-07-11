@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { IntegrationV0Result } from '../../src/coordinator/integration-v0-flow';
 import { NewideBackendService } from '../../src/app/newide-backend-service';
-import { InMemoryRunRegistry } from '../../src/app/run-registry';
+import { InMemoryRunRegistry, type AppRunEvent } from '../../src/app/run-registry';
 import { FileRunAuditWriter } from '../../src/app/run-audit-writer';
 import { FileRunTerminalOutputWriter } from '../../src/app/run-terminal-output-writer';
 import { IntegrationV0CoordinatorRunner } from '../../src/coordinator/coordinator-runner';
@@ -502,6 +502,8 @@ describe('NewideBackendService', () => {
 
     try {
       const created = await service.createRun({ prompt: 'Reject this artifact' });
+      const notifications: AppRunEvent[] = [];
+      service.subscribe(created.run_id, (event) => notifications.push(event));
       await service.waitForTerminal(created.run_id);
       await auditWriter.flush(created.run_id);
 
@@ -519,6 +521,11 @@ describe('NewideBackendService', () => {
       expect(events.filter((event) => event.type === 'gate.result')).toHaveLength(1);
       expect(events.filter((event) => event.type === 'worktree.materialized')).toHaveLength(1);
       expect(events.at(-1)).toMatchObject({ type: 'run.failed', payload: { code: 'GATE_DENIED' } });
+      expect(notifications.at(-1)?.payload).toEqual({
+        code: snapshot.errors[0]!.code,
+        message: snapshot.errors[0]!.message,
+        details: snapshot.errors[0]!.details,
+      });
 
       const audit = (await readFile(path.join(runsRoot, created.run_id, 'audit.jsonl'), 'utf-8'))
         .trim()

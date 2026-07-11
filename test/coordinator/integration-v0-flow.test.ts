@@ -127,6 +127,28 @@ describe('runIntegrationV0Flow', () => {
     expect(result.summary.status).toBe('failed');
   });
 
+  it('reports a gate that was not evaluated as GATE_BLOCKED', async () => {
+    const result = await runFlow({
+      hookEngine: {
+        handleEvent: async () => ({
+          hook_point: 'task.completed',
+          matched: false,
+          gate_requests: [],
+          gate_results: [],
+          final_decision: 'allow',
+          created_at: new Date().toISOString(),
+          schema_version: SCHEMA_VERSION,
+        }),
+      },
+    });
+
+    expect(result.summary.failure).toEqual({
+      code: 'GATE_BLOCKED',
+      message: 'Required gates were not evaluated',
+      details: { phase: 'gate', gate_results: [] },
+    });
+  });
+
   it.each([
     ['failed', 'MATERIALIZATION_FAILED'],
     ['partial', 'MATERIALIZATION_PARTIAL'],
@@ -142,6 +164,31 @@ describe('runIntegrationV0Flow', () => {
         failures: [failure],
       },
     });
+  });
+
+  it('converts a thrown materializer error into a durable MATERIALIZATION_FAILED result', async () => {
+    const result = await runFlow({
+      materializer: {
+        materialize: async () => {
+          throw new Error('secret filesystem details');
+        },
+      },
+    });
+
+    expect(result.summary.failure).toMatchObject({
+      code: 'MATERIALIZATION_FAILED',
+      message: 'Worktree materialization failed',
+      details: {
+        phase: 'materialization',
+        status: 'failed',
+        files_written: [],
+        failures: [{ reason: 'Materializer failed' }],
+      },
+    });
+    expect(result.timeline.map((item) => item.name)).toContain('RunFailed');
+    await expect(
+      fs.readFile(`.newide/runs/${result.run_id}/checkpoint.json`, 'utf-8'),
+    ).resolves.toBeTruthy();
   });
 
   it('should run with council mode when enabled', async () => {
