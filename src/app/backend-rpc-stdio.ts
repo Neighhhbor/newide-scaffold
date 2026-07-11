@@ -89,7 +89,8 @@ function readJson(filePath: string): unknown {
 function hasDriverRunScript(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false;
   const scripts = Reflect.get(value, 'scripts');
-  return Boolean(scripts && typeof scripts === 'object' && Reflect.get(scripts, 'driver:run'));
+  const command = scripts && typeof scripts === 'object' && Reflect.get(scripts, 'driver:run');
+  return typeof command === 'string' && command.trim().length > 0;
 }
 
 export function startBackendRpcServer(options: BackendRpcServerOptions): BackendRpcServer {
@@ -121,15 +122,22 @@ export function startBackendRpcServer(options: BackendRpcServerOptions): Backend
 function loadEnvFile(filePath: string): NodeJS.ProcessEnv {
   if (!existsSync(filePath)) return {};
 
+  return parseDriverEnv(readFileSync(filePath, 'utf8'));
+}
+
+export function parseDriverEnv(content: string): NodeJS.ProcessEnv {
   return Object.fromEntries(
-    readFileSync(filePath, 'utf8')
+    content
       .split(/\r?\n/)
       .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith('#') && line.includes('='))
-      .map((line) => {
+      .flatMap((line) => {
+        if (!line || line.startsWith('#')) return [];
         const separator = line.indexOf('=');
+        if (separator <= 0) return [];
+        const key = line.slice(0, separator).trim();
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return [];
         const value = line.slice(separator + 1).trim();
-        return [line.slice(0, separator).trim(), value.replace(/^(["'])(.*)\1$/, '$2')];
+        return [[key, value.replace(/^(["'])(.*)\1$/, '$2')]];
       }),
   );
 }
