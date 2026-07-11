@@ -71,6 +71,8 @@ export type { AgentTaskRequest, AgentLoopState } from './agent-types';
 export type {
   AgentRunDeps,
   DriverInvokeInput,
+  DriverInvocationResult,
+  DriverInvokeOptions,
   SkillPromotionHandler,
   TaskInstructionPlanner,
 } from './runtime/agent-run-deps';

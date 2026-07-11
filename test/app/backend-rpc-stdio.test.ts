@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -73,11 +73,22 @@ process.stdin.on('end', () => {
     );
     expect(snapshot.snapshot?.delivery_report.driver_diagnostics.driver_id).toBe('claude-fake');
     expect(snapshot.snapshot?.delivery_report.driver_diagnostics.driver_id).not.toBe('mock-driver');
+    const processedBuffer = path.join(
+      '.newide',
+      'memory',
+      'role_ts_engineer',
+      'buffer',
+      'processed',
+      'report_1.json',
+    );
+    expect(existsSync(processedBuffer)).toBe(true);
+    expect(JSON.parse(readFileSync(processedBuffer, 'utf8')).source_driver).toBe('acp-external');
 
     await new Promise((resolve) => setTimeout(resolve, 50));
     rmSync(runnerDir, { recursive: true });
     rmSync(path.join('.newide', 'runs', created.run_id), { recursive: true, force: true });
     rmSync(path.join('.newide', 'worktrees', created.task_id), { recursive: true, force: true });
+    rmSync(path.join('.newide', 'memory'), { recursive: true, force: true });
   }, 15_000);
 
   it('answers ping over a real child process and exits on stdin EOF', async () => {
