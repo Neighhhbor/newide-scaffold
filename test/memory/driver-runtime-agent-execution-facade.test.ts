@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { SCHEMA_VERSION, type ArtifactRef } from '../../src/core';
 import type {
   DriverCapabilities,
@@ -7,6 +7,7 @@ import type {
   DriverRuntimeHandle,
 } from '../../src/driver';
 import { DriverRuntimeAgentExecutionFacade } from '../../src/memory';
+import { MockDriver } from '../../src/driver/mock-driver';
 
 describe('DriverRuntimeAgentExecutionFacade', () => {
   it('runs an agent through a DriverRuntimeHandle and returns an AgentExecutionResult', async () => {
@@ -72,6 +73,31 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
       driver_status: 'failed',
       driver_error_code: 'MOCK_FAILED',
     });
+  });
+
+  it('interrupts its driver when the execution signal is aborted', async () => {
+    const controller = new AbortController();
+    const driver = new MockDriver();
+    driver.sendPrompt = vi.fn(() => new Promise<DriverRunResult>(() => undefined));
+    const interrupt = vi.spyOn(driver, 'interrupt');
+    const facade = new DriverRuntimeAgentExecutionFacade({ driver });
+
+    const running = facade.runAgent(
+      {
+        task_id: 'task_cancel',
+        run_id: 'run_cancel',
+        role_id: 'proposer_a',
+        instruction: 'Cancel this B runtime execution.',
+        input_artifact_refs: [],
+        context_policy: 'default',
+        schema_version: SCHEMA_VERSION,
+      },
+      { signal: controller.signal },
+    );
+    controller.abort(new Error('Cancel B runtime execution'));
+
+    await expect(running).rejects.toThrow('Cancel B runtime execution');
+    expect(interrupt).toHaveBeenCalledWith('Cancel B runtime execution');
   });
 });
 

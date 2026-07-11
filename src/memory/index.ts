@@ -49,6 +49,7 @@ export { AGENT_EXECUTION_STATUSES } from './ports/agent-execution-facade';
 export type {
   AgentExecutionDiagnostics,
   AgentExecutionFacade,
+  AgentExecutionOptions,
   AgentExecutionRequest,
   AgentExecutionResult,
   AgentExecutionStatus,

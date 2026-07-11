@@ -41,6 +41,10 @@ export interface ArtifactSelectionInput {
   evidence_pack?: EvidencePack;
 }
 
+export interface ArtifactSelectionExecutionOptions {
+  signal?: AbortSignal;
+}
+
 export interface ArtifactSelectorOptions {
   mode: SelectionMode;
   councilProvider?: CouncilProvider;
@@ -61,11 +65,14 @@ export class ArtifactSelector {
     this.options = options;
   }
 
-  async selectArtifacts(input: ArtifactSelectionInput): Promise<ArtifactSelectionResult> {
+  async selectArtifacts(
+    input: ArtifactSelectionInput,
+    execution?: ArtifactSelectionExecutionOptions,
+  ): Promise<ArtifactSelectionResult> {
     if (this.options.mode === 'single_agent') {
       return this.selectSingleAgent(input);
     } else {
-      return this.selectViaCouncil(input);
+      return this.selectViaCouncil(input, execution);
     }
   }
 
@@ -97,7 +104,10 @@ export class ArtifactSelector {
     };
   }
 
-  private async selectViaCouncil(input: ArtifactSelectionInput): Promise<ArtifactSelectionResult> {
+  private async selectViaCouncil(
+    input: ArtifactSelectionInput,
+    execution?: ArtifactSelectionExecutionOptions,
+  ): Promise<ArtifactSelectionResult> {
     if (!this.options.councilProvider) {
       throw new Error('councilProvider is required when mode is "council"');
     }
@@ -113,16 +123,19 @@ export class ArtifactSelector {
       gate_results: input.gate_results,
     });
 
-    const councilRunResult = await this.options.councilProvider.runCouncilRound({
-      run_id: input.run_id,
-      task_id: input.task_id,
-      trigger: 'manual',
-      decision_mode: 'advisory',
-      question: 'Select the best driver output artifact for v0 integration.',
-      proposals: [proposal],
-      evidence_pack: input.evidence_pack,
-      schema_version: SCHEMA_VERSION,
-    });
+    const councilRunResult = await this.options.councilProvider.runCouncilRound(
+      {
+        run_id: input.run_id,
+        task_id: input.task_id,
+        trigger: 'manual',
+        decision_mode: 'advisory',
+        question: 'Select the best driver output artifact for v0 integration.',
+        proposals: [proposal],
+        evidence_pack: input.evidence_pack,
+        schema_version: SCHEMA_VERSION,
+      },
+      execution,
+    );
     const councilDecision = councilRunResult.decision;
 
     // Convert council verdict to selection

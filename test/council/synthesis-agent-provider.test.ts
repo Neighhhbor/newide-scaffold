@@ -6,9 +6,11 @@ import { SynthesisAgentCouncilProvider } from '../../src/council/providers/synth
 describe('SynthesisAgentCouncilProvider', () => {
   it('runs proposer, reviewer, and synthesizer roles through AgentExecutionFacade', async () => {
     const requests: AgentExecutionRequest[] = [];
+    const signals: Array<AbortSignal | undefined> = [];
     const agentExecutionFacade: AgentExecutionFacade = {
-      async runAgent(input) {
+      async runAgent(input, options) {
         requests.push(input);
+        signals.push(options?.signal);
         return {
           agent_run_id: `agent_run_${input.role_id}`,
           role_id: input.role_id,
@@ -30,25 +32,29 @@ describe('SynthesisAgentCouncilProvider', () => {
       },
     };
     const provider = new SynthesisAgentCouncilProvider({ agentExecutionFacade });
+    const controller = new AbortController();
 
-    const result = await provider.runCouncilRound({
-      run_id: 'run_001',
-      task_id: 'task_001',
-      trigger: 'manual',
-      decision_mode: 'advisory',
-      question: 'Select a final implementation candidate.',
-      proposals: [],
-      evidence_pack: {
-        evidence_pack_id: 'evidence_pack_001',
+    const result = await provider.runCouncilRound(
+      {
+        run_id: 'run_001',
         task_id: 'task_001',
-        artifact_refs: [],
-        gate_result_refs: [],
-        summary: 'evidence',
-        created_at: '2026-07-07T00:00:00.000Z',
+        trigger: 'manual',
+        decision_mode: 'advisory',
+        question: 'Select a final implementation candidate.',
+        proposals: [],
+        evidence_pack: {
+          evidence_pack_id: 'evidence_pack_001',
+          task_id: 'task_001',
+          artifact_refs: [],
+          gate_result_refs: [],
+          summary: 'evidence',
+          created_at: '2026-07-07T00:00:00.000Z',
+          schema_version: SCHEMA_VERSION,
+        },
         schema_version: SCHEMA_VERSION,
       },
-      schema_version: SCHEMA_VERSION,
-    });
+      { signal: controller.signal },
+    );
 
     expect(requests.map((request) => request.role_id)).toEqual([
       'proposer_a',
@@ -56,6 +62,7 @@ describe('SynthesisAgentCouncilProvider', () => {
       'reviewer',
       'synthesizer',
     ]);
+    expect(signals).toEqual(Array(4).fill(controller.signal));
     expect(result.proposals).toHaveLength(2);
     expect(result.reviews).toHaveLength(2);
     expect(result.synthesis).toMatchObject({

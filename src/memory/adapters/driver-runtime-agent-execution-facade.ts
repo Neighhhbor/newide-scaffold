@@ -11,8 +11,10 @@ import type {
   DriverRuntimeHandle,
   DriverRunStatus,
 } from '../../driver';
+import { runDriverPromptWithSignal } from '../../driver';
 import type {
   AgentExecutionFacade,
+  AgentExecutionOptions,
   AgentExecutionRequest,
   AgentExecutionResult,
   AgentExecutionStatus,
@@ -32,7 +34,10 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
     this.buildContextPackRef = options.buildContextPackRef ?? defaultContextPackRef;
   }
 
-  async runAgent(input: AgentExecutionRequest): Promise<AgentExecutionResult> {
+  async runAgent(
+    input: AgentExecutionRequest,
+    options?: AgentExecutionOptions,
+  ): Promise<AgentExecutionResult> {
     const contextPackRef = this.buildContextPackRef(input);
     const driverPrompt: DriverPrompt = {
       task_id: input.task_id,
@@ -42,7 +47,11 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
       created_at: nowTimestamp(),
       schema_version: input.schema_version,
     };
-    const driverResult = await this.driver.sendPrompt(driverPrompt);
+    const driverResult = await runDriverPromptWithSignal(
+      this.driver,
+      driverPrompt,
+      options?.signal,
+    );
 
     return {
       agent_run_id: createId('agent_run'),

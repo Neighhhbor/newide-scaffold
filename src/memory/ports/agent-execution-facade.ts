@@ -51,6 +51,13 @@ export interface AgentExecutionResult {
   schema_version: SchemaVersion;
 }
 
+export interface AgentExecutionOptions {
+  signal?: AbortSignal;
+}
+
 export interface AgentExecutionFacade {
-  runAgent(input: AgentExecutionRequest): Promise<AgentExecutionResult>;
+  runAgent(
+    input: AgentExecutionRequest,
+    options?: AgentExecutionOptions,
+  ): Promise<AgentExecutionResult>;
 }

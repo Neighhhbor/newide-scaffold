@@ -161,13 +161,21 @@ export interface CouncilRunRequest {
 
 export type CouncilRoundInput = CouncilRunRequest;
 
+export interface CouncilExecutionOptions {
+  signal?: AbortSignal;
+}
+
 export interface CouncilProvider {
-  runCouncilRound(input: CouncilRoundInput): Promise<CouncilRunResult>;
+  runCouncilRound(
+    input: CouncilRoundInput,
+    options?: CouncilExecutionOptions,
+  ): Promise<CouncilRunResult>;
 }
 
 export async function runCouncilRound(
   provider: CouncilProvider,
   input: CouncilRoundInput,
+  options?: CouncilExecutionOptions,
 ): Promise<CouncilRunResult> {
-  return provider.runCouncilRound(input);
+  return provider.runCouncilRound(input, options);
 }
