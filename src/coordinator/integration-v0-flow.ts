@@ -11,7 +11,12 @@ import {
   type TaskCreateRequest,
   type Timestamp,
 } from '../core';
-import { MockDriver, type DriverRunResult, type DriverRuntimeHandle } from '../driver';
+import {
+  MockDriver,
+  runDriverPromptWithSignal,
+  type DriverRunResult,
+  type DriverRuntimeHandle,
+} from '../driver';
 import { HookEngine } from '../hook';
 import { DecisionAggregator, type GateResult } from '../gate';
 import {
@@ -331,14 +336,18 @@ export async function runIntegrationV0Flow(
       schema_version: SCHEMA_VERSION,
     });
   } else {
-    driverResult = await driver.sendPrompt({
-      task_id: task.task_id,
-      run_id: run.run_id,
-      prompt,
-      context_pack_ref: contextPackRef,
-      created_at: nowTimestamp(),
-      schema_version: SCHEMA_VERSION,
-    });
+    driverResult = await runDriverPromptWithSignal(
+      driver,
+      {
+        task_id: task.task_id,
+        run_id: run.run_id,
+        prompt,
+        context_pack_ref: contextPackRef,
+        created_at: nowTimestamp(),
+        schema_version: SCHEMA_VERSION,
+      },
+      options?.signal,
+    );
   }
   options?.signal?.throwIfAborted();
 
