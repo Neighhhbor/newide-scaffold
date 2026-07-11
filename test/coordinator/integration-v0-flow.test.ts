@@ -396,6 +396,72 @@ describe('runIntegrationV0Flow', () => {
     });
   });
 
+  it('blocks council-selected artifacts when the post-council gate denies', async () => {
+    const hookPoints: string[] = [];
+    const materializedInputs: MaterializationInput[] = [];
+    const hookEngine = {
+      handleEvent: async (event: { event_type: string }): Promise<HookResult> => {
+        hookPoints.push(event.event_type);
+        const decision = hookPoints.length === 1 ? 'allow' : 'deny';
+        return gateHookResult(event.event_type, decision, `gate-${hookPoints.length}`);
+      },
+    };
+    const materializer = {
+      materialize: async (input: MaterializationInput): Promise<MaterializationResult> => {
+        materializedInputs.push(input);
+        return {
+          materialization_id: createId('materialization'),
+          task_id: input.task_id,
+          worktree_path: '.newide/worktrees/post-gate-deny',
+          materialized_artifacts: input.artifacts,
+          files_written: input.artifacts.length > 0 ? ['candidate.patch'] : [],
+          changed_files: input.artifacts.length > 0 ? ['candidate.patch'] : [],
+          status: 'completed',
+          failures: [],
+          created_at: new Date().toISOString(),
+          schema_version: SCHEMA_VERSION,
+        };
+      },
+    };
+
+    const result = await runFlow({ enableCouncil: true, hookEngine, materializer });
+
+    expect(hookPoints).toEqual(['task.completed', 'council.completed']);
+    expect(result.selection_result.selected_artifacts.length).toBeGreaterThan(0);
+    expect(materializedInputs).toHaveLength(1);
+    expect(materializedInputs[0]?.artifacts).toEqual([]);
+    expect(result.materialization_result.files_written).toEqual([]);
+    expect(result.summary.failure).toMatchObject({
+      code: 'GATE_DENIED',
+      details: { phase: 'gate', gate_phase: 'post_council' },
+    });
+
+    const eventLog = (await readJson(`.newide/runs/${result.run_id}/event-log.json`)) as Array<{
+      event_type: string;
+      payload: Record<string, unknown>;
+    }>;
+    const eventTypes = eventLog.map((event) => event.event_type);
+    expect(eventTypes.filter((type) => type === 'gate.result')).toHaveLength(2);
+    expect(eventTypes.indexOf('council.completed')).toBeLessThan(
+      eventTypes.indexOf('artifact.selected'),
+    );
+    expect(eventTypes.indexOf('artifact.selected')).toBeLessThan(
+      eventTypes.lastIndexOf('gate.result'),
+    );
+    expect(eventTypes.lastIndexOf('gate.result')).toBeLessThan(
+      eventTypes.indexOf('worktree.materialized'),
+    );
+    expect(
+      eventLog.filter((event) => event.event_type === 'gate.result').at(-1)?.payload,
+    ).toMatchObject({
+      phase: 'post_council',
+      decision: 'deny',
+      reason: 'deny at council.completed',
+      target_state: 'blocked',
+      required_actions: ['fix-policy'],
+    });
+  });
+
   it('should persist summary and timeline to .newide/runs/', async () => {
     const result = await runFlow();
 
@@ -926,6 +992,32 @@ function fakeHookEngine(decision: 'deny' | 'allow'): { handleEvent: () => Promis
       created_at: new Date().toISOString(),
       schema_version: SCHEMA_VERSION,
     }),
+  };
+}
+
+function gateHookResult(hookPoint: string, decision: 'deny' | 'allow', suffix: string): HookResult {
+  return {
+    hook_point: hookPoint,
+    matched: true,
+    gate_requests: [],
+    gate_results: [
+      {
+        gate_result_id: `gate_result_${suffix}`,
+        gate_id: `${decision}-gate`,
+        gate_point: hookPoint,
+        request_id: `gate_request_${suffix}`,
+        subject_id: 'task_under_review',
+        decision,
+        reason: `${decision} at ${hookPoint}`,
+        required_actions: decision === 'deny' ? ['fix-policy'] : [],
+        target_state: decision === 'deny' ? 'blocked' : 'allowed',
+        created_at: new Date().toISOString(),
+        schema_version: SCHEMA_VERSION,
+      },
+    ],
+    final_decision: decision,
+    created_at: new Date().toISOString(),
+    schema_version: SCHEMA_VERSION,
   };
 }
 

@@ -90,7 +90,18 @@ process.stdin.on('end', () => {
       });
       const councilSnapshot = await waitForTerminal(service, councilCreated.run_id);
       expect(councilSnapshot.status).toBe('completed');
-      expect(councilSnapshot.events.map((event) => event.type)).toContain('council.completed');
+      const councilEventTypes = councilSnapshot.events.map((event) => event.type);
+      expect(councilEventTypes.filter((type) => type === 'gate.result')).toHaveLength(2);
+      expect(councilEventTypes.indexOf('council.completed')).toBeLessThan(
+        councilEventTypes.indexOf('artifact.selected'),
+      );
+      expect(councilEventTypes.indexOf('artifact.selected')).toBeLessThan(
+        councilEventTypes.lastIndexOf('gate.result'),
+      );
+      expect(councilEventTypes.lastIndexOf('gate.result')).toBeLessThan(
+        councilEventTypes.indexOf('worktree.materialized'),
+      );
+      expect(councilSnapshot.snapshot?.delivery_report.files_written.length).toBeGreaterThan(0);
       expect(
         readFileSync(path.join(runnerDir, 'invocations.log'), 'utf8').trim().split('\n'),
       ).toHaveLength(6);
