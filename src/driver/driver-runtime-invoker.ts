@@ -36,7 +36,7 @@ export interface DriverRuntimeReport {
   referenced_experiences: Array<{
     experience_id: string;
     applied: boolean;
-    effectiveness: 'fully_effective' | 'partially_effective' | 'ineffective' | 'unknown';
+    effectiveness: 'fully_effective' | 'partially_effective' | 'ineffective' | 'not_applicable';
     note: string;
   }>;
   assumptions: Array<{ assumption: string; risk_if_wrong: string }>;
@@ -52,6 +52,12 @@ export function createDriverRuntimeInvoker(driver: DriverRuntimeHandle) {
     input: DriverRuntimeInvokerInput,
     options?: DriverRuntimeInvokerOptions,
   ): Promise<DriverRuntimeInvocationResult> {
+    if (input.source_driver !== driver.driver_id) {
+      throw new Error(
+        `source_driver ${input.source_driver} does not match runtime driver_id ${driver.driver_id}`,
+      );
+    }
+
     let execution: DriverRunResult;
     try {
       execution = await runDriverPromptWithSignal(
@@ -59,7 +65,7 @@ export function createDriverRuntimeInvoker(driver: DriverRuntimeHandle) {
         {
           task_id: input.task_id,
           run_id: input.call_id,
-          prompt: stableJson({
+          prompt: deterministicJson({
             task_instruction: input.driver_context.task_instruction,
             skills: input.driver_context.skills,
             experiences: input.driver_context.experiences,
@@ -94,9 +100,9 @@ function buildReport(
     blockers: succeeded ? [] : [buildBlocker(execution)],
     referenced_experiences: input.driver_context.experiences.map((experience) => ({
       experience_id: experience.id,
-      applied: succeeded,
-      effectiveness: succeeded ? 'fully_effective' : 'ineffective',
-      note: `Driver result ${execution.driver_run_result_id} finished with status ${execution.status}.`,
+      applied: false,
+      effectiveness: 'not_applicable',
+      note: `Driver result ${execution.driver_run_result_id} did not evidence use of experience ${experience.id}.`,
     })),
     assumptions: [],
   };
@@ -170,21 +176,20 @@ function isAbort(error: unknown, signal?: AbortSignal): boolean {
   return signal?.aborted === true || (error instanceof Error && error.name === 'AbortError');
 }
 
-const KEY_ORDER = ['task_instruction', 'skills', 'experiences', 'id', 'description', 'content'];
-
-function stableJson(value: unknown): string {
+function deterministicJson(value: unknown): string {
   return JSON.stringify(value, (_key, nested: unknown) => {
     if (!nested || typeof nested !== 'object' || Array.isArray(nested)) return nested;
     const record = nested as Record<string, unknown>;
     return Object.fromEntries(
       Object.keys(record)
-        .sort((left, right) => keyRank(left) - keyRank(right) || left.localeCompare(right))
+        .sort(compareCodeUnits)
         .map((key) => [key, record[key]]),
     );
   });
 }
 
-function keyRank(key: string): number {
-  const rank = KEY_ORDER.indexOf(key);
-  return rank === -1 ? KEY_ORDER.length : rank;
+function compareCodeUnits(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
