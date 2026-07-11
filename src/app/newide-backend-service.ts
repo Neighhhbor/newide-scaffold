@@ -15,6 +15,7 @@ import {
   type AppRunMode,
   type AppRunSnapshot,
 } from './run-registry';
+import { FileRunAuditWriter, type RunAuditWriter } from './run-audit-writer';
 
 export interface RunCreateParams {
   prompt: string;
@@ -34,6 +35,7 @@ export class NewideBackendService {
   constructor(
     private readonly runner: CoordinatorRunner = new IntegrationV0CoordinatorRunner(),
     private readonly registry = new InMemoryRunRegistry(),
+    private readonly auditWriter: RunAuditWriter = new FileRunAuditWriter(),
   ) {}
 
   createRun(params: RunCreateParams): Promise<RunCreateResult> {
@@ -63,6 +65,9 @@ export class NewideBackendService {
             if (identity) return;
             identity = created;
             this.registry.create({ ...created, mode, controller });
+            this.registry.subscribe(created.run_id, (event) => {
+              void this.auditWriter.append(event);
+            });
             this.registry.appendEvent(created.run_id, 'run.started', { mode });
             for (const record of pendingTelemetry) this.appendTelemetry(created, record);
             resolve({ ...created, status: 'running' });
@@ -74,7 +79,7 @@ export class NewideBackendService {
       }
 
       void runnerPromise
-        .then((result) => {
+        .then(async (result) => {
           if (!identity) {
             reject(new Error('Integration runner completed without reporting run identity'));
             return;
@@ -84,14 +89,16 @@ export class NewideBackendService {
           } else {
             this.registry.fail(identity.run_id, 'FLOW_FAILED', 'Integration flow failed');
           }
+          await this.auditWriter.flush(identity.run_id);
         })
-        .catch((error: unknown) => {
+        .catch(async (error: unknown) => {
           const normalized = toError(error);
           if (!identity) {
             reject(normalized);
             return;
           }
           this.registry.fail(identity.run_id, 'RUNNER_FAILED', normalized.message);
+          await this.auditWriter.flush(identity.run_id);
         });
     });
   }
@@ -100,8 +107,9 @@ export class NewideBackendService {
     return this.registry.getSnapshot(runId);
   }
 
-  cancelRun(runId: string): { cancelled: true } {
+  async cancelRun(runId: string): Promise<{ cancelled: true }> {
     this.registry.cancel(runId);
+    await this.auditWriter.flush(runId);
     return { cancelled: true };
   }
 

@@ -24,6 +24,7 @@ export interface IntegrationRunOutputPaths {
   checkpoint_path: string;
   message_thread_path: string;
   event_log_path: string;
+  audit_path: string;
   frontend_snapshot_path: string;
 }
 
@@ -40,6 +41,7 @@ export interface IntegrationRunResultManifest {
   checkpoint_path: string;
   message_thread_path: string;
   event_log_path: string;
+  audit_path: string;
   frontend_snapshot_path: string;
   council_decision_path?: string;
   council_proposals_path?: string;
@@ -76,6 +78,7 @@ export function buildRunOutputPaths(
     checkpoint_path: path.join(runDir, 'checkpoint.json'),
     message_thread_path: path.join(runDir, 'message-thread.json'),
     event_log_path: path.join(runDir, 'event-log.json'),
+    audit_path: path.join(runDir, 'audit.jsonl'),
     frontend_snapshot_path: path.join(runDir, 'frontend-snapshot.json'),
   };
 }
@@ -93,6 +96,7 @@ export interface BuildRunResultManifestInput {
   checkpoint_path: string;
   message_thread_path: string;
   event_log_path: string;
+  audit_path: string;
   frontend_snapshot_path: string;
   council_decision_path?: string;
   council_proposals_path?: string;
@@ -121,6 +125,7 @@ export function buildRunResultManifest(
     checkpoint_path: input.checkpoint_path,
     message_thread_path: input.message_thread_path,
     event_log_path: input.event_log_path,
+    audit_path: input.audit_path,
     frontend_snapshot_path: input.frontend_snapshot_path,
     ...(input.council_decision_path ? { council_decision_path: input.council_decision_path } : {}),
     ...(input.council_proposals_path

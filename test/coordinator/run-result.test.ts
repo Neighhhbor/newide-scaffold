@@ -25,6 +25,7 @@ describe('run-result output writer', () => {
       checkpoint_path: '.newide/runs/run_001/checkpoint.json',
       message_thread_path: '.newide/runs/run_001/message-thread.json',
       event_log_path: '.newide/runs/run_001/event-log.json',
+      audit_path: '.newide/runs/run_001/audit.jsonl',
       frontend_snapshot_path: '.newide/runs/run_001/frontend-snapshot.json',
     });
   });
@@ -47,6 +48,7 @@ describe('run-result output writer', () => {
       checkpoint_path: outputPaths.checkpoint_path,
       message_thread_path: outputPaths.message_thread_path,
       event_log_path: outputPaths.event_log_path,
+      audit_path: outputPaths.audit_path,
       frontend_snapshot_path: outputPaths.frontend_snapshot_path,
       created_at: '2026-07-07T00:00:00.000Z',
       schema_version: SCHEMA_VERSION,
@@ -88,6 +90,7 @@ describe('run-result output writer', () => {
       checkpoint_path: outputPaths.checkpoint_path,
       message_thread_path: outputPaths.message_thread_path,
       event_log_path: outputPaths.event_log_path,
+      audit_path: outputPaths.audit_path,
       frontend_snapshot_path: outputPaths.frontend_snapshot_path,
     });
   });
