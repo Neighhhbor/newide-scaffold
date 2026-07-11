@@ -19,6 +19,7 @@
     "example:basic": "tsx src/examples/basic-flow.ts",
     "example:integration-v0": "tsx src/examples/integration-v0.ts",
     "backend:rpc": "node --import tsx src/app/backend-rpc-stdio.ts",
+    "rpc:smoke": "node --import tsx scripts/rpc-smoke.ts",
     "prepare": "husky"
   },
   "lint-staged": {

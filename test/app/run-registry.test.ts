@@ -86,6 +86,18 @@ describe('InMemoryRunRegistry', () => {
     expect(() => registry.subscribe('missing', () => undefined)).toThrow(RunNotFoundError);
   });
 
+  it('replays existing events before streaming new subscription events', () => {
+    const registry = new InMemoryRunRegistry();
+    registry.create({ run_id: 'run_replay', task_id: 'task_replay', mode: 'single_agent' });
+    registry.appendEvent('run_replay', 'run.started', {});
+    const seen: string[] = [];
+
+    registry.subscribe('run_replay', (event) => seen.push(event.type));
+    registry.appendEvent('run_replay', 'run.completed', {});
+
+    expect(seen).toEqual(['run.started', 'run.completed']);
+  });
+
   it('aborts and records a running cancellation exactly once', () => {
     const registry = new InMemoryRunRegistry(() => '2026-07-11T08:00:00.000Z');
     const controller = new AbortController();

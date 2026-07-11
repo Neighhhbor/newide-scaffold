@@ -151,6 +151,7 @@ export class InMemoryRunRegistry {
   subscribe(runId: string, listener: RunEventListener): () => void {
     const record = this.require(runId);
     record.listeners.add(listener);
+    for (const event of record.events) listener(event);
     return () => record.listeners.delete(listener);
   }
 
