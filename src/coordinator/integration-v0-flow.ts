@@ -486,6 +486,7 @@ export async function runIntegrationV0Flow(
         },
         hooks: {
           'task.completed': [{ gate: 'allow-gate', priority: 100, timeout: 30 }],
+          'council.completed': [{ gate: 'allow-gate', priority: 100, timeout: 30 }],
         },
       },
       aggregator: new DecisionAggregator(),
@@ -509,17 +510,22 @@ export async function runIntegrationV0Flow(
   });
   timeline.push({ name: 'HookMatched', id: hookEvent.event_id });
 
-  const gateResults: GateResult[] = hookResult.gate_results;
-  if (gateResults.length > 0) {
-    const firstGateResult = gateResults[0]!;
+  const gateResults: GateResult[] = [...hookResult.gate_results];
+  for (const gateResult of gateResults) {
     const gateResultEvent = orchestrator.appendEvent({
       event_type: 'gate.result',
-      subject_id: firstGateResult.gate_result_id,
+      subject_id: gateResult.gate_result_id,
       run_id: run.run_id,
       task_id: task.task_id,
       payload: {
-        decision: firstGateResult.decision,
-        reason: firstGateResult.reason,
+        phase: options?.enableCouncil ? 'pre_council' : 'pre_selection',
+        gate_result_id: gateResult.gate_result_id,
+        gate_id: gateResult.gate_id,
+        request_id: gateResult.request_id,
+        decision: gateResult.decision,
+        reason: gateResult.reason,
+        target_state: gateResult.target_state,
+        required_actions: gateResult.required_actions,
       },
     });
     timeline.push({ name: 'GateResult', id: gateResultEvent.event_id });
@@ -597,9 +603,10 @@ export async function runIntegrationV0Flow(
     timeline.push({ name: 'CouncilDecision', id: councilEvent.event_id });
   }
 
+  let councilCompletedEvent: Event | undefined;
   if (selectionResult.council_run_result) {
     const councilRunResult = selectionResult.council_run_result;
-    const councilCompletedEvent = orchestrator.appendEvent({
+    councilCompletedEvent = orchestrator.appendEvent({
       event_type: 'council.completed',
       subject_id: councilRunResult.council_run_id,
       run_id: run.run_id,
@@ -631,6 +638,43 @@ export async function runIntegrationV0Flow(
   });
   timeline.push({ name: 'ArtifactSelected', id: selectionEvent.event_id });
 
+  const postCouncilGateResultIds = new Set<string>();
+  let postCouncilGatesRequired = false;
+  let postCouncilGatesPassed = true;
+  if (councilCompletedEvent) {
+    postCouncilGatesRequired = true;
+    const postCouncilHookResult = await hookEngine.handleEvent({
+      ...councilCompletedEvent,
+      event_type: 'council.completed',
+    });
+    options?.signal?.throwIfAborted();
+    postCouncilGatesPassed =
+      postCouncilHookResult.gate_results.length > 0 &&
+      postCouncilHookResult.gate_results.every((gate) => gate.decision === 'allow');
+    for (const gateResult of postCouncilHookResult.gate_results) {
+      gateResults.push(gateResult);
+      postCouncilGateResultIds.add(gateResult.gate_result_id);
+      const gateResultEvent = orchestrator.appendEvent({
+        event_type: 'gate.result',
+        subject_id: gateResult.gate_result_id,
+        run_id: run.run_id,
+        task_id: task.task_id,
+        payload: {
+          phase: 'post_council',
+          gate_result_id: gateResult.gate_result_id,
+          gate_id: gateResult.gate_id,
+          request_id: gateResult.request_id,
+          decision: gateResult.decision,
+          reason: gateResult.reason,
+          target_state: gateResult.target_state,
+          required_actions: gateResult.required_actions,
+        },
+      });
+      timeline.push({ name: 'PostCouncilGateResult', id: gateResultEvent.event_id });
+    }
+    evidencePack.gate_result_refs = gateResults.map((gate) => gate.gate_result_id);
+  }
+
   // 13. Worktree materialization (C: Coordinator)
   const materializer =
     options?.materializer ??
@@ -642,7 +686,7 @@ export async function runIntegrationV0Flow(
   try {
     materializationResult = await materializer.materialize({
       task_id: task.task_id,
-      artifacts: selectionResult.selected_artifacts,
+      artifacts: postCouncilGatesPassed ? selectionResult.selected_artifacts : [],
     });
   } catch {
     materializationResult = {
@@ -690,6 +734,8 @@ export async function runIntegrationV0Flow(
   const failure = buildIntegrationFailure({
     driverResult,
     gateResults,
+    postCouncilGateResultIds,
+    postCouncilGatesRequired,
     hasSelectedArtifact,
     materializationResult,
   });
@@ -933,6 +979,8 @@ export async function runIntegrationV0Flow(
 function buildIntegrationFailure(input: {
   driverResult: DriverRunResult;
   gateResults: GateResult[];
+  postCouncilGateResultIds: Set<string>;
+  postCouncilGatesRequired: boolean;
   hasSelectedArtifact: boolean;
   materializationResult: MaterializationResult;
 }): IntegrationV0Failure | undefined {
@@ -950,12 +998,25 @@ function buildIntegrationFailure(input: {
       details: { phase: 'gate', gate_results: [] },
     };
   }
+  if (input.postCouncilGatesRequired && input.postCouncilGateResultIds.size === 0) {
+    return {
+      code: 'GATE_BLOCKED',
+      message: 'Required post-council gates were not evaluated',
+      details: { phase: 'gate', gate_phase: 'post_council', gate_results: input.gateResults },
+    };
+  }
   const denied = input.gateResults.find((gate) => gate.decision === 'deny');
   if (denied) {
     return {
       code: 'GATE_DENIED',
       message: `Gate ${denied.gate_id} denied the run`,
-      details: { phase: 'gate', gate_results: input.gateResults },
+      details: {
+        phase: 'gate',
+        ...(input.postCouncilGateResultIds.has(denied.gate_result_id)
+          ? { gate_phase: 'post_council' }
+          : {}),
+        gate_results: input.gateResults,
+      },
     };
   }
   const blocked = input.gateResults.find(
@@ -965,7 +1026,13 @@ function buildIntegrationFailure(input: {
     return {
       code: 'GATE_BLOCKED',
       message: `Gate ${blocked.gate_id} blocked the run`,
-      details: { phase: 'gate', gate_results: input.gateResults },
+      details: {
+        phase: 'gate',
+        ...(input.postCouncilGateResultIds.has(blocked.gate_result_id)
+          ? { gate_phase: 'post_council' }
+          : {}),
+        gate_results: input.gateResults,
+      },
     };
   }
   if (!input.hasSelectedArtifact) {
