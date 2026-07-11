@@ -148,6 +148,9 @@ describe('runIntegrationV0Flow', () => {
           (artifact) => artifact.artifact_id,
         ),
         can_create_merge_authorization: false,
+        proposals: result.selection_result.council_run_result?.proposals,
+        reviews: result.selection_result.council_run_result?.reviews,
+        output: result.selection_result.council_run_result?.output,
       },
     });
 

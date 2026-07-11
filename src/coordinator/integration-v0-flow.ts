@@ -762,6 +762,9 @@ export async function runIntegrationV0Flow(
     timeline,
     checkpoint: savedCheckpoint,
     message_thread: mailboxThread,
+    ...(selectionResult.council_run_result
+      ? { council_run_result: selectionResult.council_run_result }
+      : {}),
     links: frontendSnapshotLinks,
   });
   const resultManifest = buildRunResultManifest({

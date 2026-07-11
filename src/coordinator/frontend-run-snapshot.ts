@@ -8,7 +8,7 @@ import type { Checkpoint, Message, MessageId, SchemaVersion, Timestamp } from '.
 import type { ArtifactOutput } from './artifact-output';
 import type { RunResultStatus, IntegrationRunOutputPaths } from './run-result';
 import type { SelectionMode } from './artifact-finalizer';
-import type { CouncilDecision } from '../council';
+import type { CouncilDecision, CouncilRunResult } from '../council';
 
 export type FrontendStage = 'executing' | 'council' | 'delivery';
 export type FrontendTimelineLevel = 'info' | 'success' | 'warning' | 'council';
@@ -61,6 +61,7 @@ export interface BuildFrontendRunSnapshotInput {
   timeline: readonly FrontendRunSnapshotTimelineItem[];
   checkpoint: Checkpoint;
   message_thread: readonly Message[];
+  council_run_result?: CouncilRunResult;
   links: Omit<IntegrationRunOutputPaths, 'run_dir'>;
 }
 
@@ -124,6 +125,10 @@ export interface FrontendRunSnapshot {
     verdict: CouncilDecision['verdict'];
     selected_artifact_refs: string[];
     can_create_merge_authorization: boolean;
+    proposals: CouncilRunResult['proposals'];
+    reviews: CouncilRunResult['reviews'];
+    synthesis?: CouncilRunResult['synthesis'];
+    output?: CouncilRunResult['output'];
   };
   links: Omit<IntegrationRunOutputPaths, 'run_dir'>;
 }
@@ -206,6 +211,14 @@ export function buildFrontendRunSnapshot(
             selected_artifact_refs: [...(input.summary.council_selected_artifact_refs ?? [])],
             can_create_merge_authorization:
               input.summary.council_can_create_merge_authorization ?? false,
+            proposals: [...(input.council_run_result?.proposals ?? [])],
+            reviews: [...(input.council_run_result?.reviews ?? [])],
+            ...(input.council_run_result?.synthesis
+              ? { synthesis: input.council_run_result.synthesis }
+              : {}),
+            ...(input.council_run_result?.output
+              ? { output: input.council_run_result.output }
+              : {}),
           },
         }
       : {}),
