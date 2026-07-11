@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import type { IntegrationV0Result } from '../../src/coordinator/integration-v0-flow';
 import { NewideBackendService } from '../../src/app/newide-backend-service';
+import { InMemoryRunRegistry } from '../../src/app/run-registry';
+import { FileRunAuditWriter } from '../../src/app/run-audit-writer';
 
 describe('NewideBackendService', () => {
   it('returns real ids before the runner completes and records telemetry', async () => {
@@ -66,27 +71,41 @@ describe('NewideBackendService', () => {
 
   it('cancels the runner without replacing cancelled state with failure', async () => {
     let receivedSignal: AbortSignal | undefined;
-    const service = new NewideBackendService({
-      run: async (request) => {
-        receivedSignal = request.signal;
-        request.onRunCreated?.({ run_id: 'run_cancelled', task_id: 'task_cancelled' });
-        await new Promise((_, reject) => {
-          request.signal?.addEventListener('abort', () => reject(request.signal?.reason), {
-            once: true,
+    const runsRoot = await mkdtemp(path.join(os.tmpdir(), 'backend-service-'));
+    const service = new NewideBackendService(
+      {
+        run: async (request) => {
+          receivedSignal = request.signal;
+          request.onRunCreated?.({ run_id: 'run_cancelled', task_id: 'task_cancelled' });
+          await new Promise((_, reject) => {
+            request.signal?.addEventListener('abort', () => reject(request.signal?.reason), {
+              once: true,
+            });
           });
-        });
-        throw new Error('unreachable');
+          throw new Error('unreachable');
+        },
       },
-    });
+      new InMemoryRunRegistry(),
+      new FileRunAuditWriter(runsRoot),
+    );
 
-    await service.createRun({ prompt: 'Cancel safely' });
-    expect(service.cancelRun('run_cancelled')).toEqual({ cancelled: true });
-    expect(receivedSignal?.aborted).toBe(true);
-    await viWaitFor(() => service.getSnapshot('run_cancelled').status === 'cancelled');
-    expect(service.getSnapshot('run_cancelled')).toMatchObject({
-      status: 'cancelled',
-      events: [{ type: 'run.started' }, { type: 'run.cancelled' }],
-    });
+    try {
+      await service.createRun({ prompt: 'Cancel safely' });
+      await expect(service.cancelRun('run_cancelled')).resolves.toEqual({ cancelled: true });
+      expect(receivedSignal?.aborted).toBe(true);
+      await viWaitFor(() => service.getSnapshot('run_cancelled').status === 'cancelled');
+      expect(service.getSnapshot('run_cancelled')).toMatchObject({
+        status: 'cancelled',
+        events: [{ type: 'run.started' }, { type: 'run.cancelled' }],
+      });
+      const audit = (await readFile(path.join(runsRoot, 'run_cancelled', 'audit.jsonl'), 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(audit.map((event) => event.type)).toEqual(['run.started', 'run.cancelled']);
+    } finally {
+      await rm(runsRoot, { recursive: true, force: true });
+    }
   });
 });
 

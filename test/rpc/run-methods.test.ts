@@ -85,7 +85,7 @@ describe('RunRpcMethods', () => {
 
   it('forwards run.cancel to the application service', async () => {
     const output: string[] = [];
-    const service = fakeService({ cancelRun: () => ({ cancelled: true }) });
+    const service = fakeService({ cancelRun: async () => ({ cancelled: true }) });
     const dispatcher = new JsonRpcDispatcher();
     const session = new JsonRpcLineSession(dispatcher, (line) => output.push(line));
     new RunRpcMethods(service, () => undefined).register(dispatcher);
@@ -109,7 +109,7 @@ function fakeService(overrides?: Partial<RunMethodsService>): RunMethodsService 
       throw new RunNotFoundError(runId);
     },
     subscribe: () => () => undefined,
-    cancelRun: () => ({ cancelled: true }),
+    cancelRun: async () => ({ cancelled: true }),
     ...overrides,
   };
 }

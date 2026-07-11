@@ -765,6 +765,7 @@ export async function runIntegrationV0Flow(
     checkpoint_path: outputPaths.checkpoint_path,
     message_thread_path: outputPaths.message_thread_path,
     event_log_path: outputPaths.event_log_path,
+    audit_path: outputPaths.audit_path,
     frontend_snapshot_path: outputPaths.frontend_snapshot_path,
   };
   const frontendSnapshot = buildFrontendRunSnapshot({
@@ -790,6 +791,7 @@ export async function runIntegrationV0Flow(
     checkpoint_path: outputPaths.checkpoint_path,
     message_thread_path: outputPaths.message_thread_path,
     event_log_path: outputPaths.event_log_path,
+    audit_path: outputPaths.audit_path,
     frontend_snapshot_path: outputPaths.frontend_snapshot_path,
     ...(summary.council_decision_path
       ? {

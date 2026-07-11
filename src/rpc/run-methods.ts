@@ -14,7 +14,7 @@ export interface RunMethodsService {
   createRun(params: RunCreateParams): Promise<RunCreateResult>;
   getSnapshot(runId: string): AppRunSnapshot;
   subscribe(runId: string, listener: (event: AppRunEvent) => void): () => void;
-  cancelRun(runId: string): { cancelled: true };
+  cancelRun(runId: string): Promise<{ cancelled: true }>;
 }
 
 const createParamsSchema = z
