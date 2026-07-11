@@ -41,7 +41,6 @@ export interface RunCreateResult {
 
 export class NewideBackendService {
   private readonly terminalRuns = new Map<string, Promise<void>>();
-  private readonly persistedTerminalEvents = new Set<string>();
 
   constructor(
     private readonly runner: CoordinatorRunner = new IntegrationV0CoordinatorRunner(),
@@ -91,7 +90,6 @@ export class NewideBackendService {
             this.terminalRuns.set(created.run_id, terminalRun);
             this.registry.create({ ...created, mode, controller });
             this.registry.subscribe(created.run_id, (event) => {
-              if (this.persistedTerminalEvents.delete(event.event_id)) return;
               void this.auditWriter.append(event).catch(() => undefined);
             });
             for (const event of pendingEvents) this.appendDomainEvent(created, event);
@@ -167,7 +165,11 @@ export class NewideBackendService {
   async cancelRun(runId: string): Promise<{ cancelled: true }> {
     const staged = this.registry.stageTerminal(runId, { status: 'cancelled' });
     if (staged) await this.persistTerminal(runId, staged);
-    else await this.waitForTerminal(runId);
+    else {
+      await this.waitForTerminal(runId);
+      const status = this.registry.getSnapshot(runId).status;
+      if (status !== 'cancelled') throw new Error(`Run ${runId} already reached ${status}`);
+    }
     return { cancelled: true };
   }
 
@@ -197,10 +199,10 @@ export class NewideBackendService {
 
   private async persistTerminal(runId: string, staged: StagedTerminalTransition): Promise<void> {
     try {
+      await this.auditWriter.flush(runId);
       await this.terminalWriter.finalize(staged.snapshot);
-      await this.auditWriter.append(staged.event);
-      this.persistedTerminalEvents.add(staged.event.event_id);
       this.registry.commitTerminal(runId, staged);
+      await this.auditWriter.flush(runId).catch(() => undefined);
     } catch (error) {
       this.registry.abortTerminal(runId, staged.token);
       const failure = this.registry.stageTerminal(runId, {
@@ -209,12 +211,6 @@ export class NewideBackendService {
         message: toError(error).message,
       });
       if (!failure) return;
-      try {
-        await this.auditWriter.append(failure.event);
-        this.persistedTerminalEvents.add(failure.event.event_id);
-      } catch {
-        // The in-memory failure remains authoritative when durable output is unavailable.
-      }
       this.registry.commitTerminal(runId, failure);
     }
   }
