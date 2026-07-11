@@ -16,6 +16,10 @@ import {
   type AppRunSnapshot,
 } from './run-registry';
 import { FileRunAuditWriter, type RunAuditWriter } from './run-audit-writer';
+import {
+  FileRunTerminalOutputWriter,
+  type RunTerminalOutputWriter,
+} from './run-terminal-output-writer';
 
 export interface RunCreateParams {
   prompt: string;
@@ -36,6 +40,7 @@ export class NewideBackendService {
     private readonly runner: CoordinatorRunner = new IntegrationV0CoordinatorRunner(),
     private readonly registry = new InMemoryRunRegistry(),
     private readonly auditWriter: RunAuditWriter = new FileRunAuditWriter(),
+    private readonly terminalWriter: RunTerminalOutputWriter = new FileRunTerminalOutputWriter(),
   ) {}
 
   createRun(params: RunCreateParams): Promise<RunCreateResult> {
@@ -88,6 +93,7 @@ export class NewideBackendService {
             this.registry.complete(identity.run_id, result.frontend_snapshot);
           } else {
             this.registry.fail(identity.run_id, 'FLOW_FAILED', 'Integration flow failed');
+            await this.terminalWriter.finalize(this.registry.getSnapshot(identity.run_id));
           }
           await this.auditWriter.flush(identity.run_id);
         })
@@ -99,6 +105,7 @@ export class NewideBackendService {
           }
           this.registry.fail(identity.run_id, 'RUNNER_FAILED', normalized.message);
           await this.auditWriter.flush(identity.run_id);
+          await this.terminalWriter.finalize(this.registry.getSnapshot(identity.run_id));
         });
     });
   }
@@ -110,6 +117,7 @@ export class NewideBackendService {
   async cancelRun(runId: string): Promise<{ cancelled: true }> {
     this.registry.cancel(runId);
     await this.auditWriter.flush(runId);
+    await this.terminalWriter.finalize(this.registry.getSnapshot(runId));
     return { cancelled: true };
   }
 
