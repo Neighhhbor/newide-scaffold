@@ -4,18 +4,14 @@
  * 这个文件负责 run 查询、事件顺序和订阅，不启动 Coordinator，也不做跨进程持久化。
  */
 import type { FrontendRunSnapshot } from '../coordinator/frontend-run-snapshot';
+import { SCHEMA_VERSION, createId } from '../core';
+import { projectRunEventSource, type RunEvent } from '../protocol/run-event';
 
 export type AppRunMode = 'single_agent' | 'council';
 export type AppRunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 export type AppRunStage = 'executing' | 'council' | 'delivery' | 'intervention';
 
-export interface AppRunEvent {
-  sequence: number;
-  run_id: string;
-  type: string;
-  created_at: string;
-  payload: Record<string, unknown>;
-}
+export type AppRunEvent = RunEvent;
 
 export interface AppRunSnapshot {
   schema_version: 'v0';
@@ -65,7 +61,10 @@ const EVENT_NODE_CODES: Readonly<Record<string, string>> = {
 export class InMemoryRunRegistry {
   private readonly records = new Map<string, MutableRunRecord>();
 
-  constructor(private readonly now: () => string = () => new Date().toISOString()) {}
+  constructor(
+    private readonly now: () => string = () => new Date().toISOString(),
+    private readonly createEventId: () => string = () => createId('run_event'),
+  ) {}
 
   create(input: {
     run_id: string;
@@ -93,11 +92,15 @@ export class InMemoryRunRegistry {
   appendEvent(runId: string, type: string, payload: Record<string, unknown>): AppRunEvent {
     const record = this.require(runId);
     const event: AppRunEvent = {
+      event_id: this.createEventId(),
       sequence: record.events.length + 1,
       run_id: runId,
+      task_id: record.task_id,
       type,
+      source: projectRunEventSource(type),
       created_at: this.now(),
       payload,
+      schema_version: SCHEMA_VERSION,
     };
     record.events.push(event);
     record.revision += 1;

@@ -16,11 +16,15 @@ describe('FileRunAuditWriter', () => {
     tempDirs.push(runsRoot);
     const writer = new FileRunAuditWriter(runsRoot);
     const event = {
+      event_id: 'run_event_1',
       sequence: 1,
       run_id: 'run_1',
+      task_id: 'task_1',
       type: 'run.started',
+      source: 'coordinator' as const,
       created_at: '2026-07-11T08:00:00.000Z',
       payload: { mode: 'single_agent' },
+      schema_version: 'v0',
     };
 
     await writer.initialize('run_1');
@@ -41,11 +45,15 @@ describe('FileRunAuditWriter', () => {
     tempDirs.push(runsRoot);
     const writer = new FileRunAuditWriter(runsRoot);
     const event = {
+      event_id: 'run_event_1',
       sequence: 1,
       run_id: 'run_1',
+      task_id: 'task_1',
       type: 'run.started',
+      source: 'coordinator' as const,
       created_at: '2026-07-11T08:00:00.000Z',
       payload: {},
+      schema_version: 'v0',
     };
 
     await writer.initialize('run_1');
@@ -62,11 +70,15 @@ describe('FileRunAuditWriter', () => {
     tempDirs.push(runsRoot);
     const writer = new FileRunAuditWriter(runsRoot);
     const event = {
+      event_id: 'run_event_1',
       sequence: 1,
       run_id: 'run_queued',
+      task_id: 'task_queued',
       type: 'run.started',
+      source: 'coordinator' as const,
       created_at: '2026-07-11T08:00:00.000Z',
       payload: {},
+      schema_version: 'v0',
     };
 
     void writer.append(event);
@@ -80,5 +92,15 @@ describe('FileRunAuditWriter', () => {
         .split('\n')
         .map((line) => JSON.parse(line)),
     ).toHaveLength(2);
+  });
+
+  it('rejects events that do not satisfy the external contract', async () => {
+    const runsRoot = await mkdtemp(path.join(os.tmpdir(), 'run-audit-'));
+    tempDirs.push(runsRoot);
+    const writer = new FileRunAuditWriter(runsRoot);
+
+    await expect(
+      writer.append({ run_id: 'run_invalid', type: 'run.started' } as never),
+    ).rejects.toThrow();
   });
 });

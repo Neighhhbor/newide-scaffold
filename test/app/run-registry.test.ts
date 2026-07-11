@@ -3,7 +3,11 @@ import { InMemoryRunRegistry, RunNotFoundError } from '../../src/app/run-registr
 
 describe('InMemoryRunRegistry', () => {
   it('tracks running state and monotonically sequenced events', () => {
-    const registry = new InMemoryRunRegistry(() => '2026-07-11T08:00:00.000Z');
+    let eventNumber = 0;
+    const registry = new InMemoryRunRegistry(
+      () => '2026-07-11T08:00:00.000Z',
+      () => `run_event_${++eventNumber}`,
+    );
     registry.create({ run_id: 'run_1', task_id: 'task_1', mode: 'single_agent' });
     const seen: number[] = [];
     registry.subscribe('run_1', (event) => seen.push(event.sequence));
@@ -19,8 +23,22 @@ describe('InMemoryRunRegistry', () => {
       mode: 'single_agent',
       current: { stage: 'executing', active_node_code: 'N8' },
       events: [
-        { sequence: 1, type: 'task.created' },
-        { sequence: 2, type: 'driver.run_result' },
+        {
+          sequence: 1,
+          event_id: 'run_event_1',
+          task_id: 'task_1',
+          type: 'task.created',
+          source: 'coordinator',
+          schema_version: 'v0',
+        },
+        {
+          sequence: 2,
+          event_id: 'run_event_2',
+          task_id: 'task_1',
+          type: 'driver.run_result',
+          source: 'driver',
+          schema_version: 'v0',
+        },
       ],
     });
     expect(seen).toEqual([1, 2]);

@@ -2,6 +2,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { AppRunEvent } from './run-registry';
+import { runEventSchema } from '../protocol/run-event';
 
 export interface RunAuditWriter {
   initialize(runId: string): Promise<void>;
@@ -24,10 +25,11 @@ export class FileRunAuditWriter implements RunAuditWriter {
   append(event: AppRunEvent): Promise<void> {
     const previous = this.queues.get(event.run_id) ?? Promise.resolve();
     const next = previous.then(async () => {
-      await this.initialize(event.run_id);
+      const validated = runEventSchema.parse(event);
+      await this.initialize(validated.run_id);
       await fs.appendFile(
-        path.join(this.runsRoot, event.run_id, 'audit.jsonl'),
-        `${JSON.stringify(event)}\n`,
+        path.join(this.runsRoot, validated.run_id, 'audit.jsonl'),
+        `${JSON.stringify(validated)}\n`,
         'utf-8',
       );
     });
