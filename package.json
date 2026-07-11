@@ -18,6 +18,7 @@
     "verify": "pnpm lint && pnpm typecheck && pnpm test",
     "example:basic": "tsx src/examples/basic-flow.ts",
     "example:integration-v0": "tsx src/examples/integration-v0.ts",
+    "backend:rpc": "tsx src/app/backend-rpc-stdio.ts",
     "prepare": "husky"
   },
   "lint-staged": {
