@@ -329,7 +329,9 @@ export async function runIntegrationV0Flow(
       name: 'AgentExecutionRequested',
       id: agentExecutionRequestedEvent.event_id,
     });
-    agentExecutionResult = await options.agentExecutionFacade.runAgent(agentExecutionRequest);
+    agentExecutionResult = await options.agentExecutionFacade.runAgent(agentExecutionRequest, {
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
     driverResult = buildDriverRunResultFromAgentExecution({
       result: agentExecutionResult,
       session_id: driver.session_id,
@@ -528,13 +530,16 @@ export async function runIntegrationV0Flow(
     timeline.push({ name: 'CouncilStarted', id: councilStartedEvent.event_id });
   }
 
-  const selectionResult = await selector.selectArtifacts({
-    run_id: run.run_id,
-    task_id: task.task_id,
-    driver_result: driverResult,
-    gate_results: gateResults,
-    evidence_pack: evidencePack,
-  });
+  const selectionResult = await selector.selectArtifacts(
+    {
+      run_id: run.run_id,
+      task_id: task.task_id,
+      driver_result: driverResult,
+      gate_results: gateResults,
+      evidence_pack: evidencePack,
+    },
+    { ...(options?.signal ? { signal: options.signal } : {}) },
+  );
   options?.signal?.throwIfAborted();
 
   if (selectionResult.council_decision) {

@@ -5,9 +5,14 @@
  * 不直接调用 A 方向 DriverRuntimeHandle。
  */
 import { SCHEMA_VERSION, createId, nowTimestamp, type ArtifactRef } from '../../core';
-import type { AgentExecutionFacade, AgentExecutionResult } from '../../memory';
+import type {
+  AgentExecutionFacade,
+  AgentExecutionOptions,
+  AgentExecutionResult,
+} from '../../memory';
 import type {
   CouncilDecision,
+  CouncilExecutionOptions,
   CouncilOutput,
   CouncilProvider,
   CouncilRunResult,
@@ -28,19 +33,26 @@ export class SynthesisAgentCouncilProvider implements CouncilProvider {
     this.agentExecutionFacade = options.agentExecutionFacade;
   }
 
-  async runCouncilRound(input: CouncilRoundInput): Promise<CouncilRunResult> {
+  async runCouncilRound(
+    input: CouncilRoundInput,
+    options?: CouncilExecutionOptions,
+  ): Promise<CouncilRunResult> {
     const executionRunId = input.run_id ?? createId('run');
     const proposerA = await this.runRole(
       input,
       executionRunId,
       'proposer_a',
       'Produce proposal A.',
+      input.evidence_pack?.artifact_refs ?? [],
+      options,
     );
     const proposerB = await this.runRole(
       input,
       executionRunId,
       'proposer_b',
       'Produce proposal B.',
+      input.evidence_pack?.artifact_refs ?? [],
+      options,
     );
     const generatedProposals = [buildProposal(input, proposerA), buildProposal(input, proposerB)];
     const proposals = [...input.proposals, ...generatedProposals];
@@ -50,6 +62,7 @@ export class SynthesisAgentCouncilProvider implements CouncilProvider {
       'reviewer',
       `Review proposals: ${proposals.map((proposal) => proposal.proposal_id).join(', ')}`,
       proposals.flatMap((proposal) => proposal.artifact_refs),
+      options,
     );
     const reviews = proposals.map((proposal) => buildReview(proposal, reviewer));
     const synthesizer = await this.runRole(
@@ -58,6 +71,7 @@ export class SynthesisAgentCouncilProvider implements CouncilProvider {
       'synthesizer',
       `Synthesize final candidate from proposals and reviews for: ${input.question}`,
       proposals.flatMap((proposal) => proposal.artifact_refs),
+      options,
     );
     const synthesis = buildSynthesis(input, proposals, reviews, synthesizer);
     const selectedArtifactRefs = synthesizer.artifact_refs.map((artifact) => artifact.artifact_id);
@@ -91,16 +105,20 @@ export class SynthesisAgentCouncilProvider implements CouncilProvider {
     roleId: string,
     instruction: string,
     inputArtifactRefs: string[] = input.evidence_pack?.artifact_refs ?? [],
+    options?: AgentExecutionOptions,
   ): Promise<AgentExecutionResult> {
-    return this.agentExecutionFacade.runAgent({
-      task_id: input.task_id,
-      run_id: executionRunId,
-      role_id: roleId,
-      instruction,
-      input_artifact_refs: inputArtifactRefs,
-      context_policy: 'council_synthesis_default',
-      schema_version: SCHEMA_VERSION,
-    });
+    return this.agentExecutionFacade.runAgent(
+      {
+        task_id: input.task_id,
+        run_id: executionRunId,
+        role_id: roleId,
+        instruction,
+        input_artifact_refs: inputArtifactRefs,
+        context_policy: 'council_synthesis_default',
+        schema_version: SCHEMA_VERSION,
+      },
+      options,
+    );
   }
 }
 
