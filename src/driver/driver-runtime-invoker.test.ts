@@ -17,7 +17,7 @@ describe('createDriverRuntimeInvoker', () => {
       schema_version: SCHEMA_VERSION,
     });
     expect(driver.prompts[0]?.prompt).toBe(
-      '{"task_instruction":"Implement it","skills":[{"id":"skill_1","description":"Skill","content":"Skill body"}],"experiences":[{"id":"exp_1","description":"Experience","content":"Experience body"}]}',
+      '{"experiences":[{"content":"Experience body","description":"Experience","id":"exp_1"}],"skills":[{"content":"Skill body","description":"Skill","id":"skill_1"}],"task_instruction":"Implement it"}',
     );
     expect(output.execution).toEqual(successResult());
     expect(output.report).toEqual({
@@ -28,9 +28,9 @@ describe('createDriverRuntimeInvoker', () => {
       referenced_experiences: [
         {
           experience_id: 'exp_1',
-          applied: true,
-          effectiveness: 'fully_effective',
-          note: 'Driver result driver_result_1 finished with status succeeded.',
+          applied: false,
+          effectiveness: 'not_applicable',
+          note: 'Driver result driver_result_1 did not evidence use of experience exp_1.',
         },
       ],
       assumptions: [],
@@ -46,7 +46,7 @@ describe('createDriverRuntimeInvoker', () => {
     expect(output.report.artifacts[0]?.summary).toBe('patch artifact artifact_1');
   });
 
-  it('canonicalizes nested context objects regardless of property insertion order', async () => {
+  it('serializes nested context deterministically regardless of property insertion order', async () => {
     const firstDriver = new TestDriver(successResult());
     const secondDriver = new TestDriver(successResult());
     const first = invocationInput();
@@ -57,6 +57,18 @@ describe('createDriverRuntimeInvoker', () => {
     await createDriverRuntimeInvoker(secondDriver)(second);
 
     expect(firstDriver.prompts[0]?.prompt).toBe(secondDriver.prompts[0]?.prompt);
+  });
+
+  it('sorts unknown and Unicode nested keys by code unit without locale dependence', async () => {
+    const driver = new TestDriver(successResult());
+    const input = invocationInput();
+    Object.assign(input.driver_context.skills[0]!, { z: 1, ä: 2, A: 3, a: { z: 1, A: 2 } });
+
+    await createDriverRuntimeInvoker(driver)(input);
+
+    expect(driver.prompts[0]?.prompt).toContain(
+      '"skills":[{"A":3,"a":{"A":2,"z":1},"content":"Skill body","description":"Skill","id":"skill_1","z":1,"ä":2}]',
+    );
   });
 
   it.each(['failed', 'cancelled', 'interrupted'] as const)(
@@ -80,7 +92,7 @@ describe('createDriverRuntimeInvoker', () => {
       ]);
       expect(output.report.referenced_experiences[0]).toMatchObject({
         applied: false,
-        effectiveness: 'ineffective',
+        effectiveness: 'not_applicable',
       });
     },
   );
@@ -119,13 +131,42 @@ describe('createDriverRuntimeInvoker', () => {
   });
 
   it('is structurally assignable to the expected B-facing shape', () => {
+    type BReport = {
+      artifacts: Array<{ type: string; path: string; summary: string }>;
+      summary: string;
+      decisions: Array<{ point: string; options: string[]; chosen: string; reason: string }>;
+      blockers: Array<{
+        blocker: string;
+        attempts: string[];
+        resolution: string;
+        resolved: boolean;
+      }>;
+      referenced_experiences: Array<{
+        experience_id: string;
+        applied: boolean;
+        effectiveness: 'fully_effective' | 'partially_effective' | 'ineffective' | 'not_applicable';
+        note: string;
+      }>;
+      assumptions: Array<{ assumption: string; risk_if_wrong: string }>;
+    };
     type Expected = (
       input: ReturnType<typeof invocationInput>,
       options?: { signal?: AbortSignal },
-    ) => Promise<{ report: { summary: string }; execution: DriverRunResult }>;
+    ) => Promise<{ report: BReport; execution: DriverRunResult }>;
     const expected: Expected = createDriverRuntimeInvoker(new TestDriver(successResult()));
 
     expect(expected).toBeTypeOf('function');
+  });
+
+  it('fails before invoking a runtime whose identity differs from source_driver', async () => {
+    const driver = new TestDriver(successResult());
+    const input = invocationInput();
+    input.source_driver = 'another-driver';
+
+    await expect(createDriverRuntimeInvoker(driver)(input)).rejects.toThrow(
+      'source_driver another-driver does not match runtime driver_id driver_1',
+    );
+    expect(driver.prompts).toHaveLength(0);
   });
 });
 
