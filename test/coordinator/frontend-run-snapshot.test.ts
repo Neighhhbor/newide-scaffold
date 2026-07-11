@@ -140,5 +140,23 @@ describe('buildFrontendRunSnapshot', () => {
         text: 'RunCompleted',
       },
     ]);
+    expect(snapshot.flow.active_node_code).toBe('N18');
+    expect(snapshot.flow.node_statuses).toHaveLength(19);
+    expect(snapshot.flow.node_statuses.slice(0, 3)).toEqual([
+      { code: 'N0', status: 'pending' },
+      { code: 'N1', status: 'pending' },
+      {
+        code: 'N2',
+        status: 'done',
+        event_type: 'TaskCreated',
+        event_id: 'task_001',
+      },
+    ]);
+    expect(snapshot.flow.node_statuses.at(-1)).toEqual({
+      code: 'N18',
+      status: 'done',
+      event_type: 'RunCompleted',
+      event_id: 'event_001',
+    });
   });
 });

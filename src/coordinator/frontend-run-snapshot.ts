@@ -49,6 +49,13 @@ export interface FrontendRunSnapshotTimelineItem {
   name: string;
 }
 
+export interface FrontendRunNodeStatus {
+  code: string;
+  status: 'pending' | 'active' | 'done' | 'blocked' | 'updated';
+  event_type?: string;
+  event_id?: string;
+}
+
 export interface BuildFrontendRunSnapshotInput {
   summary: FrontendRunSnapshotSummary;
   timeline: readonly FrontendRunSnapshotTimelineItem[];
@@ -75,6 +82,10 @@ export interface FrontendRunSnapshot {
     mode: SelectionMode;
     driver_id: string;
     created_at: Timestamp;
+  };
+  flow: {
+    active_node_code: string;
+    node_statuses: FrontendRunNodeStatus[];
   };
   timeline: Array<{
     id: string;
@@ -120,6 +131,7 @@ export interface FrontendRunSnapshot {
 export function buildFrontendRunSnapshot(
   input: BuildFrontendRunSnapshotInput,
 ): FrontendRunSnapshot {
+  const activeNodeCode = input.summary.status === 'completed' ? 'N18' : 'N8';
   return {
     snapshot_type: 'coordinator.frontend_run_snapshot.v0',
     schema_version: input.summary.schema_version,
@@ -129,7 +141,7 @@ export function buildFrontendRunSnapshot(
     current: {
       stage: getFrontendStage(input.summary),
       task_status: input.summary.status,
-      active_node_code: input.summary.status === 'completed' ? 'N18' : 'N8',
+      active_node_code: activeNodeCode,
     },
     run: {
       run_id: input.summary.run_id,
@@ -138,6 +150,10 @@ export function buildFrontendRunSnapshot(
       mode: input.summary.mode,
       driver_id: input.summary.driver_diagnostics.driver_id,
       created_at: input.summary.created_at,
+    },
+    flow: {
+      active_node_code: activeNodeCode,
+      node_statuses: buildNodeStatuses(input.timeline),
     },
     timeline: input.timeline.map((item) => ({
       id: item.id,
@@ -195,6 +211,47 @@ export function buildFrontendRunSnapshot(
       : {}),
     links: input.links,
   };
+}
+
+const TIMELINE_NODE_CODES: Readonly<Record<string, string>> = {
+  TaskCreated: 'N2',
+  RunCreated: 'N3',
+  ContextPackBuilt: 'N5',
+  DriverSessionStarted: 'N6',
+  DriverRunResult: 'N8',
+  ArtifactRegistered: 'N9',
+  TaskCompleted: 'N10',
+  HookMatched: 'N11',
+  GateResult: 'N13',
+  CouncilStarted: 'N14',
+  CouncilDecision: 'N14',
+  CouncilCompleted: 'N14',
+  CheckpointSaved: 'N16',
+  RunCompleted: 'N18',
+  RunFailed: 'N18',
+};
+
+function buildNodeStatuses(
+  timeline: readonly FrontendRunSnapshotTimelineItem[],
+): FrontendRunNodeStatus[] {
+  const observed = new Map<string, FrontendRunSnapshotTimelineItem>();
+  for (const item of timeline) {
+    const code = TIMELINE_NODE_CODES[item.name];
+    if (code) observed.set(code, item);
+  }
+
+  return Array.from({ length: 19 }, (_, index) => {
+    const code = `N${index}`;
+    const item = observed.get(code);
+    return item
+      ? {
+          code,
+          status: item.name === 'RunFailed' ? 'blocked' : 'done',
+          event_type: item.name,
+          event_id: item.id,
+        }
+      : { code, status: 'pending' };
+  });
 }
 
 function getFrontendStage(summary: FrontendRunSnapshotSummary): FrontendStage {
