@@ -5,14 +5,15 @@
  */
 import { z } from 'zod';
 import type { RunCreateParams, RunCreateResult } from '../app/newide-backend-service';
-import { RunNotFoundError, type AppRunEvent, type AppRunSnapshot } from '../app/run-registry';
+import { RunNotFoundError, type AppRunEvent } from '../app/run-registry';
+import type { RunSnapshot } from '../protocol/run-snapshot';
 import { JSON_RPC_ERROR_CODES } from './json-rpc-line-protocol';
 import { JsonRpcMethodError } from './json-rpc-dispatcher';
 import type { JsonRpcDispatcher } from './json-rpc-dispatcher';
 
 export interface RunMethodsService {
   createRun(params: RunCreateParams): Promise<RunCreateResult>;
-  getSnapshot(runId: string): AppRunSnapshot;
+  getRunSnapshot(runId: string): RunSnapshot;
   subscribe(runId: string, listener: (event: AppRunEvent) => void): () => void;
   cancelRun(runId: string): Promise<{ cancelled: true }>;
 }
@@ -43,7 +44,7 @@ export class RunRpcMethods {
     });
     dispatcher.register('run.getSnapshot', (params) => {
       const { run_id } = parseParams(runIdParamsSchema, params);
-      return this.callWithRunError(() => this.service.getSnapshot(run_id));
+      return this.callWithRunError(() => this.service.getRunSnapshot(run_id));
     });
     dispatcher.register('run.subscribe', (params) => {
       const { run_id } = parseParams(runIdParamsSchema, params);

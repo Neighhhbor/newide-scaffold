@@ -8,6 +8,7 @@ import { InMemoryRunRegistry } from '../../src/app/run-registry';
 import { FileRunAuditWriter } from '../../src/app/run-audit-writer';
 import { FileRunTerminalOutputWriter } from '../../src/app/run-terminal-output-writer';
 import { IntegrationV0CoordinatorRunner } from '../../src/coordinator/coordinator-runner';
+import { runSnapshotSchema } from '../../src/protocol/run-snapshot';
 
 describe('NewideBackendService', () => {
   it('returns real ids before the runner completes and records telemetry', async () => {
@@ -149,6 +150,15 @@ describe('NewideBackendService', () => {
         status: 'cancelled',
         events: [{ type: 'run.started' }, { type: 'run.cancelled' }],
       });
+      expect(service.getRunSnapshot('run_cancelled')).toMatchObject({
+        status: 'cancelled',
+        timeline: [{ type: 'run.started' }, { type: 'run.cancelled' }],
+        agent_runs: [],
+        artifacts: [],
+        gates: [],
+        errors: [],
+        final_output: { status: 'cancelled' },
+      });
       const audit = (await readFile(path.join(runsRoot, 'run_cancelled', 'audit.jsonl'), 'utf-8'))
         .trim()
         .split('\n')
@@ -206,6 +216,23 @@ describe('NewideBackendService', () => {
         ]),
       );
       expect(types.filter((type) => type === 'run.completed')).toHaveLength(1);
+
+      const externalSnapshot = service.getRunSnapshot(created.run_id);
+      expect(externalSnapshot).toMatchObject({
+        mode: 'council',
+        status: 'completed',
+        council: {
+          enabled: true,
+          status: 'completed',
+          verdict: 'select',
+          can_create_merge_authorization: false,
+        },
+        final_output: { status: 'completed' },
+      });
+      expect(externalSnapshot.artifacts.length).toBeGreaterThan(0);
+      expect(externalSnapshot.gates.length).toBeGreaterThan(0);
+      expect(externalSnapshot.checkpoint).toBeDefined();
+      expect(runSnapshotSchema.parse(externalSnapshot)).toEqual(externalSnapshot);
 
       const audit = (
         await readFile(path.join(tempRoot, 'runs', created.run_id, 'audit.jsonl'), 'utf-8')

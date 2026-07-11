@@ -29,7 +29,21 @@ describe('FileRunTerminalOutputWriter', () => {
       audit_path: path.join(runDir, 'audit.jsonl'),
     });
     await expect(readJson(path.join(runDir, 'timeline.json'))).resolves.toEqual(snapshot.events);
-    await expect(readJson(path.join(runDir, 'frontend-snapshot.json'))).resolves.toEqual(snapshot);
+    await expect(readJson(path.join(runDir, 'frontend-snapshot.json'))).resolves.toMatchObject({
+      schema_version: 'v0',
+      run_id: 'run_failed',
+      task_id: 'task_failed',
+      status: 'failed',
+      timeline: snapshot.events,
+      agent_runs: [],
+      artifacts: [],
+      gates: [],
+      errors: [{ code: 'RUNNER_FAILED', message: 'driver exited' }],
+      final_output: { status: 'failed', artifact_refs: [], files_written: [] },
+    });
+    await expect(readJson(path.join(runDir, 'frontend-snapshot.json'))).resolves.not.toHaveProperty(
+      'revision',
+    );
   });
 
   it('does not overwrite richer integration outputs', async () => {
@@ -42,6 +56,30 @@ describe('FileRunTerminalOutputWriter', () => {
     await new FileRunTerminalOutputWriter(runsRoot).finalize(failedSnapshot());
 
     await expect(readJson(path.join(runDir, 'result.json'))).resolves.toEqual({ rich: true });
+  });
+
+  it('replaces a completed legacy frontend snapshot without replacing its result manifest', async () => {
+    const runsRoot = await mkdtemp(path.join(os.tmpdir(), 'terminal-output-'));
+    tempDirs.push(runsRoot);
+    const runDir = path.join(runsRoot, 'run_failed');
+    await mkdir(runDir, { recursive: true });
+    await writeFile(path.join(runDir, 'result.json'), '{"rich":true}', 'utf-8');
+    await writeFile(path.join(runDir, 'frontend-snapshot.json'), '{"legacy":true}', 'utf-8');
+    const { error: _error, ...withoutError } = failedSnapshot();
+
+    await new FileRunTerminalOutputWriter(runsRoot).finalize({
+      ...withoutError,
+      status: 'completed',
+      current: { stage: 'delivery', active_node_code: 'N18' },
+    });
+
+    await expect(readJson(path.join(runDir, 'result.json'))).resolves.toEqual({ rich: true });
+    await expect(readJson(path.join(runDir, 'frontend-snapshot.json'))).resolves.toMatchObject({
+      status: 'completed',
+      timeline: withoutError.events,
+      errors: [],
+      final_output: { status: 'completed' },
+    });
   });
 });
 

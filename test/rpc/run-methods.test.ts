@@ -111,12 +111,43 @@ describe('RunRpcMethods', () => {
       result: { cancelled: true },
     });
   });
+
+  it('returns the external RunSnapshot view from run.getSnapshot', async () => {
+    const output: string[] = [];
+    const service = fakeService({
+      getRunSnapshot: () => ({
+        schema_version: 'v0',
+        run_id: 'run_1',
+        task_id: 'task_1',
+        mode: 'single_agent',
+        status: 'running',
+        current: { stage: 'executing', active_node_code: 'N3' },
+        timeline: [],
+        agent_runs: [],
+        artifacts: [],
+        gates: [],
+        errors: [],
+      }),
+    });
+    const dispatcher = new JsonRpcDispatcher();
+    const session = new JsonRpcLineSession(dispatcher, (line) => output.push(line));
+    new RunRpcMethods(service, () => undefined).register(dispatcher);
+
+    await session.handleLine(
+      '{"jsonrpc":"2.0","id":1,"method":"run.getSnapshot","params":{"run_id":"run_1"}}',
+    );
+
+    expect(JSON.parse(output[0]!)).toMatchObject({
+      id: 1,
+      result: { run_id: 'run_1', status: 'running', timeline: [], errors: [] },
+    });
+  });
 });
 
 function fakeService(overrides?: Partial<RunMethodsService>): RunMethodsService {
   return {
     createRun: async () => ({ run_id: 'run_1', task_id: 'task_1', status: 'running' }),
-    getSnapshot: (runId) => {
+    getRunSnapshot: (runId) => {
       throw new RunNotFoundError(runId);
     },
     subscribe: () => () => undefined,
