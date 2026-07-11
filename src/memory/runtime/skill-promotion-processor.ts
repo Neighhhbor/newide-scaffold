@@ -11,9 +11,15 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentMemoryScope } from '../ports/agent-memory-scope';
 import type { PromotionTriggerPolicy } from '../ports/promotion-trigger-policy';
-import type { SkillPromotionHandler } from './agent-run-deps';
 import type { ExperienceRecord } from '../schemas';
+import type { AgentTaskRequest } from '../agent-types';
 import type { PromotionOutcome } from '../types';
+
+export type SkillPromotionHandler = (
+  memory: AgentMemoryScope,
+  task: AgentTaskRequest,
+  experiences: ExperienceRecord[],
+) => Promise<PromotionOutcome>;
 
 /** 晋升置信度门槛（与 ruleBasedSkillPromotion 一致） */
 const PROMOTION_CONFIDENCE_THRESHOLD = 0.95;

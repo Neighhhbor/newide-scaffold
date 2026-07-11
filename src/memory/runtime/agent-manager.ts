@@ -1,18 +1,15 @@
 /**
  * AgentManager 运行时（Boss）
  *
- * 管理 Agent 生命周期：createAgent、start/stop、竞标派单 submitTask。
+ * 管理 Agent 生命周期：createAgent、竞标派单 dispatchTask。
  * 持有共享 MemoryRepository 与 BufferRepository，为每个 Agent 创建独立 AgentMemoryScope。
- * 支持通过 AgentManagerOptions.deps 注入 AgentRunDeps，替代默认 MVP 组合。
- * 支持通过 AgentManagerOptions.tools 注入 AgentToolConfig，启用 tool-calling 模式。
+ * 通过 AgentManagerOptions.tools 配置 LLM tool-calling。
  */
 import type { AgentHandle, CreateAgentSpec } from '../schemas';
 import type { BufferRepository } from '../ports/buffer-repository';
 import type { MemoryRepository } from '../ports/memory-repository';
 import type { AgentTaskRequest } from '../agent-types';
-import type { AgentLoopTickResult } from '../agent-types';
 import type { MemoryCycleResult } from '../types';
-import type { AgentRunDeps } from './agent-run-deps';
 import type { AgentToolConfig } from './agent';
 import type { CompetitionClaimBatch, CollectCompetitionClaimsOptions } from '../competition-types';
 import { createAgentMemoryScope } from '../adapters/agent-memory-scope';
@@ -23,12 +20,10 @@ import { createId, nowTimestamp } from '../../core';
 /**
  * AgentManager 构造选项
  *
- * - `deps`: 可选的自定义 AgentRunDeps，覆盖默认 MVP 依赖（如注入真实 Driver / LLM 实现）
- * - `tools`: 可选的 tool-calling 配置，启用时 Agent 使用 LLM tool-calling 替代固定 pipeline
+ * - `tools`: LLM tool-calling 配置（必选）
  */
 export interface AgentManagerOptions {
-  deps?: AgentRunDeps;
-  tools?: AgentToolConfig;
+  tools: AgentToolConfig;
 }
 
 /**
@@ -100,27 +95,24 @@ export function toMemoryTaskProjection(result: DispatchTaskResult): MemoryTaskPr
 
 export class AgentManager {
   private readonly agents = new Map<string, Agent>();
-  private started = false;
 
   constructor(
     private readonly repository: MemoryRepository,
     private readonly bufferRepository: BufferRepository,
-    private readonly options: AgentManagerOptions = {},
+    private readonly options: AgentManagerOptions,
   ) {}
 
   /**
    * 创建 AgentManager 实例并预加载所有已注册的 Agent。
    *
-   * - `await AgentManager.create(repo, buf)` — 向后兼容，使用默认 MVP deps
-   * - `await AgentManager.create(repo, buf, { deps })` — 注入自定义 deps
-   * - `await AgentManager.create(repo, buf, { tools })` — 启用 tool-calling 模式
+   * - `await AgentManager.create(repo, buf, { tools })` — 传入 LLM tool-calling 配置
    *
    * 创建时自动从 Repository 加载所有已注册的 Agent 实例到内存。
    */
   static async create(
     repository: MemoryRepository,
     bufferRepository: BufferRepository,
-    options?: AgentManagerOptions,
+    options: AgentManagerOptions,
   ): Promise<AgentManager> {
     const manager = new AgentManager(repository, bufferRepository, options);
     await manager.loadAllAgents();
@@ -139,13 +131,11 @@ export class AgentManager {
         await this.repository.ensureAgent(role_id);
         await this.bufferRepository.ensureAgent(role_id);
         const memory = createAgentMemoryScope(this.repository, this.bufferRepository, role_id);
-        const tools = this.options.tools
-          ? {
-              ...this.options.tools,
-              tools: [new QueryMemoryTool(memory), ...this.options.tools.tools],
-            }
-          : undefined;
-        const agent = new Agent(memory, this.options.deps, tools);
+        const tools = {
+          ...this.options.tools,
+          tools: [new QueryMemoryTool(memory), ...this.options.tools.tools],
+        };
+        const agent = new Agent(memory, tools);
         this.agents.set(role_id, agent);
       }
     }
@@ -156,40 +146,15 @@ export class AgentManager {
     await this.bufferRepository.ensureAgent(spec.role_id);
     const memory = createAgentMemoryScope(this.repository, this.bufferRepository, spec.role_id);
 
-    // 工具模式：自动注入 QueryMemoryTool（需要 AgentMemoryScope，只能在这里创建）
-    const tools = this.options.tools
-      ? {
-          ...this.options.tools,
-          tools: [new QueryMemoryTool(memory), ...this.options.tools.tools],
-        }
-      : undefined;
+    // 自动注入 QueryMemoryTool（需要 AgentMemoryScope，只能在这里创建）
+    const tools = {
+      ...this.options.tools,
+      tools: [new QueryMemoryTool(memory), ...this.options.tools.tools],
+    };
 
-    const agent = new Agent(memory, this.options.deps, tools);
+    const agent = new Agent(memory, tools);
     this.agents.set(spec.role_id, agent);
-    if (this.started) {
-      agent.startLoop();
-    }
     return agent.getHandle();
-  }
-
-  start(): void {
-    this.started = true;
-    for (const agent of this.agents.values()) {
-      agent.startLoop();
-    }
-  }
-
-  stop(): void {
-    this.started = false;
-    for (const agent of this.agents.values()) {
-      agent.stop();
-    }
-  }
-
-  wakeAll(): void {
-    for (const agent of this.agents.values()) {
-      agent.wake();
-    }
   }
 
   /**
@@ -529,27 +494,6 @@ export class AgentManager {
         },
       };
     }
-  }
-
-  /**
-   * 驱动所有正在运行（running）的 Agent 走一步循环。
-   *
-   * 应在外部调度循环中定期调用，例如：
-   * ```ts
-   * while (agents.some(a => a.getState() === 'running')) {
-   *   await manager.tickAll();
-   *   await sleep(100);
-   * }
-   * ```
-   */
-  async tickAll(): Promise<Map<string, AgentLoopTickResult>> {
-    const results = new Map<string, AgentLoopTickResult>();
-    for (const [role_id, agent] of this.agents) {
-      if (agent.getState() === 'running') {
-        results.set(role_id, await agent.runLoopTick());
-      }
-    }
-    return results;
   }
 
   getAgent(role_id: string): Agent | undefined {

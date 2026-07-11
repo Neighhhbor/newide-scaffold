@@ -1,26 +1,13 @@
 /**
- * memory-cycle — 任务记忆全周期编排服务
+ * memory-cycle — 任务记忆后处理服务
  *
- * 串联任务前检索、指令规划、Driver 调用、buffer 写入、经验提取与技能晋升。
- *
- * ## 主流程（runTaskMemoryCycle）
- *
- * ```
- * getPersona（仅元数据，不进 Driver）
- *   → planTaskInstruction（task_instruction）
- *   → buildDriverContext（内部 queryMemory + 组装）
- *   → invokeDriver
- *   → ingestTaskBuffer
- *   → processPendingBuffer
- * ```
+ * 提供主动提取/晋升函数，以及 buffer 写入/处理。
  */
 import { createId, nowTimestamp } from '../../core';
 import type { AgentMemoryScope } from '../ports/agent-memory-scope';
 import type { MemoryRepository } from '../ports/memory-repository';
 import type { BufferRepository } from '../ports/buffer-repository';
 import type { ExperienceExtractor } from '../ports/experience-extractor';
-import type { AgentRunDeps } from '../runtime/agent-run-deps';
-import type { TelemetrySink } from '../../telemetry/telemetry-sink';
 import type {
   AgentContextSnapshot,
   BufferSnapshot,
@@ -28,14 +15,12 @@ import type {
   ExperienceRecord,
 } from '../schemas';
 import type { AgentTaskRequest } from '../agent-types';
-import type { ExtractionOutput, MemoryCycleResult, PromotionOutcome } from '../types';
+import type { ExtractionOutput, PromotionOutcome } from '../types';
 import type { LlmClient } from '../ports/llm-client';
 import { LlmExperienceExtractor } from '../adapters/llm-experience-extractor';
 import { LlmSkillPromotion } from '../adapters/llm-skill-promotion';
 import { createAgentMemoryScope } from '../adapters/agent-memory-scope';
 import { writePendingBuffer } from './buffer-writer';
-import { buildDriverContext } from './driver-context';
-import { recordMemoryCycleTelemetry } from '../../telemetry/memory-cycle-observer';
 
 /**
  * ingestTaskBuffer 的输入。
@@ -71,12 +56,6 @@ export interface ProcessPendingInput {
 export interface ProcessPendingResult {
   extraction: ExtractionOutput;
   promotion: PromotionOutcome;
-}
-
-export interface MemoryCycleOptions {
-  telemetry?: TelemetrySink;
-  run_id?: string;
-  memory_ablation?: string;
 }
 
 /**
@@ -204,106 +183,6 @@ export async function promoteExperiences(
   }
 
   return results;
-}
-
-/**
- * 单轮任务记忆全周期主入口。
- *
- * 1. 读取 Persona（仅写入 cycle 结果，不传给 Driver）
- * 2. 规划 task_instruction
- * 3. buildDriverContext（内部 queryMemory + 组装）并调用 Driver
- * 4. 写入 buffer → 提取经验 → 技能晋升
- *
- * @param memory - Agent 记忆作用域
- * @param task   - 协调层任务请求（含 spec）
- * @param deps   - 可注入的运行依赖
- */
-export async function runTaskMemoryCycle(
-  memory: AgentMemoryScope,
-  task: AgentTaskRequest,
-  deps: AgentRunDeps,
-  options?: MemoryCycleOptions,
-): Promise<MemoryCycleResult> {
-  const telemetry = options?.telemetry ?? deps.telemetry;
-  const task_id = task.task_id ?? createId('task');
-  const call_id = task.call_id ?? createId('call');
-  const source_driver = task.source_driver ?? 'mock-driver';
-
-  const skills_before = await memory.listSkills();
-  const persona = await memory.getPersona();
-
-  const task_instruction = await deps.planTaskInstruction(task);
-  const { driver_context, retrieval } = await buildDriverContext({
-    memory,
-    task,
-    task_id,
-    task_instruction,
-    queryMemory: deps.queryMemory,
-  });
-
-  const driver_return = await deps.invokeDriver({
-    task_id,
-    call_id,
-    source_driver,
-    driver_context,
-  });
-
-  const agentContext = await deps.contextCleaner.clean({
-    agent_id: memory.role_id,
-    source_task_id: task_id,
-    raw_context: `Task spec: ${task.spec}\nInstruction: ${task_instruction}`,
-    driver_returns: [{ call_id, driver_id: source_driver, driver_return }],
-  });
-
-  const ingested = await ingestTaskBuffer(memory, {
-    task,
-    task_id,
-    call_id,
-    source_driver,
-    driver_return,
-    agentContext: agentContext ?? undefined,
-  });
-
-  const { extraction, promotion } = await processPendingBuffer(memory, ingested.seq, {
-    task,
-    extractor: deps.extractor,
-    promote: deps.promote,
-  });
-
-  if (telemetry) {
-    const skills_after = await memory.listSkills();
-    const experiences_after = await memory.listExperiences();
-    await recordMemoryCycleTelemetry(telemetry, {
-      context: {
-        task_id,
-        role_id: memory.role_id,
-        ...(options?.run_id ? { run_id: options.run_id } : {}),
-        ...(options?.memory_ablation ? { memory_ablation: options.memory_ablation } : {}),
-      },
-      retrieval,
-      call_id,
-      source_driver,
-      driver_return,
-      buffer_seq: ingested.seq,
-      extract_result: extraction.result,
-      promotion,
-      persona,
-      skills_after,
-      experience_count: experiences_after.length,
-    });
-  }
-
-  return {
-    agent_id: memory.role_id,
-    persona,
-    skills_before,
-    retrieval,
-    driver_context,
-    buffer_snapshot: ingested.snapshot,
-    buffer_seq: ingested.seq,
-    extraction,
-    promotion,
-  };
 }
 
 /**

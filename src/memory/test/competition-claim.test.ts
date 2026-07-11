@@ -11,6 +11,7 @@
  * 注：详细竞标信息（置信度、证据链、风险分析）待与 bid 模块对齐后补充，
  *     当前只验证 decision 的正确性。
  */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect } from 'vitest';
 import { Agent } from '../runtime/agent';
 import { InMemoryRepository } from '../adapters/in-memory-repository';
@@ -18,6 +19,13 @@ import { InMemoryBufferRepository } from '../adapters/in-memory-buffer-repositor
 import { createAgentMemoryScope } from '../adapters/agent-memory-scope';
 import { createMockCompetitionClaimEvaluator } from '../adapters/mock-competition-claim-evaluator';
 import type { AgentTaskRequest } from '../agent-types';
+import type { AgentToolConfig } from '../runtime/agent';
+
+/** 竞标测试用 mock toolConfig（不会实际调用 LLM） */
+const mockToolConfig: AgentToolConfig = {
+  llm: { completeWithTools: async () => ({ content: '', tool_calls: [] }) },
+  tools: [],
+};
 
 describe('Agent.createCompetitionClaim', () => {
   async function createTestAgent(
@@ -84,7 +92,7 @@ describe('Agent.createCompetitionClaim', () => {
   describe('participate', () => {
     it('专业相关 Agent 返回 participate 声明', async () => {
       const { memory, role_id } = await createTestAgent('role_part');
-      const agent = new Agent(memory, undefined, undefined, createMockCompetitionClaimEvaluator());
+      const agent = new Agent(memory, mockToolConfig, createMockCompetitionClaimEvaluator());
 
       const claim = await agent.createCompetitionClaim(
         createTask('This is a relevant task for my expertise'),
@@ -101,7 +109,7 @@ describe('Agent.createCompetitionClaim', () => {
   describe('decline', () => {
     it('不相关 Agent 返回 decline 声明', async () => {
       const { memory, role_id } = await createTestAgent('role_decline');
-      const agent = new Agent(memory, undefined, undefined, createMockCompetitionClaimEvaluator());
+      const agent = new Agent(memory, mockToolConfig, createMockCompetitionClaimEvaluator());
 
       const claim = await agent.createCompetitionClaim(
         createTask('This task is completely irrelevant to my skills'),
@@ -115,9 +123,9 @@ describe('Agent.createCompetitionClaim', () => {
   describe('unavailable', () => {
     it('running 状态 Agent 返回 unavailable', async () => {
       const { memory } = await createTestAgent('role_unavail_run');
-      const agent = new Agent(memory);
+      const agent = new Agent(memory, mockToolConfig);
       // 模拟 running 状态
-      agent.assignTask(createTask('test', 'task_occupied'));
+      (agent as any).assignTask(createTask('test', 'task_occupied'));
 
       const claim = await agent.createCompetitionClaim(createTask('Any task'));
       expect(claim.decision).toBe('unavailable');
@@ -126,8 +134,8 @@ describe('Agent.createCompetitionClaim', () => {
 
     it('stopped 状态 Agent 返回 unavailable', async () => {
       const { memory } = await createTestAgent('role_unavail_stop');
-      const agent = new Agent(memory);
-      agent.stop();
+      const agent = new Agent(memory, mockToolConfig);
+      (agent as any).state = 'stopped';
 
       const claim = await agent.createCompetitionClaim(createTask('Any task'));
       expect(claim.decision).toBe('unavailable');
@@ -137,7 +145,7 @@ describe('Agent.createCompetitionClaim', () => {
   describe('error', () => {
     it('evaluator 抛出异常时返回 error 声明', async () => {
       const { memory } = await createTestAgent('role_error');
-      const agent = new Agent(memory, undefined, undefined, createMockCompetitionClaimEvaluator());
+      const agent = new Agent(memory, mockToolConfig, createMockCompetitionClaimEvaluator());
 
       const claim = await agent.createCompetitionClaim(
         createTask('error trigger - simulated LLM failure'),
@@ -153,7 +161,7 @@ describe('Agent.createCompetitionClaim', () => {
         'role_noside',
         { seedSkills: 1, seedExperiences: 1 },
       );
-      const agent = new Agent(memory, undefined, undefined, createMockCompetitionClaimEvaluator());
+      const agent = new Agent(memory, mockToolConfig, createMockCompetitionClaimEvaluator());
 
       const skillsBefore = await repository.listSkills(role_id);
       const expsBefore = await repository.listExperiences(role_id);

@@ -69,14 +69,11 @@ export { MockLlmClient } from './adapters/mock-llm-client';
 
 // ════════════════════════════════════════════════════════
 //  4. LLM 处理适配器（通过 LlmClient 接口依赖注入）
-//     给 AgentRunDeps 工厂使用
 // ════════════════════════════════════════════════════════
 
 export { LlmExperienceExtractor } from './adapters/llm-experience-extractor';
-export { LlmTaskInstructionPlanner } from './adapters/llm-task-instruction-planner';
 export { LlmContextCleaner } from './adapters/context-cleaner';
 export { LlmSkillPromotion } from './adapters/llm-skill-promotion';
-export { LlmDriverResultMapper } from './adapters/llm-driver-result-mapper';
 
 // ════════════════════════════════════════════════════════
 //  5. 非 LLM 适配器（降级/测试用）
@@ -88,21 +85,7 @@ export { ruleBasedSkillPromotion } from './services/skill-promotion';
 export { repositoryRetrieveMemoryForTask } from './adapters/repository-memory-retrieval';
 
 // ════════════════════════════════════════════════════════
-//  6. Driver 适配器（真实外部Driver接入）
-// ════════════════════════════════════════════════════════
-
-export {
-  DriverAdapter,
-  createDriverInvoker,
-  serializeDriverContext,
-  mapRunResultToDriverReturn,
-  type DriverAdapterOptions,
-  type DriverContextSerializer,
-  type DriverResultMapper,
-} from './adapters/driver-adapter';
-
-// ════════════════════════════════════════════════════════
-//  7. AgentMemoryScope（Agent与Repository之间的绑定门面）
+//  6. AgentMemoryScope（Agent与Repository之间的绑定门面）
 // ════════════════════════════════════════════════════════
 
 export { createAgentMemoryScope } from './adapters/agent-memory-scope';
@@ -112,11 +95,6 @@ export { createAgentMemoryScope } from './adapters/agent-memory-scope';
 // ════════════════════════════════════════════════════════
 
 export { writePendingBuffer } from './services/buffer-writer';
-export {
-  buildDriverContext,
-  type BuildDriverContextInput,
-  type BuildDriverContextResult,
-} from './services/driver-context';
 export { prepareTaskContext, type MemoryQueryStrategy } from './services/memory-query';
 export {
   retrieveMemoriesForTask,
@@ -133,7 +111,6 @@ export {
   promoteExperiencesForAgent,
   extractAllBuffers,
   promoteAllExperiences,
-  runTaskMemoryCycle,
 } from './services/memory-cycle';
 
 // ════════════════════════════════════════════════════════
@@ -223,16 +200,9 @@ export type { CompetitionClaimEvaluator } from './ports/competition-claim-evalua
 export { createMockCompetitionClaimEvaluator } from './adapters/mock-competition-claim-evaluator';
 
 // ════════════════════════════════════════════════════════
-//  19. MVP 工厂 & Mock（可整包删除）
-//     快速启动用，生产可替换为自定义 AgentRunDeps
+//  19. Mock 适配器
 // ════════════════════════════════════════════════════════
 
-export { defaultMvpAgentRunDeps } from './mvp/default-agent-run-deps';
-export { createDefaultLlmAgentRunDeps } from './mvp/default-llm-agent-run-deps';
-export {
-  createDriverAdapterDeps,
-  type DriverAdapterDepsOptions,
-} from './mvp/default-driver-adapter-deps';
 export { MockExperienceExtractor } from './mvp/adapters/mock-experience-extractor';
 
 // ════════════════════════════════════════════════════════
@@ -271,13 +241,7 @@ export type {
 //  21. Agent 运行时类型
 // ════════════════════════════════════════════════════════
 
-export type { AgentTaskRequest, AgentLoopState, AgentLoopTickResult } from './agent-types';
-export type {
-  AgentRunDeps,
-  DriverInvokeInput,
-  SkillPromotionHandler,
-  TaskInstructionPlanner,
-} from './runtime/agent-run-deps';
+export type { AgentTaskRequest, AgentLoopState } from './agent-types';
 export type { AgentToolConfig } from './runtime/agent';
 
 // ════════════════════════════════════════════════════════

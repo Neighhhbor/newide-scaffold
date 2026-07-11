@@ -49,31 +49,15 @@ async function createTestAgent(
   role_id: string,
   repository: InMemoryRepository,
   bufferRepository: InMemoryBufferRepository,
-  toolConfig?: AgentToolConfig,
+  toolConfig: AgentToolConfig,
 ) {
   await repository.initializeAgent({ role_id, name: 'Test Agent', tags: [] });
   await bufferRepository.ensureAgent(role_id);
   const memory = createAgentMemoryScope(repository, bufferRepository, role_id);
-  return new Agent(memory, undefined, toolConfig);
+  return new Agent(memory, toolConfig);
 }
 
 describe('Agent tool-calling mode', () => {
-  it('不传 toolConfig → runOnce 走 pipeline 模式（向后兼容）', async () => {
-    const { repository, bufferRepository, role_id } = createTestInfra('role_compat');
-    const agent = await createTestAgent(role_id, repository, bufferRepository);
-
-    const result = await agent.runOnce({
-      spec: 'Test backward compatibility.',
-      task_id: 'task_compat_001',
-      call_id: 'call_compat_001',
-      source_driver: 'mock-driver',
-    });
-
-    expect(result.agent_id).toBe(role_id);
-    expect(result.buffer_snapshot.task_id).toBe('task_compat_001');
-    expect(result.extraction.experiences).toBeDefined();
-  });
-
   it('传 toolConfig → runOnce 走 tool-calling 模式（LLM 返回文本直接完成）', async () => {
     const { repository, bufferRepository, role_id } = createTestInfra('role_tc_text');
     const mockLlm = createMockToolClient([

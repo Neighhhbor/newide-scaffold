@@ -38,7 +38,6 @@ function loadDotenv(): void {
 loadDotenv();
 
 import { LiteLLMClientAdapter } from '../../adapters/litellm-client-adapter';
-import { LlmTaskInstructionPlanner } from '../../adapters/llm-task-instruction-planner';
 import { LlmContextCleaner } from '../../adapters/context-cleaner';
 import { LlmExperienceExtractor } from '../../adapters/llm-experience-extractor';
 import { LlmSkillPromotion } from '../../adapters/llm-skill-promotion';
@@ -76,21 +75,6 @@ if (!process.env.OPENAI_API_KEY) {
     console.log(`  ✅ 通信成功: "${result.trim()}"`);
   } catch (e) {
     console.error(`  ❌ 通信失败:`, (e as Error).message);
-    throw e;
-  }
-
-  // ── 2. LlmTaskInstructionPlanner 测试 ──
-  console.log('\n═══ 2. LlmTaskInstructionPlanner 任务规划 ═══');
-  const planner = new LlmTaskInstructionPlanner(client);
-  try {
-    const instruction = await planner.plan({
-      spec: 'Refactor the UserService class to remove hardcoded database dependencies and introduce dependency injection.',
-      task_id: 'smoke_001',
-    });
-    console.log(`  ✅ 规划成功`);
-    console.log(`  输出: ${instruction.substring(0, 200)}...`);
-  } catch (e) {
-    console.error(`  ❌ 规划失败:`, (e as Error).message);
     throw e;
   }
 
