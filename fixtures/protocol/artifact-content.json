@@ -1,0 +1,6 @@
+{
+  "kind": "text",
+  "content_ref": "data:text/plain,hello%20newIDE",
+  "target_path": "output/hello.txt",
+  "media_type": "text/plain"
+}
