@@ -91,13 +91,114 @@ describe('NewideBackendService', () => {
     );
 
     await service.createRun({ prompt: 'Wait for durable output' });
+    const seen: string[] = [];
+    service.subscribe('run_durable', (event) => seen.push(event.type));
     finishRunner?.(completedResult('run_durable', 'task_durable'));
     await terminalStarted;
     expect(service.getSnapshot('run_durable').status).toBe('running');
+    expect(seen).not.toContain('run.completed');
 
     finishTerminal?.();
     await service.waitForTerminal('run_durable');
     expect(service.getSnapshot('run_durable').status).toBe('completed');
+    expect(seen.filter((type) => type === 'run.completed')).toHaveLength(1);
+  });
+
+  it('gives an in-flight completion exclusive terminal ownership over cancellation', async () => {
+    let finishRunner: ((result: IntegrationV0Result) => void) | undefined;
+    let finishTerminal!: () => void;
+    let finalizeCalls = 0;
+    const runnerResult = new Promise<IntegrationV0Result>((resolve) => {
+      finishRunner = resolve;
+    });
+    let markTerminalStarted!: () => void;
+    const terminalStarted = new Promise<void>((resolve) => {
+      markTerminalStarted = resolve;
+    });
+    const terminalFinished = new Promise<void>((resolve) => {
+      finishTerminal = resolve;
+    });
+    const service = new NewideBackendService(
+      {
+        run: async (request) => {
+          request.onRunCreated?.({ run_id: 'run_race', task_id: 'task_race' });
+          return runnerResult;
+        },
+      },
+      new InMemoryRunRegistry(),
+      {
+        initialize: async () => undefined,
+        append: async () => undefined,
+        flush: async () => undefined,
+      },
+      {
+        finalize: async () => {
+          finalizeCalls += 1;
+          markTerminalStarted();
+          await terminalFinished;
+        },
+      },
+    );
+
+    await service.createRun({ prompt: 'Resolve completion and cancel race' });
+    finishRunner?.(completedResult('run_race', 'task_race'));
+    await terminalStarted;
+    const cancellation = service.cancelRun('run_race');
+    expect(finalizeCalls).toBe(1);
+
+    finishTerminal();
+    await Promise.all([service.waitForTerminal('run_race'), cancellation]);
+    const snapshot = service.getSnapshot('run_race');
+    expect(snapshot.status).toBe('completed');
+    expect(snapshot.events.filter((event) => event.type.startsWith('run.'))).toHaveLength(2);
+    expect(snapshot.events.some((event) => event.type === 'run.cancelled')).toBe(false);
+  });
+
+  it('publishes one persistence failure and keeps the background promise observed', async () => {
+    let finalizeCalls = 0;
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    const service = new NewideBackendService(
+      {
+        run: async (request) => {
+          request.onRunCreated?.({ run_id: 'run_persist_failed', task_id: 'task_persist_failed' });
+          return completedResult('run_persist_failed', 'task_persist_failed');
+        },
+      },
+      new InMemoryRunRegistry(),
+      {
+        initialize: async () => undefined,
+        append: async () => undefined,
+        flush: async () => undefined,
+      },
+      {
+        finalize: async () => {
+          finalizeCalls += 1;
+          throw new Error('disk unavailable');
+        },
+      },
+    );
+
+    try {
+      const created = await service.createRun({ prompt: 'Expose persistence failure' });
+      await expect(service.waitForTerminal(created.run_id)).rejects.toThrow('disk unavailable');
+      const snapshot = service.getSnapshot(created.run_id);
+      expect(snapshot).toMatchObject({
+        status: 'failed',
+        error: { code: 'TERMINAL_OUTPUT_FAILED', message: 'disk unavailable' },
+      });
+      expect(snapshot.events.filter((event) => event.type === 'run.completed')).toHaveLength(0);
+      expect(snapshot.events.filter((event) => event.type === 'run.failed')).toHaveLength(1);
+      expect(finalizeCalls).toBe(1);
+      await Promise.resolve();
+      expect(unhandled).toEqual([]);
+      expect(
+        (service as unknown as { terminalRuns: Map<string, Promise<void>> }).terminalRuns.size,
+      ).toBe(0);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 
   it('records runner exceptions after identity as failed runs', async () => {

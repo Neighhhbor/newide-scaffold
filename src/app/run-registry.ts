@@ -41,6 +41,13 @@ type RunEventListener = (event: AppRunEvent) => void;
 interface MutableRunRecord extends AppRunSnapshot {
   listeners: Set<RunEventListener>;
   controller?: AbortController;
+  terminalReservation?: string;
+}
+
+export interface StagedTerminalTransition {
+  token: string;
+  event: AppRunEvent;
+  snapshot: AppRunSnapshot;
 }
 
 const EVENT_NODE_CODES: Readonly<Record<string, string>> = {
@@ -115,24 +122,71 @@ export class InMemoryRunRegistry {
   }
 
   complete(runId: string, snapshot: FrontendRunSnapshot): AppRunSnapshot {
-    this.prepareCompletion(runId, snapshot);
-    return this.publishCompletion(runId);
+    const record = this.require(runId);
+    if (record.events.some((event) => event.type === 'run.completed')) {
+      record.status = 'completed';
+      record.current = { stage: 'delivery', active_node_code: 'N18' };
+      record.snapshot = snapshot;
+      return this.clone(record);
+    }
+    const staged = this.stageTerminal(runId, { status: 'completed', snapshot });
+    return staged ? this.commitTerminal(runId, staged) : this.getSnapshot(runId);
   }
 
-  prepareCompletion(runId: string, snapshot: FrontendRunSnapshot): AppRunSnapshot {
+  stageTerminal(
+    runId: string,
+    input:
+      | { status: 'completed'; snapshot: FrontendRunSnapshot }
+      | { status: 'failed'; code: string; message: string }
+      | { status: 'cancelled' },
+  ): StagedTerminalTransition | undefined {
     const record = this.require(runId);
-    if (record.status === 'cancelled') return this.clone(record);
-    record.current = { stage: 'delivery', active_node_code: 'N18' };
-    record.snapshot = snapshot;
-    this.appendEventOnce(runId, 'run.completed', { status: 'completed' });
-    return { ...this.clone(record), status: 'completed' };
+    if (record.status !== 'running' || record.terminalReservation) return undefined;
+    const token = createId('terminal');
+    record.terminalReservation = token;
+    if (input.status === 'cancelled') record.controller?.abort(new Error('Run cancelled'));
+    const type =
+      input.status === 'completed'
+        ? 'run.completed'
+        : input.status === 'failed'
+          ? 'run.failed'
+          : 'run.cancelled';
+    const payload = input.status === 'failed' ? { code: input.code } : { status: input.status };
+    const event = this.buildEvent(record, type, payload);
+    const snapshot: AppRunSnapshot = {
+      ...this.clone(record),
+      revision: record.revision + 1,
+      status: input.status,
+      current: {
+        stage: input.status === 'completed' ? 'delivery' : 'intervention',
+        active_node_code: 'N18',
+      },
+      events: [...record.events, event],
+      ...(input.status === 'completed' ? { snapshot: input.snapshot } : {}),
+      ...(input.status === 'failed' ? { error: { code: input.code, message: input.message } } : {}),
+    };
+    return { token, event, snapshot };
   }
 
-  publishCompletion(runId: string): AppRunSnapshot {
+  commitTerminal(runId: string, staged: StagedTerminalTransition): AppRunSnapshot {
     const record = this.require(runId);
-    if (record.status === 'cancelled') return this.clone(record);
-    record.status = 'completed';
+    if (record.terminalReservation !== staged.token || record.status !== 'running') {
+      return this.clone(record);
+    }
+    record.status = staged.snapshot.status;
+    record.current = staged.snapshot.current;
+    record.revision = staged.snapshot.revision;
+    record.events.push(staged.event);
+    if (staged.snapshot.snapshot) record.snapshot = staged.snapshot.snapshot;
+    if (staged.snapshot.error) record.error = staged.snapshot.error;
+    delete record.terminalReservation;
+    for (const listener of record.listeners) listener(staged.event);
     return this.clone(record);
+  }
+
+  abortTerminal(runId: string, token: string): void {
+    const record = this.require(runId);
+    if (record.terminalReservation === token) delete record.terminalReservation;
   }
 
   fail(runId: string, code: string, message: string): AppRunSnapshot {
@@ -152,11 +206,9 @@ export class InMemoryRunRegistry {
   cancel(runId: string): AppRunSnapshot {
     const record = this.require(runId);
     if (record.status !== 'running') return this.clone(record);
-    record.controller?.abort(new Error('Run cancelled'));
-    record.status = 'cancelled';
-    record.current = { stage: 'intervention', active_node_code: 'N18' };
-    this.appendEventOnce(runId, 'run.cancelled', { status: 'cancelled' });
-    return this.clone(record);
+    const staged = this.stageTerminal(runId, { status: 'cancelled' });
+    if (!staged) return this.clone(record);
+    return this.commitTerminal(runId, staged);
   }
 
   subscribe(runId: string, listener: RunEventListener): () => void {
@@ -182,8 +234,31 @@ export class InMemoryRunRegistry {
     return this.appendEvent(runId, type, payload);
   }
 
+  private buildEvent(
+    record: MutableRunRecord,
+    type: string,
+    payload: Record<string, unknown>,
+  ): AppRunEvent {
+    return {
+      event_id: this.createEventId(),
+      sequence: record.events.length + 1,
+      run_id: record.run_id,
+      task_id: record.task_id,
+      type,
+      source: projectRunEventSource(type),
+      created_at: this.now(),
+      payload,
+      schema_version: SCHEMA_VERSION,
+    };
+  }
+
   private clone(record: MutableRunRecord): AppRunSnapshot {
-    const { listeners: _listeners, controller: _controller, ...snapshot } = record;
+    const {
+      listeners: _listeners,
+      controller: _controller,
+      terminalReservation: _terminalReservation,
+      ...snapshot
+    } = record;
     return { ...snapshot, current: { ...snapshot.current }, events: [...snapshot.events] };
   }
 }
