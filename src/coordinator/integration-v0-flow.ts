@@ -101,6 +101,7 @@ export interface IntegrationV0Options {
   enableCouncil?: boolean;
   councilProvider?: CouncilProvider;
   worktreePath?: string;
+  runsRoot?: string;
   telemetry?: TelemetrySink;
   signal?: AbortSignal;
   onEvent?: (event: Event) => void;
@@ -725,9 +726,9 @@ export async function runIntegrationV0Flow(
   });
 
   // 17. Build summary
-  const outputPaths = buildRunOutputPaths(run.run_id);
+  const outputPaths = buildRunOutputPaths(run.run_id, options?.runsRoot);
   const councilRunOutputPaths = selectionResult.council_run_result
-    ? buildCouncilRunOutputPaths(run.run_id)
+    ? buildCouncilRunOutputPaths(run.run_id, options?.runsRoot)
     : undefined;
   if (selectionResult.council_run_result && councilRunOutputPaths) {
     await writeCouncilRunOutputs({

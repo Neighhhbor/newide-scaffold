@@ -115,12 +115,23 @@ export class InMemoryRunRegistry {
   }
 
   complete(runId: string, snapshot: FrontendRunSnapshot): AppRunSnapshot {
+    this.prepareCompletion(runId, snapshot);
+    return this.publishCompletion(runId);
+  }
+
+  prepareCompletion(runId: string, snapshot: FrontendRunSnapshot): AppRunSnapshot {
     const record = this.require(runId);
     if (record.status === 'cancelled') return this.clone(record);
-    record.status = 'completed';
     record.current = { stage: 'delivery', active_node_code: 'N18' };
     record.snapshot = snapshot;
     this.appendEventOnce(runId, 'run.completed', { status: 'completed' });
+    return { ...this.clone(record), status: 'completed' };
+  }
+
+  publishCompletion(runId: string): AppRunSnapshot {
+    const record = this.require(runId);
+    if (record.status === 'cancelled') return this.clone(record);
+    record.status = 'completed';
     return this.clone(record);
   }
 

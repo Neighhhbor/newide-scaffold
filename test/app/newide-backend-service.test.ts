@@ -56,6 +56,50 @@ describe('NewideBackendService', () => {
     });
   });
 
+  it('does not publish completed state before terminal outputs are durable', async () => {
+    let finishRunner: ((result: IntegrationV0Result) => void) | undefined;
+    let finishTerminal: (() => void) | undefined;
+    const runnerResult = new Promise<IntegrationV0Result>((resolve) => {
+      finishRunner = resolve;
+    });
+    let markTerminalStarted!: () => void;
+    const terminalStarted = new Promise<void>((resolve) => {
+      markTerminalStarted = resolve;
+    });
+    const terminalFinished = new Promise<void>((resolve) => {
+      finishTerminal = resolve;
+    });
+    const service = new NewideBackendService(
+      {
+        run: async (request) => {
+          request.onRunCreated?.({ run_id: 'run_durable', task_id: 'task_durable' });
+          return runnerResult;
+        },
+      },
+      new InMemoryRunRegistry(),
+      {
+        initialize: async () => undefined,
+        append: async () => undefined,
+        flush: async () => undefined,
+      },
+      {
+        finalize: async () => {
+          markTerminalStarted();
+          await terminalFinished;
+        },
+      },
+    );
+
+    await service.createRun({ prompt: 'Wait for durable output' });
+    finishRunner?.(completedResult('run_durable', 'task_durable'));
+    await terminalStarted;
+    expect(service.getSnapshot('run_durable').status).toBe('running');
+
+    finishTerminal?.();
+    await service.waitForTerminal('run_durable');
+    expect(service.getSnapshot('run_durable').status).toBe('completed');
+  });
+
   it('records runner exceptions after identity as failed runs', async () => {
     const service = new NewideBackendService({
       run: async (request) => {
@@ -183,20 +227,20 @@ describe('NewideBackendService', () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'backend-integration-events-'));
     const auditWriter = new FileRunAuditWriter(path.join(tempRoot, 'runs'));
     const service = new NewideBackendService(
-      new IntegrationV0CoordinatorRunner({ worktreePath: path.join(tempRoot, 'worktrees') }),
+      new IntegrationV0CoordinatorRunner({
+        worktreePath: path.join(tempRoot, 'worktrees'),
+        runsRoot: path.join(tempRoot, 'runs'),
+      }),
       new InMemoryRunRegistry(),
       auditWriter,
       new FileRunTerminalOutputWriter(path.join(tempRoot, 'runs')),
     );
-    let runId: string | undefined;
-
     try {
       const created = await service.createRun({
         prompt: 'Project the real Council event flow',
         mode: 'council',
       });
-      runId = created.run_id;
-      await viWaitFor(() => service.getSnapshot(created.run_id).status === 'completed');
+      await service.waitForTerminal(created.run_id);
       await auditWriter.flush(created.run_id);
 
       const types = service.getSnapshot(created.run_id).events.map((event) => event.type);
@@ -232,6 +276,9 @@ describe('NewideBackendService', () => {
       expect(externalSnapshot.artifacts.length).toBeGreaterThan(0);
       expect(externalSnapshot.gates.length).toBeGreaterThan(0);
       expect(externalSnapshot.checkpoint).toBeDefined();
+      expect(service.getSnapshot(created.run_id).snapshot?.links.result_path).toBe(
+        path.join(tempRoot, 'runs', created.run_id, 'result.json'),
+      );
       expect(runSnapshotSchema.parse(externalSnapshot)).toEqual(externalSnapshot);
 
       const audit = (
@@ -242,7 +289,6 @@ describe('NewideBackendService', () => {
         .map((line) => JSON.parse(line));
       expect(audit.map((event) => event.type)).toEqual(types);
     } finally {
-      if (runId) await rm(path.join('.newide/runs', runId), { recursive: true, force: true });
       await rm(tempRoot, { recursive: true, force: true });
     }
   });
