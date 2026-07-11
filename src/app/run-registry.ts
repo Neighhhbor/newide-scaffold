@@ -89,16 +89,21 @@ export class InMemoryRunRegistry {
     return this.clone(record);
   }
 
-  appendEvent(runId: string, type: string, payload: Record<string, unknown>): AppRunEvent {
+  appendEvent(
+    runId: string,
+    type: string,
+    payload: Record<string, unknown>,
+    identity?: { event_id?: string; created_at?: string },
+  ): AppRunEvent {
     const record = this.require(runId);
     const event: AppRunEvent = {
-      event_id: this.createEventId(),
+      event_id: identity?.event_id ?? this.createEventId(),
       sequence: record.events.length + 1,
       run_id: runId,
       task_id: record.task_id,
       type,
       source: projectRunEventSource(type),
-      created_at: this.now(),
+      created_at: identity?.created_at ?? this.now(),
       payload,
       schema_version: SCHEMA_VERSION,
     };
@@ -115,7 +120,7 @@ export class InMemoryRunRegistry {
     record.status = 'completed';
     record.current = { stage: 'delivery', active_node_code: 'N18' };
     record.snapshot = snapshot;
-    this.appendEvent(runId, 'run.completed', { status: 'completed' });
+    this.appendEventOnce(runId, 'run.completed', { status: 'completed' });
     return this.clone(record);
   }
 
@@ -125,7 +130,7 @@ export class InMemoryRunRegistry {
     record.status = 'failed';
     record.current = { stage: 'intervention', active_node_code: 'N18' };
     record.error = { code, message };
-    this.appendEvent(runId, 'run.failed', { code });
+    this.appendEventOnce(runId, 'run.failed', { code });
     return this.clone(record);
   }
 
@@ -139,7 +144,7 @@ export class InMemoryRunRegistry {
     record.controller?.abort(new Error('Run cancelled'));
     record.status = 'cancelled';
     record.current = { stage: 'intervention', active_node_code: 'N18' };
-    this.appendEvent(runId, 'run.cancelled', { status: 'cancelled' });
+    this.appendEventOnce(runId, 'run.cancelled', { status: 'cancelled' });
     return this.clone(record);
   }
 
@@ -153,6 +158,16 @@ export class InMemoryRunRegistry {
     const record = this.records.get(runId);
     if (!record) throw new RunNotFoundError(runId);
     return record;
+  }
+
+  private appendEventOnce(
+    runId: string,
+    type: string,
+    payload: Record<string, unknown>,
+  ): AppRunEvent | undefined {
+    const record = this.require(runId);
+    if (record.events.some((event) => event.type === type)) return undefined;
+    return this.appendEvent(runId, type, payload);
   }
 
   private clone(record: MutableRunRecord): AppRunSnapshot {

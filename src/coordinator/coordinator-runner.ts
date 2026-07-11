@@ -10,12 +10,14 @@ import {
   type IntegrationV0Result,
 } from './integration-v0-flow';
 import type { TelemetrySink } from '../telemetry/telemetry-sink';
+import type { Event } from '../core';
 
 export interface CoordinatorRunRequest {
   prompt: string;
   mode: 'single_agent' | 'council';
   telemetry?: TelemetrySink;
   signal?: AbortSignal;
+  onEvent?: (event: Event) => void;
   onRunCreated?: (identity: { run_id: string; task_id: string }) => void;
 }
 
@@ -27,7 +29,7 @@ export type IntegrationFlow = (options: IntegrationV0Options) => Promise<Integra
 
 type RunnerDefaults = Omit<
   IntegrationV0Options,
-  'driverPrompt' | 'enableCouncil' | 'telemetry' | 'signal' | 'onRunCreated'
+  'driverPrompt' | 'enableCouncil' | 'telemetry' | 'signal' | 'onEvent' | 'onRunCreated'
 >;
 
 export class IntegrationV0CoordinatorRunner implements CoordinatorRunner {
@@ -43,6 +45,7 @@ export class IntegrationV0CoordinatorRunner implements CoordinatorRunner {
       enableCouncil: request.mode === 'council',
       ...(request.telemetry ? { telemetry: request.telemetry } : {}),
       ...(request.signal ? { signal: request.signal } : {}),
+      ...(request.onEvent ? { onEvent: request.onEvent } : {}),
       ...(request.onRunCreated ? { onRunCreated: request.onRunCreated } : {}),
     });
   }

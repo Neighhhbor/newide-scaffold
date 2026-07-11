@@ -4,6 +4,7 @@
  * 这个文件负责异步启动 integration runner 并维护查询状态，不处理 JSON-RPC framing 或进程 I/O。
  */
 import type { IntegrationV0Result } from '../coordinator/integration-v0-flow';
+import type { Event } from '../core';
 import {
   IntegrationV0CoordinatorRunner,
   type CoordinatorRunner,
@@ -49,6 +50,7 @@ export class NewideBackendService {
     return new Promise<RunCreateResult>((resolve, reject) => {
       let identity: { run_id: string; task_id: string } | undefined;
       const pendingTelemetry: TelemetryRecord[] = [];
+      const pendingEvents: Event[] = [];
       const telemetry: TelemetrySink = {
         emit: (record) => {
           if (!identity) {
@@ -66,6 +68,13 @@ export class NewideBackendService {
           mode,
           telemetry,
           signal: controller.signal,
+          onEvent: (event) => {
+            if (!identity) {
+              pendingEvents.push(event);
+              return;
+            }
+            this.appendDomainEvent(identity, event);
+          },
           onRunCreated: (created) => {
             if (identity) return;
             identity = created;
@@ -73,6 +82,7 @@ export class NewideBackendService {
             this.registry.subscribe(created.run_id, (event) => {
               void this.auditWriter.append(event);
             });
+            for (const event of pendingEvents) this.appendDomainEvent(created, event);
             this.registry.appendEvent(created.run_id, 'run.started', { mode });
             for (const record of pendingTelemetry) this.appendTelemetry(created, record);
             resolve({ ...created, status: 'running' });
@@ -129,9 +139,19 @@ export class NewideBackendService {
     identity: { run_id: string; task_id: string },
     record: TelemetryRecord,
   ): void {
+    if (record.source?.kind === 'event_store') return;
     if (record.run_id && record.run_id !== identity.run_id) return;
     if (record.task_id && record.task_id !== identity.task_id) return;
     this.registry.appendEvent(identity.run_id, record.event_type, record.payload);
+  }
+
+  private appendDomainEvent(identity: { run_id: string; task_id: string }, event: Event): void {
+    if (event.run_id && event.run_id !== identity.run_id) return;
+    if (event.task_id && event.task_id !== identity.task_id) return;
+    this.registry.appendEvent(identity.run_id, event.event_type, event.payload, {
+      event_id: event.event_id,
+      created_at: event.created_at,
+    });
   }
 }
 

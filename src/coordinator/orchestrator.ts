@@ -34,6 +34,7 @@ export interface RuntimeStores {
 export interface RuntimeOrchestratorConfig {
   stores?: Partial<RuntimeStores>;
   telemetry?: TelemetrySink;
+  onEvent?: (event: Event) => void;
 }
 
 export interface ResumeFromCheckpointResult {
@@ -45,6 +46,7 @@ export interface ResumeFromCheckpointResult {
 export class RuntimeOrchestrator {
   readonly stores: RuntimeStores;
   readonly telemetry: TelemetrySink;
+  readonly onEvent: ((event: Event) => void) | undefined;
   private readonly tasks = new Map<TaskId, Task>();
   private readonly runs = new Map<RunId, Run>();
 
@@ -56,6 +58,7 @@ export class RuntimeOrchestrator {
       checkpoints: normalized.stores?.checkpoints ?? new InMemoryCheckpointStore(),
     };
     this.telemetry = normalized.telemetry ?? new NoopTelemetrySink();
+    this.onEvent = normalized.onEvent;
   }
 
   createTask(request: TaskCreateRequest): Task {
@@ -114,6 +117,7 @@ export class RuntimeOrchestrator {
     payload?: Record<string, unknown>;
   }): Event {
     const event = this.stores.events.append(input);
+    this.onEvent?.(event);
     void mirrorEventToTelemetry(this.telemetry, event);
     return event;
   }
@@ -201,9 +205,9 @@ function normalizeOrchestratorConfig(
     return {};
   }
 
-  if ('telemetry' in config) {
+  if ('telemetry' in config || 'onEvent' in config) {
     const orchestratorConfig = config as RuntimeOrchestratorConfig & Partial<RuntimeStores>;
-    const { telemetry, stores, events, artifacts, checkpoints } = orchestratorConfig;
+    const { telemetry, onEvent, stores, events, artifacts, checkpoints } = orchestratorConfig;
     const legacyStores: Partial<RuntimeStores> = {};
     if (events !== undefined) legacyStores.events = events;
     if (artifacts !== undefined) legacyStores.artifacts = artifacts;
@@ -213,6 +217,7 @@ function normalizeOrchestratorConfig(
 
     return {
       ...(telemetry ? { telemetry } : {}),
+      ...(onEvent ? { onEvent } : {}),
       ...(resolvedStores ? { stores: resolvedStores } : {}),
     };
   }

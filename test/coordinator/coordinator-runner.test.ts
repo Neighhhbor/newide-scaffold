@@ -9,12 +9,14 @@ describe('IntegrationV0CoordinatorRunner', () => {
     const flow = vi.fn(async () => ({ run_id: 'run_1' }) as IntegrationV0Result);
     const runner = new IntegrationV0CoordinatorRunner({ driver }, flow);
     const onRunCreated = vi.fn();
+    const onEvent = vi.fn();
     const controller = new AbortController();
 
     await runner.run({
       prompt: 'Build RPC',
       mode: 'council',
       onRunCreated,
+      onEvent,
       signal: controller.signal,
     });
 
@@ -23,6 +25,7 @@ describe('IntegrationV0CoordinatorRunner', () => {
       driverPrompt: 'Build RPC',
       enableCouncil: true,
       onRunCreated,
+      onEvent,
       signal: controller.signal,
     });
   });

@@ -65,6 +65,21 @@ describe('InMemoryRunRegistry', () => {
     });
   });
 
+  it('does not duplicate terminal events already observed from the coordinator', () => {
+    const registry = new InMemoryRunRegistry();
+    registry.create({ run_id: 'run_done', task_id: 'task_done', mode: 'single_agent' });
+    registry.appendEvent('run_done', 'run.completed', { status: 'completed' });
+
+    registry.complete('run_done', {
+      run: { status: 'completed' },
+      current: { stage: 'delivery' },
+    });
+
+    expect(
+      registry.getSnapshot('run_done').events.filter((event) => event.type === 'run.completed'),
+    ).toHaveLength(1);
+  });
+
   it('rejects unknown run ids', () => {
     const registry = new InMemoryRunRegistry();
     expect(() => registry.getSnapshot('missing')).toThrow(RunNotFoundError);
