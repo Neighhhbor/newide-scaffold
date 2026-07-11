@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { describe, expect, it } from 'vitest';
 
-describe('RPC smoke script', () => {
+describe('mock RPC protocol smoke script', () => {
   it('verifies single-agent, Council, cancellation, and protocol errors', async () => {
     const child = spawn('pnpm', ['rpc:smoke'], {
       cwd: process.cwd(),
@@ -19,6 +19,7 @@ describe('RPC smoke script', () => {
     expect(summaryLine).toBeDefined();
     expect(JSON.parse(summaryLine!)).toMatchObject({
       status: 'ok',
+      runtime: 'mock-protocol-smoke',
       single_agent: { artifacts: 1 },
       council: { artifacts: 1 },
       cancelled: { status: 'cancelled' },

@@ -60,6 +60,7 @@ try {
   process.stdout.write(
     `${JSON.stringify({
       status: 'ok',
+      runtime: 'mock-protocol-smoke',
       single_agent: single,
       council,
       cancelled,
