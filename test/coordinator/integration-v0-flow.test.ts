@@ -29,6 +29,37 @@ describe('runIntegrationV0Flow', () => {
     createdWorktreeDirs.clear();
   });
 
+  it('reports real task and run ids before driver completion', async () => {
+    let releaseDriver: (() => void) | undefined;
+    const driverBarrier = new Promise<void>((resolve) => {
+      releaseDriver = resolve;
+    });
+    class BlockingDriver extends MockDriver {
+      override async sendPrompt(input: DriverPrompt): Promise<DriverRunResult> {
+        await driverBarrier;
+        return super.sendPrompt(input);
+      }
+    }
+
+    let resolveIdentity: ((identity: { run_id: string; task_id: string }) => void) | undefined;
+    const identityPromise = new Promise<{ run_id: string; task_id: string }>((resolve) => {
+      resolveIdentity = resolve;
+    });
+    const flowPromise = runIntegrationV0Flow({
+      driver: new BlockingDriver(),
+      onRunCreated: (identity) => resolveIdentity?.(identity),
+    });
+
+    const identity = await identityPromise;
+    expect(identity.run_id).toMatch(/^run_/);
+    expect(identity.task_id).toMatch(/^task_/);
+    releaseDriver?.();
+    const result = await flowPromise;
+    createdRunDirs.add(`.newide/runs/${result.run_id}`);
+    createdWorktreeDirs.add(result.materialization_result.worktree_path);
+    expect(identity).toEqual({ run_id: result.run_id, task_id: result.task_id });
+  });
+
   it('should run complete flow with MockDriver and single_agent mode', async () => {
     const result = await runFlow();
 
