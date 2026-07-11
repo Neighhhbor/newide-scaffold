@@ -165,10 +165,10 @@ export class NewideBackendService {
   async cancelRun(runId: string): Promise<{ cancelled: true }> {
     const staged = this.registry.stageTerminal(runId, { status: 'cancelled' });
     if (staged) await this.persistTerminal(runId, staged);
-    else {
-      await this.waitForTerminal(runId);
-      const status = this.registry.getSnapshot(runId).status;
-      if (status !== 'cancelled') throw new Error(`Run ${runId} already reached ${status}`);
+    else await this.waitForTerminal(runId);
+    const snapshot = this.registry.getSnapshot(runId);
+    if (snapshot.status !== 'cancelled') {
+      throw new Error(snapshot.error?.message ?? `Run ${runId} already reached ${snapshot.status}`);
     }
     return { cancelled: true };
   }

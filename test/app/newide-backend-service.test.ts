@@ -189,6 +189,38 @@ describe('NewideBackendService', () => {
     expect(snapshot.events.some((event) => event.type === 'run.completed')).toBe(true);
   });
 
+  it('rejects cancellation when its terminal output cannot be persisted', async () => {
+    const service = new NewideBackendService(
+      {
+        run: async (request) => {
+          request.onRunCreated?.({ run_id: 'run_cancel_persist', task_id: 'task_cancel_persist' });
+          await new Promise((_, reject) => {
+            request.signal?.addEventListener('abort', () => reject(request.signal?.reason), {
+              once: true,
+            });
+          });
+          throw new Error('unreachable');
+        },
+      },
+      new InMemoryRunRegistry(),
+      {
+        initialize: async () => undefined,
+        append: async () => undefined,
+        flush: async () => undefined,
+      },
+      { finalize: async () => Promise.reject(new Error('cancel output unavailable')) },
+    );
+
+    await service.createRun({ prompt: 'Cancel with unavailable storage' });
+    await expect(service.cancelRun('run_cancel_persist')).rejects.toThrow(
+      'cancel output unavailable',
+    );
+    expect(service.getSnapshot('run_cancel_persist')).toMatchObject({
+      status: 'failed',
+      error: { code: 'TERMINAL_OUTPUT_FAILED', message: 'cancel output unavailable' },
+    });
+  });
+
   it('publishes one persistence failure and keeps the background promise observed', async () => {
     let finalizeCalls = 0;
     const unhandled: unknown[] = [];
