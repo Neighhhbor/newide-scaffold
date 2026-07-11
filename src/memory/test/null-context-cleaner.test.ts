@@ -35,12 +35,14 @@ describe('runTaskMemoryCycle with NullContextCleaner', () => {
       queryMemory: async () => ({ experiences: [], skills: [] }),
       planTaskInstruction: async () => 'Execute the task.',
       invokeDriver: async () => ({
-        summary: 'Driver completed task successfully.',
-        artifacts: [],
-        decisions: [],
-        blockers: [],
-        referenced_experiences: [],
-        assumptions: [],
+        report: {
+          summary: 'Driver completed task successfully.',
+          artifacts: [],
+          decisions: [],
+          blockers: [],
+          referenced_experiences: [],
+          assumptions: [],
+        },
       }),
       extractor: {
         extract: async (snapshot, _agentContext) => ({

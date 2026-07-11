@@ -68,6 +68,7 @@ export interface ProcessPendingResult {
 }
 
 export interface MemoryCycleOptions {
+  signal?: AbortSignal;
   telemetry?: TelemetrySink;
   run_id?: string;
   memory_ablation?: string;
@@ -153,6 +154,7 @@ export async function runTaskMemoryCycle(
   const persona = await memory.getPersona();
 
   const task_instruction = await deps.planTaskInstruction(task);
+  options?.signal?.throwIfAborted();
   const { driver_context, retrieval } = await buildDriverContext({
     memory,
     task,
@@ -160,13 +162,19 @@ export async function runTaskMemoryCycle(
     task_instruction,
     queryMemory: deps.queryMemory,
   });
+  options?.signal?.throwIfAborted();
 
-  const driver_return = await deps.invokeDriver({
-    task_id,
-    call_id,
-    source_driver,
-    driver_context,
-  });
+  const invocation = await deps.invokeDriver(
+    {
+      task_id,
+      call_id,
+      source_driver,
+      driver_context,
+    },
+    options?.signal ? { signal: options.signal } : undefined,
+  );
+  options?.signal?.throwIfAborted();
+  const driver_return = invocation.report;
 
   const agentContext = await deps.contextCleaner.clean({
     agent_id: memory.role_id,
@@ -175,6 +183,7 @@ export async function runTaskMemoryCycle(
     driver_returns: [{ call_id, driver_id: source_driver, driver_return }],
   });
 
+  options?.signal?.throwIfAborted();
   const ingested = await ingestTaskBuffer(memory, {
     task,
     task_id,
@@ -223,5 +232,6 @@ export async function runTaskMemoryCycle(
     buffer_seq: ingested.seq,
     extraction,
     promotion,
+    ...(invocation.execution ? { driver_execution: invocation.execution } : {}),
   };
 }

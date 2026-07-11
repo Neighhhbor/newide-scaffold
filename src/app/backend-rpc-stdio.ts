@@ -9,8 +9,18 @@ import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
 import { IntegrationV0CoordinatorRunner } from '../coordinator/coordinator-runner';
-import { CommandDriverTransport, ExternalDriverRuntime } from '../driver';
-import { DriverRuntimeAgentExecutionFacade } from '../memory';
+import {
+  CommandDriverTransport,
+  ExternalDriverRuntime,
+  createDriverRuntimeInvoker,
+} from '../driver';
+import {
+  AgentManager,
+  DriverRuntimeAgentExecutionFacade,
+  FileBufferRepository,
+  InMemoryRepository,
+  defaultMvpAgentRunDeps,
+} from '../memory';
 import { JsonRpcDispatcher, JsonRpcLineSession } from '../rpc/json-rpc-dispatcher';
 import { RunRpcMethods } from '../rpc/run-methods';
 import { NewideBackendService } from './newide-backend-service';
@@ -62,9 +72,17 @@ export function createProductionBackendService(
       unsetEnv: MODEL_OVERRIDE_ENV.filter((key) => driverEnv[key] === undefined),
     }),
   });
+  const manager = AgentManager.create(
+    new InMemoryRepository(),
+    new FileBufferRepository({ agentStateRoot: path.join(repoRoot, '.newide', 'memory') }),
+    { ...defaultMvpAgentRunDeps, invokeDriver: createDriverRuntimeInvoker(driver) },
+  );
   const runner = new IntegrationV0CoordinatorRunner({
     driver,
-    agentExecutionFacade: new DriverRuntimeAgentExecutionFacade({ driver }),
+    agentExecutionFacade: new DriverRuntimeAgentExecutionFacade({
+      manager,
+      source_driver: driver.driver_id,
+    }),
   });
   return new NewideBackendService(runner);
 }

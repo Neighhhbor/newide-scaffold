@@ -12,6 +12,7 @@ import type {
   PersonaDef,
   SkillRecord,
 } from './schemas';
+import type { DriverRunResult } from '../driver';
 import type { MemoryRetrievalResult } from './services/memory-query';
 
 /**
@@ -98,6 +99,8 @@ export interface MemoryCycleResult {
   extraction: ExtractionOutput;
   /** 技能晋升检查结果 */
   promotion: PromotionOutcome;
+  /** A runtime 的原始执行回执；旧 mock 依赖可缺省。 */
+  driver_execution?: DriverRunResult;
 }
 
 export type { MemoryRetrievalResult } from './services/memory-query';

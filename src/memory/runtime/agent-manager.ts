@@ -11,6 +11,9 @@ import type { AgentTaskRequest } from '../agent-types';
 import type { MemoryCycleResult } from '../types';
 import { createAgentMemoryScope } from '../adapters/agent-memory-scope';
 import { Agent } from './agent';
+import type { AgentRunDeps } from './agent-run-deps';
+import { defaultMvpAgentRunDeps } from '../mvp/default-agent-run-deps';
+import type { MemoryCycleOptions } from '../services/memory-cycle';
 
 /** submitTask 的返回：中标 Agent、竞标分数与记忆周期结果 */
 export interface SubmitTaskResult {
@@ -21,27 +24,58 @@ export interface SubmitTaskResult {
 
 export class AgentManager {
   private readonly agents = new Map<string, Agent>();
+  private readonly pendingAgents = new Map<string, Promise<Agent>>();
   private started = false;
 
   constructor(
     private readonly repository: MemoryRepository,
     private readonly bufferRepository: BufferRepository,
+    private readonly deps: AgentRunDeps = defaultMvpAgentRunDeps,
   ) {}
 
-  static create(repository: MemoryRepository, bufferRepository: BufferRepository): AgentManager {
-    return new AgentManager(repository, bufferRepository);
+  static create(
+    repository: MemoryRepository,
+    bufferRepository: BufferRepository,
+    deps: AgentRunDeps = defaultMvpAgentRunDeps,
+  ): AgentManager {
+    return new AgentManager(repository, bufferRepository, deps);
   }
 
   async createAgent(spec: CreateAgentSpec): Promise<AgentHandle> {
     await this.repository.initializeAgent(spec);
     await this.bufferRepository.ensureAgent(spec.role_id);
     const memory = createAgentMemoryScope(this.repository, this.bufferRepository, spec.role_id);
-    const agent = new Agent(memory);
+    const agent = new Agent(memory, this.deps);
     this.agents.set(spec.role_id, agent);
     if (this.started) {
       agent.startLoop();
     }
     return agent.getHandle();
+  }
+
+  async ensureAgent(role_id: string): Promise<Agent> {
+    const existing = this.agents.get(role_id);
+    if (existing) return existing;
+    const pending = this.pendingAgents.get(role_id);
+    if (pending) return pending;
+    const creating = this.createAgent({ role_id, name: role_id })
+      .then(() => {
+        const agent = this.agents.get(role_id);
+        if (!agent) throw new Error(`Agent initialization failed: ${role_id}`);
+        return agent;
+      })
+      .finally(() => this.pendingAgents.delete(role_id));
+    this.pendingAgents.set(role_id, creating);
+    return creating;
+  }
+
+  async runRole(
+    role_id: string,
+    task: AgentTaskRequest,
+    options?: MemoryCycleOptions,
+  ): Promise<MemoryCycleResult> {
+    const agent = await this.ensureAgent(role_id);
+    return agent.runOnce(task, options);
   }
 
   start(): void {

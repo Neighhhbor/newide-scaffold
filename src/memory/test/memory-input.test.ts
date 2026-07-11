@@ -4,7 +4,8 @@
  * 验证 submitTask 完整周期：
  * repository 检索 → planTaskInstruction → mock Driver → buffer → 提取 → 晋升。
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { defaultMvpAgentRunDeps } from '../mvp/default-agent-run-deps';
 import { AgentManager } from '../runtime/agent-manager';
 import { InMemoryRepository } from '../adapters/in-memory-repository';
 import { InMemoryBufferRepository } from '../adapters/in-memory-buffer-repository';
@@ -15,6 +16,28 @@ import type { AgentRunDeps } from '../runtime/agent-run-deps';
 import type { AgentTaskRequest } from '../agent-types';
 
 describe('memory MVP demo flow', () => {
+  it('injects runtime deps and initializes the same role only once concurrently', async () => {
+    const repository = new InMemoryRepository();
+    const initialize = vi.spyOn(repository, 'initializeAgent');
+    const bufferRepository = new InMemoryBufferRepository();
+    const invokeDriver = vi.fn(defaultMvpAgentRunDeps.invokeDriver);
+    const manager = AgentManager.create(repository, bufferRepository, {
+      ...defaultMvpAgentRunDeps,
+      queryMemory: async (memory) => ({
+        experiences: await memory.listExperiences(),
+        skills: await memory.listSkills(),
+      }),
+      invokeDriver,
+    });
+
+    await Promise.all([manager.ensureAgent('reviewer'), manager.ensureAgent('reviewer')]);
+    await manager.runRole('reviewer', { spec: 'Use injected deps.', task_id: 'task_injected' });
+    await manager.runRole('reviewer', { spec: 'Use injected deps.', task_id: 'task_reuse' });
+
+    expect(initialize).toHaveBeenCalledTimes(1);
+    expect(invokeDriver).toHaveBeenCalledTimes(2);
+    expect(invokeDriver.mock.calls[1]?.[0].driver_context.experiences).toHaveLength(1);
+  });
   it('createAgent → submitTask → 检索 → mock Driver → buffer → 提取 → 默认不晋升', async () => {
     const repository = new InMemoryRepository();
     const bufferRepository = new InMemoryBufferRepository();
@@ -70,14 +93,16 @@ describe('memory MVP demo flow', () => {
       queryMemory: async () => ({ experiences: [], skills: [] }),
       planTaskInstruction: async () => 'Execute the task.',
       invokeDriver: async () => ({
-        summary: 'Task completed successfully.',
-        artifacts: [],
-        decisions: [{ point: 'Approach', options: ['A', 'B'], chosen: 'A', reason: 'Best fit' }],
-        blockers: [],
-        referenced_experiences: [
-          { experience_id: 'exp_ref', applied: true, effectiveness: 'fully_effective', note: '' },
-        ],
-        assumptions: [],
+        report: {
+          summary: 'Task completed successfully.',
+          artifacts: [],
+          decisions: [{ point: 'Approach', options: ['A', 'B'], chosen: 'A', reason: 'Best fit' }],
+          blockers: [],
+          referenced_experiences: [
+            { experience_id: 'exp_ref', applied: true, effectiveness: 'fully_effective', note: '' },
+          ],
+          assumptions: [],
+        },
       }),
       extractor: {
         extract: async (snapshot) => ({
