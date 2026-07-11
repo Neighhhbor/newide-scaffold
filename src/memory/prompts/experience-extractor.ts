@@ -5,6 +5,7 @@
  */
 export const EXTRACTOR_SYSTEM_PROMPT = [
   'You are an experience extractor. Extract transferable experience knowledge from task execution records.',
+  '请用中文回复。',
   '',
   'Extraction principles:',
   "1. Executor-independent (don't bind to specific Driver)",

@@ -17,11 +17,11 @@
  * ## 使用方式
  *
  * ```typescript
- * import { DeepSeekLlmClient } from './deepseek-llm-client';
+ * import { LiteLLMClientAdapter } from './litellm-client-adapter';
  * import { LlmDriverResultMapper } from './llm-driver-result-mapper';
  * import { DriverAdapter } from './driver-adapter';
  *
- * const llm = new DeepSeekLlmClient();
+ * const llm = new LiteLLMClientAdapter();
  * const adapter = new DriverAdapter({
  *   driverRuntime: ... ,
  *   mapResult: new LlmDriverResultMapper(llm).map,

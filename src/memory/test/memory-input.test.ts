@@ -1,7 +1,7 @@
 /**
  * Memory 全链路集成测试
  *
- * 验证 submitTask 完整周期：
+ * 验证 dispatchTask 完整周期：
  * repository 检索 → planTaskInstruction → mock Driver → buffer → 提取 → 晋升。
  */
 import { describe, it, expect } from 'vitest';
@@ -15,10 +15,10 @@ import type { AgentRunDeps } from '../runtime/agent-run-deps';
 import type { AgentTaskRequest } from '../agent-types';
 
 describe('memory MVP demo flow', () => {
-  it('createAgent → submitTask → 检索 → mock Driver → buffer → 提取 → 默认不晋升', async () => {
+  it('createAgent → dispatchTask → 检索 → mock Driver → buffer → 提取 → 默认不晋升', async () => {
     const repository = new InMemoryRepository();
     const bufferRepository = new InMemoryBufferRepository();
-    const manager = AgentManager.create(repository, bufferRepository);
+    const manager = await AgentManager.create(repository, bufferRepository);
 
     await manager.createAgent({
       role_id: 'role_ts_engineer',
@@ -30,14 +30,14 @@ describe('memory MVP demo flow', () => {
     const task_id = 'task_mvp_001';
     const call_id = 'call_mvp_001';
 
-    const result = await manager.submitTask({
+    const result = await manager.dispatchTask('role_ts_engineer', {
       spec: 'Implement memory input MVP.',
       task_id,
       call_id,
       source_driver: 'mock-driver',
     });
 
-    expect(result.winner_role_id).toBe('role_ts_engineer');
+    expect(result.role_id).toBe('role_ts_engineer');
     expect(result.cycle.buffer_snapshot.task_id).toBe(task_id);
     expect(result.cycle.extraction.experiences).toHaveLength(1);
     expect(result.cycle.promotion.check.eligible).toBe(false);

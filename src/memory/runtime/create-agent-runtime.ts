@@ -85,7 +85,7 @@ export interface AgentRuntimeConfig {
  * 根据配置自动选择存储实现，注入内置工具（QueryMemoryTool）
  * 和外部工具（InvokeDriverTool 等），返回一个配置好的 AgentManager。
  */
-export function createAgentRuntime(config: AgentRuntimeConfig): AgentManager {
+export async function createAgentRuntime(config: AgentRuntimeConfig): Promise<AgentManager> {
   // 1. 选择存储实现
   const repository = createMemoryRepository(config.storage);
   const bufferRepository = createBufferRepository(config.storage);
@@ -121,7 +121,7 @@ export function createAgentRuntime(config: AgentRuntimeConfig): AgentManager {
     },
   } as AgentManagerOptions;
 
-  // 4. 返回 AgentManager
+  // 4. 返回 AgentManager（async create 自动加载所有已注册 Agent）
   return AgentManager.create(repository, bufferRepository, managerOptions);
 }
 
