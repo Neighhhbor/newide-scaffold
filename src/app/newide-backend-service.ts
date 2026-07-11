@@ -3,11 +3,11 @@
  *
  * 这个文件负责异步启动 integration runner 并维护查询状态，不处理 JSON-RPC framing 或进程 I/O。
  */
+import type { IntegrationV0Result } from '../coordinator/integration-v0-flow';
 import {
-  runIntegrationV0Flow,
-  type IntegrationV0Options,
-  type IntegrationV0Result,
-} from '../coordinator/integration-v0-flow';
+  IntegrationV0CoordinatorRunner,
+  type CoordinatorRunner,
+} from '../coordinator/coordinator-runner';
 import type { TelemetryRecord, TelemetrySink } from '../telemetry/telemetry-sink';
 import {
   InMemoryRunRegistry,
@@ -30,11 +30,9 @@ export interface RunCreateResult {
   status: 'running';
 }
 
-export type IntegrationRunner = (options: IntegrationV0Options) => Promise<IntegrationV0Result>;
-
 export class NewideBackendService {
   constructor(
-    private readonly runner: IntegrationRunner = runIntegrationV0Flow,
+    private readonly runner: CoordinatorRunner = new IntegrationV0CoordinatorRunner(),
     private readonly registry = new InMemoryRunRegistry(),
   ) {}
 
@@ -55,9 +53,9 @@ export class NewideBackendService {
 
       let runnerPromise: Promise<IntegrationV0Result>;
       try {
-        runnerPromise = this.runner({
-          driverPrompt: params.prompt,
-          enableCouncil: mode === 'council',
+        runnerPromise = this.runner.run({
+          prompt: params.prompt,
+          mode,
           telemetry,
           onRunCreated: (created) => {
             if (identity) return;
