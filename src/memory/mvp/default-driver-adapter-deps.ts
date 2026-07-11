@@ -26,9 +26,9 @@
  * ```typescript
  * const deps = createDriverAdapterDeps({
  *   driverCommand: 'gemini',
- *   llmOptions: { apiKey: process.env.DEEPSEEK_API_KEY },
+ *   llmOptions: {},
  * });
- * // => 真实 Driver + LLM 提取经验/晋升技能
+ * // => 真实 Driver + LLM 提取经验/晋升技能（API key 通过环境变量管理）
  * ```
  *
  * ### 档位 3: Driver + LLM 提取 + LLM 结果映射
@@ -36,7 +36,7 @@
  * ```typescript
  * const deps = createDriverAdapterDeps({
  *   driverCommand: 'gemini',
- *   llmOptions: { apiKey: process.env.DEEPSEEK_API_KEY },
+ *   llmOptions: {},
  *   useLlmResultMapping: true,
  * });
  * // => 真实 Driver + LLM 提取 + LLM 辅助的 DriverRunResult→DriverReturn 映射
@@ -57,7 +57,6 @@
  * ```
  */
 import type { AgentRunDeps } from '../runtime/agent-run-deps';
-import type { DeepSeekLlmClientOptions } from '../adapters/deepseek-llm-client';
 import type { DriverResultMapper } from '../adapters/driver-adapter';
 
 import {
@@ -72,7 +71,7 @@ import { RuleBasedExperienceExtractor } from '../adapters/rule-based-experience-
 import { ruleBasedSkillPromotion } from '../services/skill-promotion';
 import { mockPlanTaskInstruction } from './adapters/mock-task-instruction-planner';
 
-import { DeepSeekLlmClient } from '../adapters/deepseek-llm-client';
+import { LiteLLMClientAdapter } from '../adapters/litellm-client-adapter';
 import { LlmExperienceExtractor } from '../adapters/llm-experience-extractor';
 import { LlmTaskInstructionPlanner } from '../adapters/llm-task-instruction-planner';
 import { LlmContextCleaner } from '../adapters/context-cleaner';
@@ -99,9 +98,10 @@ export interface DriverAdapterDepsOptions {
   /** 需要清除的环境变量名 */
   driverUnsetEnv?: string[];
 
-  /** DeepSeek LLM 客户端配置（用于 extractor/promote/planner/cleaner）。
-   *  不传则退化为启发式实现（与 defaultMvpAgentRunDeps 对齐） */
-  llmOptions?: DeepSeekLlmClientOptions;
+  /** LLM 客户端配置。传入任意真值启用 LLM 提取（使用 LiteLLMClientAdapter）。
+   *  不传则退化为启发式实现（与 defaultMvpAgentRunDeps 对齐）。
+   *  传空对象 `{}` 即可启用 LLM。API key 通过环境变量（如 OPENAI_API_KEY）管理。 */
+  llmOptions?: Record<string, never>;
   /** 是否用 LLM 做 DriverRunResult → DriverReturn 映射（需要 llmOptions）。
    *  缺省为 false，使用启发式映射器 mapRunResultToDriverReturn。
    *  设为 true 时精度更高但会增加一次 LLM 调用。 */
@@ -157,7 +157,7 @@ export function createDriverAdapterDeps(options: DriverAdapterDepsOptions): Agen
 
   // ── 5. 如果提供了 llmOptions，升级为 LLM 实现 ──
   if (options.llmOptions) {
-    const llm = new DeepSeekLlmClient(options.llmOptions);
+    const llm = new LiteLLMClientAdapter();
     const planner = new LlmTaskInstructionPlanner(llm);
 
     deps.planTaskInstruction = (task) => planner.plan(task);
@@ -212,7 +212,7 @@ function resolveResultMapper(options: DriverAdapterDepsOptions): DriverResultMap
           'Either provide llmOptions or disable useLlmResultMapping.',
       );
     }
-    const llm = new DeepSeekLlmClient(options.llmOptions);
+    const llm = new LiteLLMClientAdapter();
     return new LlmDriverResultMapper(llm).map;
   }
 

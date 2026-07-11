@@ -88,7 +88,7 @@ const deps = useExternalDriver
 const repo = new InMemoryRepository();
 const bufRepo = new InMemoryBufferRepository();
 
-const manager = AgentManager.create(repo, bufRepo, { deps });
+const manager = await AgentManager.create(repo, bufRepo, { deps });
 
 const agentHandle = await manager.createAgent({
   role_id: 'demo-agent',
@@ -104,9 +104,9 @@ console.log(`Persona: ${agentHandle.persona.summary}\n`);
 // ═══════════════════════════════════════════════════════════════
 
 console.log('━'.repeat(60));
-console.log('📤 Submitting task...\n');
+console.log('📤 Dispatching task...\n');
 
-const result = await manager.submitTask({
+const result = await manager.dispatchTask('demo-agent', {
   task_id: 'demo-task-1',
   call_id: 'demo-call-1',
   source_driver: useExternalDriver ? externalDriverCommand! : 'mock-driver',
@@ -123,7 +123,7 @@ const projection = toMemoryTaskProjection(result);
 console.log('━'.repeat(60));
 console.log('📋 Task Result\n');
 
-console.log(`  Winner:     ${projection.winner_role_id}`);
+console.log(`  Agent:      ${projection.role_id}`);
 console.log(`  Driver:     ${cycle.buffer_snapshot.source_driver}`);
 console.log(`  Status:     ${cycle.buffer_snapshot.driver_return.summary.slice(0, 120)}...`);
 

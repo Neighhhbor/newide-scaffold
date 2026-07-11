@@ -1,8 +1,8 @@
 /**
- * DeepSeek 真实 API 冒烟测试
+ * LiteLLM 真实 API 冒烟测试
  *
  * 逐个调用 adapter 的真实 API，验证：
- *   1. DeepSeekLlmClient 基础通信
+ *   1. LiteLLMClientAdapter 基础通信
  *   2. LlmTaskInstructionPlanner 任务规划
  *   3. LlmContextCleaner 上下文清理
  *   4. LlmExperienceExtractor 经验提取
@@ -10,8 +10,8 @@
  *
  * 运行：npx tsx test/integration/api-smoke.ts
  *
- * ⚠️  需要 DEEPSEEK_API_KEY 环境变量
- *    export DEEPSEEK_API_KEY=sk-xxx
+ * ⚠️  需要 OPENAI_API_KEY 环境变量（或对应 provider 的 API key）
+ *    export OPENAI_API_KEY=sk-xxx
  *     或项目根目录有 .env 文件
  */
 import { readFileSync } from 'node:fs';
@@ -37,7 +37,7 @@ function loadDotenv(): void {
 }
 loadDotenv();
 
-import { DeepSeekLlmClient } from '../../adapters/deepseek-llm-client';
+import { LiteLLMClientAdapter } from '../../adapters/litellm-client-adapter';
 import { LlmTaskInstructionPlanner } from '../../adapters/llm-task-instruction-planner';
 import { LlmContextCleaner } from '../../adapters/context-cleaner';
 import { LlmExperienceExtractor } from '../../adapters/llm-experience-extractor';
@@ -48,17 +48,24 @@ import { createAgentMemoryScope } from '../../adapters/agent-memory-scope';
 import type { DriverReturn, BufferSnapshot, ExperienceRecord } from '../../schemas';
 
 // ────────────────────────────────────────────────────
-//  1. 检查环境变量
+//  1. 检查环境变量（兼容 LLM_PROVIDER=deepseek 配置）
 // ────────────────────────────────────────────────────
-if (!process.env.DEEPSEEK_API_KEY) {
-  console.error('❌ DEEPSEEK_API_KEY 未设置，请检查 .env 文件或环境变量');
+if (process.env.LLM_PROVIDER === 'deepseek' && process.env.DEEPSEEK_API_KEY) {
+  if (!process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = process.env.DEEPSEEK_API_KEY;
+  if (!process.env.OPENAI_BASE_URL) process.env.OPENAI_BASE_URL = 'https://api.deepseek.com/v1';
+}
+
+if (!process.env.OPENAI_API_KEY) {
+  console.error(
+    '❌ 未找到 API key。请在 src/memory/.env 中设置 DEEPSEEK_API_KEY 或 OPENAI_API_KEY',
+  );
   process.exit(1);
 }
 
 (async () => {
   // ── 1. 基础通信测试 ──
-  console.log('\n═══ 1. DeepSeekLlmClient 基础通信 ═══');
-  const client = new DeepSeekLlmClient({ model: process.env.DEEPSEEK_MODEL ?? 'deepseek-chat' });
+  console.log('\n═══ 1. LiteLLMClientAdapter 基础通信 ═══');
+  const client = new LiteLLMClientAdapter();
   try {
     const result = await client.complete({
       messages: [

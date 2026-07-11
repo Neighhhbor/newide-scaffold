@@ -12,7 +12,7 @@
  *   8. runOnce 向后兼容
  *   9. hasPendingTask 状态报告
  *   10. AgentManager.tickAll 驱动所有 running agent
- *   11. AgentManager.submitTask 异步派单
+ *   11. AgentManager.dispatchTask 异步派单
  */
 import { describe, it, expect } from 'vitest';
 import { Agent } from '../runtime/agent';
@@ -393,7 +393,7 @@ describe('AgentManager tickAll', () => {
       textResponse('Task A completed.'),
     ]);
 
-    const manager = AgentManager.create(repository, bufferRepository, {
+    const manager = await AgentManager.create(repository, bufferRepository, {
       tools: { llm: mockLlm, tools: [] },
     });
 
@@ -421,7 +421,7 @@ describe('AgentManager tickAll', () => {
 
     const mockLlm = createMockToolClient([textResponse('Done.')]);
 
-    const manager = AgentManager.create(repository, bufferRepository, {
+    const manager = await AgentManager.create(repository, bufferRepository, {
       tools: { llm: mockLlm, tools: [] },
     });
 
@@ -437,7 +437,7 @@ describe('AgentManager tickAll', () => {
     expect(results.has('role_tick_run')).toBe(true);
   });
 
-  it('submitTask 异步派单 + tickAll 驱动完成', async () => {
+  it('dispatchTask 异步派单 + tickAll 驱动完成', async () => {
     const { AgentManager } = await import('../runtime/agent-manager');
     const repository = new InMemoryRepository();
     const bufferRepository = new InMemoryBufferRepository();
@@ -447,17 +447,20 @@ describe('AgentManager tickAll', () => {
       textResponse('Task complete. [done]'),
     ]);
 
-    const manager = AgentManager.create(repository, bufferRepository, {
+    const manager = await AgentManager.create(repository, bufferRepository, {
       tools: { llm: mockLlm, tools: [] },
     });
 
     await manager.createAgent({ role_id: 'role_async_task', name: 'Async Agent', tags: [] });
     manager.start();
 
-    // submitTask 同步执行完成（内部循环逐 tick 直至完成）
-    const result = await manager.submitTask(createTestTask({ task_id: 'task_async' }));
-    expect(result.status).toBe('completed');
-    expect(result.winner_role_id).toBe('role_async_task');
+    // dispatchTask 同步执行完成（内部循环逐 tick 直至完成）
+    const result = await manager.dispatchTask(
+      'role_async_task',
+      createTestTask({ task_id: 'task_async' }),
+    );
+    expect(result.status).toBe('no_driver_invocation');
+    expect(result.role_id).toBe('role_async_task');
     expect(result.cycle).toBeDefined();
     expect(result.cycle.buffer_snapshot.task_id).toBe('task_async');
 

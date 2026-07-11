@@ -60,7 +60,7 @@ describe('memory retrieval integration', () => {
   it('submitTask retrieves pre-seeded memories into driver_context', async () => {
     const repository = new InMemoryRepository(testEmbedding);
     const bufferRepository = new InMemoryBufferRepository();
-    const manager = AgentManager.create(repository, bufferRepository);
+    const manager = await AgentManager.create(repository, bufferRepository);
     const role_id = 'role_integration';
 
     await manager.createAgent({
@@ -75,7 +75,7 @@ describe('memory retrieval integration', () => {
     await repository.saveSkill(role_id, skill);
     await repository.saveExperience(role_id, experience);
 
-    const result = await manager.submitTask({
+    const result = await manager.dispatchTask(role_id, {
       spec: 'typescript memory retrieval integration task',
       task_id: 'task_integration_001',
       call_id: 'call_integration_001',
@@ -104,7 +104,7 @@ describe('memory retrieval integration', () => {
   it('submitTask returns empty memory when agent has no pre-seeded items', async () => {
     const repository = new InMemoryRepository(testEmbedding);
     const bufferRepository = new InMemoryBufferRepository();
-    const manager = AgentManager.create(repository, bufferRepository);
+    const manager = await AgentManager.create(repository, bufferRepository);
 
     await manager.createAgent({
       role_id: 'role_no_memory',
@@ -112,7 +112,7 @@ describe('memory retrieval integration', () => {
     });
     manager.start();
 
-    const result = await manager.submitTask({
+    const result = await manager.dispatchTask('role_no_memory', {
       spec: 'unrelated quantum physics simulation',
       task_id: 'task_empty_001',
     });
