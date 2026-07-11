@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createProductionBackendService, parseDriverEnv } from '../../src/app/backend-rpc-stdio';
+import type { AppRunEvent } from '../../src/app/run-registry';
 
 describe('backend RPC stdio entrypoint', () => {
   it('fails fast when the configured ACP runner directory does not exist', () => {
@@ -88,7 +89,12 @@ process.stdin.on('end', () => {
         prompt: 'Exercise production council composition.',
         mode: 'council',
       });
+      const notifications: AppRunEvent[] = [];
+      const unsubscribe = service.subscribe(councilCreated.run_id, (event) =>
+        notifications.push(event),
+      );
       const councilSnapshot = await waitForTerminal(service, councilCreated.run_id);
+      unsubscribe();
       expect(councilSnapshot.status).toBe('completed');
       const councilEventTypes = councilSnapshot.events.map((event) => event.type);
       expect(councilEventTypes.filter((type) => type === 'gate.result')).toHaveLength(2);
@@ -102,6 +108,30 @@ process.stdin.on('end', () => {
         councilEventTypes.indexOf('worktree.materialized'),
       );
       expect(councilSnapshot.snapshot?.delivery_report.files_written.length).toBeGreaterThan(0);
+      const audit = readFileSync(
+        path.join('.newide', 'runs', councilCreated.run_id, 'audit.jsonl'),
+        'utf8',
+      )
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as AppRunEvent);
+      const keyTypes = [
+        'council.completed',
+        'artifact.selected',
+        'gate.result',
+        'worktree.materialized',
+      ];
+      const expectedOrder = [
+        'council.completed',
+        'artifact.selected',
+        'gate.result',
+        'worktree.materialized',
+      ];
+      const postCouncilSequence = (types: string[]) =>
+        types.slice(types.indexOf('council.completed')).filter((type) => keyTypes.includes(type));
+      expect(postCouncilSequence(notifications.map((event) => event.type))).toEqual(expectedOrder);
+      expect(postCouncilSequence(audit.map((event) => event.type))).toEqual(expectedOrder);
+      expect(postCouncilSequence(councilEventTypes)).toEqual(expectedOrder);
       expect(
         readFileSync(path.join(runnerDir, 'invocations.log'), 'utf8').trim().split('\n'),
       ).toHaveLength(6);
