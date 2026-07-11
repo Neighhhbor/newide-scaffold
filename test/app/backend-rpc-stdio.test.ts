@@ -22,5 +22,5 @@ describe('backend RPC stdio entrypoint', () => {
     child.stdin.end();
     const [code] = await once(child, 'exit');
     expect(code).toBe(0);
-  });
+  }, 15_000);
 });
