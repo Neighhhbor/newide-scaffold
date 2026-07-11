@@ -3,6 +3,7 @@ import {
   createId,
   nowTimestamp,
   type Checkpoint,
+  type Event,
   type Message,
   type MessageId,
   type RoleProfileRef,
@@ -94,6 +95,7 @@ export interface IntegrationV0Options {
   worktreePath?: string;
   telemetry?: TelemetrySink;
   signal?: AbortSignal;
+  onEvent?: (event: Event) => void;
   onRunCreated?: (identity: { run_id: string; task_id: string }) => void;
 }
 
@@ -131,9 +133,10 @@ export async function runIntegrationV0Flow(
   options?: IntegrationV0Options,
 ): Promise<IntegrationV0Result> {
   options?.signal?.throwIfAborted();
-  const orchestrator = new RuntimeOrchestrator(
-    options?.telemetry ? { telemetry: options.telemetry } : undefined,
-  );
+  const orchestrator = new RuntimeOrchestrator({
+    ...(options?.telemetry ? { telemetry: options.telemetry } : {}),
+    ...(options?.onEvent ? { onEvent: options.onEvent } : {}),
+  });
   const mailbox = new InMemoryMailboxStore();
   const timeline: IntegrationV0TimelineItem[] = [];
   const mailboxMessageRefs: MessageId[] = [];

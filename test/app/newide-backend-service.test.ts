@@ -7,6 +7,7 @@ import { NewideBackendService } from '../../src/app/newide-backend-service';
 import { InMemoryRunRegistry } from '../../src/app/run-registry';
 import { FileRunAuditWriter } from '../../src/app/run-audit-writer';
 import { FileRunTerminalOutputWriter } from '../../src/app/run-terminal-output-writer';
+import { IntegrationV0CoordinatorRunner } from '../../src/coordinator/coordinator-runner';
 
 describe('NewideBackendService', () => {
   it('returns real ids before the runner completes and records telemetry', async () => {
@@ -70,6 +71,54 @@ describe('NewideBackendService', () => {
     });
   });
 
+  it('projects coordinator domain events without duplicating event-store telemetry', async () => {
+    const service = new NewideBackendService({
+      run: async (request) => {
+        request.onEvent?.({
+          event_id: 'event_task_created',
+          event_type: 'task.created',
+          subject_id: 'task_domain',
+          task_id: 'task_domain',
+          payload: { spec: 'Project events' },
+          created_at: '2026-07-11T08:00:00.000Z',
+          schema_version: 'v0',
+        });
+        request.onRunCreated?.({ run_id: 'run_domain', task_id: 'task_domain' });
+        request.onEvent?.({
+          event_id: 'event_artifact',
+          event_type: 'artifact.registered',
+          subject_id: 'artifact_1',
+          run_id: 'run_domain',
+          task_id: 'task_domain',
+          payload: { type: 'patch' },
+          created_at: '2026-07-11T08:00:01.000Z',
+          schema_version: 'v0',
+        });
+        await request.telemetry?.emit({
+          telemetry_id: 'telemetry_duplicate',
+          event_type: 'task.created',
+          owner: 'C-owned-observed',
+          subject_id: 'task_domain',
+          run_id: 'run_domain',
+          task_id: 'task_domain',
+          payload: { spec: 'Project events' },
+          source: { kind: 'event_store', event_id: 'event_task_created' },
+          created_at: '2026-07-11T08:00:00.000Z',
+          schema_version: 'v0',
+        });
+        return new Promise<IntegrationV0Result>(() => undefined);
+      },
+    });
+
+    await service.createRun({ prompt: 'Project events' });
+
+    expect(service.getSnapshot('run_domain').events).toMatchObject([
+      { event_id: 'event_task_created', type: 'task.created', source: 'coordinator' },
+      { type: 'run.started', source: 'coordinator' },
+      { event_id: 'event_artifact', type: 'artifact.registered', source: 'coordinator' },
+    ]);
+  });
+
   it('cancels the runner without replacing cancelled state with failure', async () => {
     let receivedSignal: AbortSignal | undefined;
     const runsRoot = await mkdtemp(path.join(os.tmpdir(), 'backend-service-'));
@@ -119,12 +168,63 @@ describe('NewideBackendService', () => {
       await rm(runsRoot, { recursive: true, force: true });
     }
   });
+
+  it('projects a real council run into snapshot and append-only audit events', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'backend-integration-events-'));
+    const auditWriter = new FileRunAuditWriter(path.join(tempRoot, 'runs'));
+    const service = new NewideBackendService(
+      new IntegrationV0CoordinatorRunner({ worktreePath: path.join(tempRoot, 'worktrees') }),
+      new InMemoryRunRegistry(),
+      auditWriter,
+      new FileRunTerminalOutputWriter(path.join(tempRoot, 'runs')),
+    );
+    let runId: string | undefined;
+
+    try {
+      const created = await service.createRun({
+        prompt: 'Project the real Council event flow',
+        mode: 'council',
+      });
+      runId = created.run_id;
+      await viWaitFor(() => service.getSnapshot(created.run_id).status === 'completed');
+      await auditWriter.flush(created.run_id);
+
+      const types = service.getSnapshot(created.run_id).events.map((event) => event.type);
+      expect(types).toEqual(
+        expect.arrayContaining([
+          'task.created',
+          'run.created',
+          'driver.session_started',
+          'driver.run_result',
+          'artifact.registered',
+          'gate.result',
+          'council.started',
+          'council.decision',
+          'council.completed',
+          'checkpoint.saved',
+          'run.completed',
+        ]),
+      );
+      expect(types.filter((type) => type === 'run.completed')).toHaveLength(1);
+
+      const audit = (
+        await readFile(path.join(tempRoot, 'runs', created.run_id, 'audit.jsonl'), 'utf-8')
+      )
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(audit.map((event) => event.type)).toEqual(types);
+    } finally {
+      if (runId) await rm(path.join('.newide/runs', runId), { recursive: true, force: true });
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 async function viWaitFor(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
     if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 1));
   }
   throw new Error('condition was not met');
 }
