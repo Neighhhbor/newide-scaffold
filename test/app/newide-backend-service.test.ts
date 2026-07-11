@@ -6,6 +6,7 @@ import type { IntegrationV0Result } from '../../src/coordinator/integration-v0-f
 import { NewideBackendService } from '../../src/app/newide-backend-service';
 import { InMemoryRunRegistry } from '../../src/app/run-registry';
 import { FileRunAuditWriter } from '../../src/app/run-audit-writer';
+import { FileRunTerminalOutputWriter } from '../../src/app/run-terminal-output-writer';
 
 describe('NewideBackendService', () => {
   it('returns real ids before the runner completes and records telemetry', async () => {
@@ -87,6 +88,7 @@ describe('NewideBackendService', () => {
       },
       new InMemoryRunRegistry(),
       new FileRunAuditWriter(runsRoot),
+      new FileRunTerminalOutputWriter(runsRoot),
     );
 
     try {
@@ -103,6 +105,16 @@ describe('NewideBackendService', () => {
         .split('\n')
         .map((line) => JSON.parse(line));
       expect(audit.map((event) => event.type)).toEqual(['run.started', 'run.cancelled']);
+      await expect(
+        readJson(path.join(runsRoot, 'run_cancelled', 'result.json')),
+      ).resolves.toMatchObject({
+        run_id: 'run_cancelled',
+        task_id: 'task_cancelled',
+        status: 'cancelled',
+      });
+      await expect(
+        readJson(path.join(runsRoot, 'run_cancelled', 'frontend-snapshot.json')),
+      ).resolves.toMatchObject({ status: 'cancelled' });
     } finally {
       await rm(runsRoot, { recursive: true, force: true });
     }
@@ -151,4 +163,8 @@ function completedResult(runId: string, taskId: string): IntegrationV0Result {
       links: {} as never,
     },
   } as IntegrationV0Result;
+}
+
+async function readJson(filePath: string): Promise<unknown> {
+  return JSON.parse(await readFile(filePath, 'utf-8'));
 }
