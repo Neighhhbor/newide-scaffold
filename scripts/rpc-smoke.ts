@@ -13,7 +13,16 @@ interface JsonRpcMessage {
   error?: { code: number; message: string; data?: unknown };
 }
 
-const child = spawn('pnpm', ['backend:rpc'], {
+const testServer = `
+import { startBackendRpcServer } from './src/app/backend-rpc-stdio.ts';
+import { NewideBackendService } from './src/app/newide-backend-service.ts';
+startBackendRpcServer({
+  input: process.stdin,
+  writeLine: (line) => process.stdout.write(line + '\\n'),
+  service: new NewideBackendService(),
+});
+`;
+const child = spawn('node', ['--import', 'tsx', '--input-type=module', '--eval', testServer], {
   cwd: process.cwd(),
   stdio: ['pipe', 'pipe', 'pipe'],
 });

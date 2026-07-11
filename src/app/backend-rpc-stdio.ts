@@ -4,7 +4,7 @@
  * 这个文件只管理进程流和连接生命周期，业务方法由 NewideBackendService 提供。
  */
 import { createInterface } from 'node:readline';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
@@ -36,6 +36,14 @@ export function createProductionBackendService(
   if (!existsSync(runnerDir)) {
     throw new Error(`ACP driver runner directory not found: ${runnerDir}`);
   }
+  if (!statSync(runnerDir).isDirectory()) {
+    throw new Error(`ACP driver runner path is not a directory: ${runnerDir}`);
+  }
+  const packagePath = path.join(runnerDir, 'package.json');
+  const runnerPackage = readJson(packagePath);
+  if (!hasDriverRunScript(runnerPackage)) {
+    throw new Error(`ACP driver runner has no driver:run script: ${runnerDir}`);
+  }
 
   const driverEnv = loadEnvFile(env.ACP_DRIVER_ENV_FILE ?? path.join(runnerDir, '.env'));
   const driver = new ExternalDriverRuntime({
@@ -51,6 +59,7 @@ export function createProductionBackendService(
         ACP_AGENT_ID: env.ACP_AGENT_ID ?? 'claude',
         ACP_WORKSPACE: env.ACP_WORKSPACE ?? path.join(repoRoot, '.newide', 'test-workspace'),
       },
+      unsetEnv: MODEL_OVERRIDE_ENV.filter((key) => driverEnv[key] === undefined),
     }),
   });
   const runner = new IntegrationV0CoordinatorRunner({
@@ -58,6 +67,29 @@ export function createProductionBackendService(
     agentExecutionFacade: new DriverRuntimeAgentExecutionFacade({ driver }),
   });
   return new NewideBackendService(runner);
+}
+
+const MODEL_OVERRIDE_ENV = [
+  'ANTHROPIC_MODEL',
+  'ANTHROPIC_DEFAULT_OPUS_MODEL',
+  'ANTHROPIC_DEFAULT_SONNET_MODEL',
+  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  'CLAUDE_CODE_SUBAGENT_MODEL',
+];
+
+function readJson(filePath: string): unknown {
+  if (!existsSync(filePath)) return undefined;
+  try {
+    return JSON.parse(readFileSync(filePath, 'utf8'));
+  } catch (error) {
+    throw new Error(`ACP driver runner package.json is invalid: ${filePath}`, { cause: error });
+  }
+}
+
+function hasDriverRunScript(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const scripts = Reflect.get(value, 'scripts');
+  return Boolean(scripts && typeof scripts === 'object' && Reflect.get(scripts, 'driver:run'));
 }
 
 export function startBackendRpcServer(options: BackendRpcServerOptions): BackendRpcServer {
@@ -107,9 +139,6 @@ function runMain(): void {
     input: process.stdin,
     writeLine: (line) => process.stdout.write(`${line}\n`),
     logError: (message) => process.stderr.write(`${message}\n`),
-    ...(process.env.NEWIDE_BACKEND_RPC_TEST_MOCK === '1'
-      ? { service: new NewideBackendService() }
-      : {}),
   });
   process.once('SIGTERM', () => server.close());
   process.once('SIGINT', () => server.close());
