@@ -149,6 +149,28 @@ describe('runIntegrationV0Flow', () => {
     });
   });
 
+  it('labels a missing pre-council gate with the council phase', async () => {
+    const result = await runFlow({
+      enableCouncil: true,
+      hookEngine: {
+        handleEvent: async (event) => ({
+          hook_point: event.event_type,
+          matched: false,
+          gate_requests: [],
+          gate_results: [],
+          final_decision: 'allow',
+          created_at: new Date().toISOString(),
+          schema_version: SCHEMA_VERSION,
+        }),
+      },
+    });
+
+    expect(result.summary.failure).toMatchObject({
+      code: 'GATE_BLOCKED',
+      details: { gate_phase: 'pre_council' },
+    });
+  });
+
   it.each([
     ['failed', 'MATERIALIZATION_FAILED'],
     ['partial', 'MATERIALIZATION_PARTIAL'],
