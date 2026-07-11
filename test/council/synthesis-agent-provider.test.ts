@@ -83,6 +83,48 @@ describe('SynthesisAgentCouncilProvider', () => {
       can_create_merge_authorization: false,
     });
   });
+
+  it.each(['proposer_a', 'proposer_b', 'reviewer', 'synthesizer'])(
+    'fails the council round when %s fails',
+    async (failedRole) => {
+      const agentExecutionFacade: AgentExecutionFacade = {
+        async runAgent(input) {
+          return {
+            agent_run_id: `agent_run_${input.role_id}`,
+            role_id: input.role_id,
+            context_pack_ref: `context_${input.role_id}`,
+            driver_run_result_id: `driver_result_${input.role_id}`,
+            artifact_refs:
+              input.role_id === failedRole
+                ? []
+                : [createArtifact(`artifact_${input.role_id}`, input.role_id)],
+            transcript_ref: createArtifact(
+              `transcript_${input.role_id}`,
+              input.role_id,
+              'transcript',
+            ),
+            diagnostics: { driver_id: `driver_${input.role_id}` },
+            status: input.role_id === failedRole ? 'failed' : 'completed',
+            created_at: '2026-07-07T00:00:00.000Z',
+            schema_version: SCHEMA_VERSION,
+          };
+        },
+      };
+      const provider = new SynthesisAgentCouncilProvider({ agentExecutionFacade });
+
+      await expect(
+        provider.runCouncilRound({
+          run_id: 'run_failed_role',
+          task_id: 'task_failed_role',
+          trigger: 'manual',
+          decision_mode: 'advisory',
+          question: 'Fail one Council role.',
+          proposals: [],
+          schema_version: SCHEMA_VERSION,
+        }),
+      ).rejects.toThrow(`Council role ${failedRole} failed with status failed`);
+    },
+  );
 });
 
 function createArtifact(
