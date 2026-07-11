@@ -11,6 +11,7 @@ import {
   type TaskCreateRequest,
   type Timestamp,
 } from '../core';
+import path from 'node:path';
 import {
   MockDriver,
   runDriverPromptWithSignal,
@@ -637,10 +638,31 @@ export async function runIntegrationV0Flow(
       baseWorktreePath: options?.worktreePath || '.newide/worktrees',
     });
 
-  const materializationResult = await materializer.materialize({
-    task_id: task.task_id,
-    artifacts: selectionResult.selected_artifacts,
-  });
+  let materializationResult: MaterializationResult;
+  try {
+    materializationResult = await materializer.materialize({
+      task_id: task.task_id,
+      artifacts: selectionResult.selected_artifacts,
+    });
+  } catch {
+    materializationResult = {
+      materialization_id: createId('materialization'),
+      task_id: task.task_id,
+      worktree_path: path.join(options?.worktreePath ?? '.newide/worktrees', task.task_id),
+      materialized_artifacts: [],
+      files_written: [],
+      changed_files: [],
+      status: 'failed',
+      failures: [
+        {
+          artifact_id: selectionResult.selected_artifacts[0]?.artifact_id ?? 'materializer',
+          reason: 'Materializer failed',
+        },
+      ],
+      created_at: nowTimestamp(),
+      schema_version: SCHEMA_VERSION,
+    };
+  }
   options?.signal?.throwIfAborted();
 
   const materializationEvent = orchestrator.appendEvent({
@@ -919,6 +941,13 @@ function buildIntegrationFailure(input: {
       code: 'DRIVER_FAILED',
       message: input.driverResult.error?.message ?? 'Driver execution failed',
       details: { phase: 'driver', ...(input.driverResult.error ?? {}) },
+    };
+  }
+  if (input.gateResults.length === 0) {
+    return {
+      code: 'GATE_BLOCKED',
+      message: 'Required gates were not evaluated',
+      details: { phase: 'gate', gate_results: [] },
     };
   }
   const denied = input.gateResults.find((gate) => gate.decision === 'deny');
