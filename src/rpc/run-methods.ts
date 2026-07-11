@@ -48,7 +48,9 @@ export class RunRpcMethods {
     dispatcher.register('run.subscribe', (params) => {
       const { run_id } = parseParams(runIdParamsSchema, params);
       const unsubscribe = this.callWithRunError(() =>
-        this.service.subscribe(run_id, (event) => this.notify('run.event', event)),
+        this.service.subscribe(run_id, (event) =>
+          this.notify('run.event', { run_id: event.run_id, event }),
+        ),
       );
       this.subscriptions.get(run_id)?.();
       this.subscriptions.set(run_id, unsubscribe);

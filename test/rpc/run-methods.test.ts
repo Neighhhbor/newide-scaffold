@@ -54,11 +54,15 @@ describe('RunRpcMethods', () => {
       '{"jsonrpc":"2.0","id":2,"method":"run.subscribe","params":{"run_id":"run_1"}}',
     );
     listener?.({
+      event_id: 'run_event_3',
       sequence: 3,
       run_id: 'run_1',
+      task_id: 'task_1',
       type: 'run.completed',
+      source: 'coordinator',
       created_at: '2026-07-11T08:00:00.000Z',
       payload: { status: 'completed' },
+      schema_version: 'v0',
     });
     await session.handleLine(
       '{"jsonrpc":"2.0","id":3,"method":"run.unsubscribe","params":{"run_id":"run_1"}}',
@@ -71,11 +75,18 @@ describe('RunRpcMethods', () => {
         jsonrpc: '2.0',
         method: 'run.event',
         params: {
-          sequence: 3,
           run_id: 'run_1',
-          type: 'run.completed',
-          created_at: '2026-07-11T08:00:00.000Z',
-          payload: { status: 'completed' },
+          event: {
+            event_id: 'run_event_3',
+            sequence: 3,
+            run_id: 'run_1',
+            task_id: 'task_1',
+            type: 'run.completed',
+            source: 'coordinator',
+            created_at: '2026-07-11T08:00:00.000Z',
+            payload: { status: 'completed' },
+            schema_version: 'v0',
+          },
         },
       },
       { jsonrpc: '2.0', id: 3, result: { unsubscribed: true } },

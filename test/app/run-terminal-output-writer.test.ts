@@ -56,11 +56,15 @@ function failedSnapshot(): AppRunSnapshot {
     current: { stage: 'intervention', active_node_code: 'N18' },
     events: [
       {
+        event_id: 'run_event_1',
         sequence: 1,
         run_id: 'run_failed',
+        task_id: 'task_failed',
         type: 'run.failed',
+        source: 'coordinator',
         created_at: '2026-07-11T08:00:00.000Z',
         payload: { code: 'RUNNER_FAILED' },
+        schema_version: 'v0',
       },
     ],
     error: { code: 'RUNNER_FAILED', message: 'driver exited' },
