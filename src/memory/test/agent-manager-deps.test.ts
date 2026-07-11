@@ -4,7 +4,7 @@
  * 验证：
  *   1. AgentManager 向后兼容性（无 options 调用）
  *   2. 通过 AgentManagerOptions.deps 注入自定义 AgentRunDeps
- *   3. 自定义 invokeDriver 在 submitTask 中被正确调用
+ *   3. 自定义 invokeDriver 在 dispatchTask 中被正确调用
  *   4. toMemoryTaskProjection 映射正确
  *   5. 默认不晋升 + 晋升就绪两条分支
  */
@@ -18,10 +18,10 @@ import type { AgentRunDeps } from '../runtime/agent-run-deps';
 import type { DriverReturn, BufferSnapshot } from '../schemas';
 
 describe('AgentManager deps injection', () => {
-  it('向后兼容：无 options 调用 createAgent → submitTask 正常', async () => {
+  it('向后兼容：无 options 调用 createAgent → dispatchTask 正常', async () => {
     const repository = new InMemoryRepository();
     const bufferRepository = new InMemoryBufferRepository();
-    const manager = AgentManager.create(repository, bufferRepository);
+    const manager = await AgentManager.create(repository, bufferRepository);
 
     await manager.createAgent({
       role_id: 'role_backward',
@@ -30,19 +30,19 @@ describe('AgentManager deps injection', () => {
     });
     manager.start();
 
-    const result = await manager.submitTask({
+    const result = await manager.dispatchTask('role_backward', {
       spec: 'Test backward compatibility.',
       task_id: 'task_bc_001',
       call_id: 'call_bc_001',
       source_driver: 'mock-driver',
     });
 
-    expect(result.winner_role_id).toBe('role_backward');
+    expect(result.role_id).toBe('role_backward');
     expect(result.cycle.buffer_snapshot.task_id).toBe('task_bc_001');
     expect(result.cycle.extraction.experiences).toHaveLength(1);
   });
 
-  it('通过 options.deps 注入自定义 invokeDriver 并被 submitTask 调用', async () => {
+  it('通过 options.deps 注入自定义 invokeDriver 并被 dispatchTask 调用', async () => {
     const repository = new InMemoryRepository();
     const bufferRepository = new InMemoryBufferRepository();
     let invokeCallCount = 0;
@@ -92,7 +92,7 @@ describe('AgentManager deps injection', () => {
       contextCleaner: { clean: async () => null },
     };
 
-    const manager = AgentManager.create(repository, bufferRepository, {
+    const manager = await AgentManager.create(repository, bufferRepository, {
       deps: customDeps,
     });
 
@@ -103,7 +103,7 @@ describe('AgentManager deps injection', () => {
     });
     manager.start();
 
-    const result = await manager.submitTask({
+    const result = await manager.dispatchTask('role_custom', {
       spec: 'Test custom deps injection.',
       task_id: 'task_custom_001',
       call_id: 'call_custom_001',
@@ -136,7 +136,7 @@ describe('AgentManager deps injection', () => {
   it('toMemoryTaskProjection 默认不晋升分支', async () => {
     const repository = new InMemoryRepository();
     const bufferRepository = new InMemoryBufferRepository();
-    const manager = AgentManager.create(repository, bufferRepository);
+    const manager = await AgentManager.create(repository, bufferRepository);
 
     await manager.createAgent({
       role_id: 'role_proj_default',
@@ -145,7 +145,7 @@ describe('AgentManager deps injection', () => {
     });
     manager.start();
 
-    const result = await manager.submitTask({
+    const result = await manager.dispatchTask('role_proj_default', {
       spec: 'Test projection mapping.',
       task_id: 'task_proj_001',
       call_id: 'call_proj_001',
@@ -236,7 +236,7 @@ describe('AgentManager deps injection', () => {
     };
 
     // 使用 create 通过 options.deps 注入（manager.createAgent 内部会调用 initializeAgent）
-    const manager = AgentManager.create(repository, bufferRepository, { deps: customDeps });
+    const manager = await AgentManager.create(repository, bufferRepository, { deps: customDeps });
     await manager.createAgent({ role_id, name: 'Promo Projection Agent', tags: [] });
     manager.start();
 
@@ -258,7 +258,7 @@ describe('AgentManager deps injection', () => {
       updated_at: now,
     });
 
-    const result = await manager.submitTask({
+    const result = await manager.dispatchTask(role_id, {
       spec: 'Trigger promotion and test projection.',
       task_id: 'task_proj_promo_001',
       call_id: 'call_proj_promo_001',

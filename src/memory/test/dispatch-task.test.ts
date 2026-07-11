@@ -32,7 +32,7 @@ describe('AgentManager.dispatchTask', () => {
     it('dispatchTask 正常完成', async () => {
       const repository = new InMemoryRepository();
       const bufferRepository = new InMemoryBufferRepository();
-      const manager = AgentManager.create(repository, bufferRepository);
+      const manager = await AgentManager.create(repository, bufferRepository);
 
       await manager.createAgent({
         role_id: 'role_dispatch_ok',
@@ -52,7 +52,7 @@ describe('AgentManager.dispatchTask', () => {
     it('toMemoryTaskProjection 从 DispatchTaskResult 正确派生', async () => {
       const repository = new InMemoryRepository();
       const bufferRepository = new InMemoryBufferRepository();
-      const manager = AgentManager.create(repository, bufferRepository);
+      const manager = await AgentManager.create(repository, bufferRepository);
 
       await manager.createAgent({
         role_id: 'role_dispatch_proj',
@@ -83,7 +83,7 @@ describe('AgentManager.dispatchTask', () => {
     it('不存在 Agent → blocked', async () => {
       const repository = new InMemoryRepository();
       const bufferRepository = new InMemoryBufferRepository();
-      const manager = AgentManager.create(repository, bufferRepository);
+      const manager = await AgentManager.create(repository, bufferRepository);
 
       const result = await manager.dispatchTask('role_nonexistent', createTask());
 
@@ -94,7 +94,7 @@ describe('AgentManager.dispatchTask', () => {
     it('Agent 正在忙 → blocked', async () => {
       const repository = new InMemoryRepository();
       const bufferRepository = new InMemoryBufferRepository();
-      const manager = AgentManager.create(repository, bufferRepository);
+      const manager = await AgentManager.create(repository, bufferRepository);
 
       await manager.createAgent({
         role_id: 'role_busy_dispatch',
@@ -129,7 +129,7 @@ describe('AgentManager.dispatchTask', () => {
           tool_calls: undefined,
         }),
       };
-      const manager = AgentManager.create(repository, bufferRepository, {
+      const manager = await AgentManager.create(repository, bufferRepository, {
         tools: { llm: mockLlm, tools: [] },
       });
 

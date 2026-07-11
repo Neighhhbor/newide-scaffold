@@ -167,7 +167,7 @@ describe('Agent loop integration (real DeepSeek API)', () => {
       ].join('\n');
 
       // ── 5. AgentManager ──
-      const manager = AgentManager.create(repository, bufferRepository, {
+      const manager = await AgentManager.create(repository, bufferRepository, {
         tools: {
           llm,
           tools: [driverTool],
@@ -195,13 +195,13 @@ describe('Agent loop integration (real DeepSeek API)', () => {
         source_driver: 'test-driver',
       };
 
-      const result = await manager.submitTask(task);
+      const result = await manager.dispatchTask('role_integration_test', task);
 
       // ── 7. 断言 ──
 
       // 7a. 任务状态
       expect(result.status).toBe('completed');
-      expect(result.winner_role_id).toBe('role_integration_test');
+      expect(result.role_id).toBe('role_integration_test');
 
       // 7b. LLM 实际调用了 invoke_driver
       expect(driverCallCount).toBeGreaterThanOrEqual(1);

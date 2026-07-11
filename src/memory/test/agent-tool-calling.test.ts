@@ -256,23 +256,23 @@ describe('Agent tool-calling mode', () => {
       { content: 'Task finished. [done]', tool_calls: undefined },
     ]);
 
-    const manager = AgentManager.create(repository, bufferRepository, {
+    const manager = await AgentManager.create(repository, bufferRepository, {
       tools: { llm: mockLlm, tools: [] },
     });
 
     const handle = await manager.createAgent({ role_id, name: 'Manager Tool Agent', tags: [] });
     expect(handle.role_id).toBe(role_id);
 
-    const result = await manager.submitTask({
+    const result = await manager.dispatchTask(role_id, {
       spec: 'Test manager tool-calling.',
       task_id: 'task_mgr_tc_001',
       call_id: 'call_mgr_tc_001',
       source_driver: 'tool-agent',
     });
 
-    // executeTask 同步执行完成，返回完整 cycle
-    expect(result.winner_role_id).toBe(role_id);
-    expect(result.status).toBe('completed');
+    // dispatchTask 同步执行完成，返回完整 cycle
+    expect(result.role_id).toBe(role_id);
+    expect(result.status).toBe('no_driver_invocation');
     expect(result.cycle.buffer_snapshot.task_id).toBe('task_mgr_tc_001');
   });
 });

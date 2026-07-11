@@ -11,18 +11,17 @@
  * ```
  */
 import type { AgentRunDeps } from '../runtime/agent-run-deps';
-import type { DeepSeekLlmClientOptions } from '../adapters/deepseek-llm-client';
 import { repositoryRetrieveMemoryForTask } from '../adapters/repository-memory-retrieval';
-import { DeepSeekLlmClient } from '../adapters/deepseek-llm-client';
+import { LiteLLMClientAdapter } from '../adapters/litellm-client-adapter';
 import { LlmExperienceExtractor } from '../adapters/llm-experience-extractor';
 import { LlmTaskInstructionPlanner } from '../adapters/llm-task-instruction-planner';
 import { LlmContextCleaner } from '../adapters/context-cleaner';
 import { LlmSkillPromotion } from '../adapters/llm-skill-promotion';
 import { invokeMockDriver } from './adapters/mock-driver-invoker';
 
-/** 默认 LLM 提取的 AgentRunDeps 工厂，可传入 DeepSeek 选项覆盖环境变量 */
-export function createDefaultLlmAgentRunDeps(options?: DeepSeekLlmClientOptions): AgentRunDeps {
-  const llm = new DeepSeekLlmClient(options);
+/** 默认 LLM 提取的 AgentRunDeps 工厂 */
+export function createDefaultLlmAgentRunDeps(taskName?: string): AgentRunDeps {
+  const llm = new LiteLLMClientAdapter(taskName);
   const planner = new LlmTaskInstructionPlanner(llm);
   return {
     queryMemory: repositoryRetrieveMemoryForTask,

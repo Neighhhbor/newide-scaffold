@@ -5,9 +5,9 @@
  *
  * ## 职责边界
  *
- * - confidence 表达 Agent 对自身适配程度的判断，不是全局竞标分数。
- * - Memory 不根据 confidence 排名、不选赢家。
- * - Evidence 只返回引用和必要摘要，避免把完整记忆批量暴露给上层。
+ * - Memory 只负责收集声明，不作排名、不选赢家。
+ * - AgentCompetitionClaimContent 只表达"是否参选"的自我判断，
+ *   详细竞标信息（置信度、证据链）待与 bid 模块对齐后补充。
  */
 import type { AgentStatus } from './schemas';
 import type { AgentLoopState } from './agent-types';
@@ -35,39 +35,31 @@ export type CompetitionDecision = 'participate' | 'decline' | 'unavailable' | 't
 /**
  * evaluator 返回的声明核心内容（不含 role_id 等元数据）。
  *
- * 由 CompetitionClaimEvaluator.evaluate() 产出，Agent.createCompetitionClaim()
- * 包装为完整声明。
+ * 当前只表达"是否参选"的自我判断，详细竞标信息（置信度、证据链、风险分析）
+ * 待与 bid 模块对齐后补充。
  */
 export interface AgentCompetitionClaimContent {
   decision: CompetitionDecision;
-  confidence: number | null;
-  rationale: string;
-  evidence: {
-    persona_version: number;
-    persona_summary: string;
-    skill_ids: string[];
-    experience_ids: string[];
-  };
-  risks: string[];
+  /** 占位：待 bid 模块对齐 */
+  confidence?: number | null;
+  /** 占位：待 bid 模块对齐 */
+  rationale?: string;
 }
 
 /**
  * 单个 Agent 的完整参选声明。
  *
  * 由 Agent.createCompetitionClaim() 组装返回。
+ * collectCompetitionClaims() 只返回 decision === 'participate' 的 Agent。
+ * 上层所需能力信息（persona_summary / skill_count / 等）待后续补充。
  */
 export interface AgentCompetitionClaim {
   role_id: string;
   decision: CompetitionDecision;
-  confidence: number | null;
-  rationale: string;
-  evidence: {
-    persona_version: number;
-    persona_summary: string;
-    skill_ids: string[];
-    experience_ids: string[];
-  };
-  risks: string[];
+  /** 占位：待上层模块对齐 */
+  confidence?: number | null;
+  /** 占位：待上层模块对齐 */
+  rationale?: string;
   availability: {
     agent_status: AgentStatus;
     loop_state: AgentLoopState;

@@ -137,10 +137,9 @@ export class Agent {
    * 根据任务机会生成参选声明。
    *
    * 流程：
-   * 1. 检查 Agent 可用状态（running/draining/retired → unavailable）
-   * 2. 检索 Persona、Skills、Experiences
-   * 3. 调用 CompetitionClaimEvaluator
-   * 4. 返回结构化声明
+   * 1. 检查 Agent 可用状态（running/draining/retired/stopped → unavailable）
+   * 2. 调用 CompetitionClaimEvaluator 做简单自评（participate/decline）
+   * 3. 返回声明（不含详细竞标信息，待与 bid 模块对齐后补充）
    *
    * 约束：
    * - 不写 Buffer、不创建 Experience、不进入任务执行状态
@@ -163,33 +162,14 @@ export class Agent {
       return {
         role_id,
         decision: 'unavailable',
-        confidence: null,
-        rationale: `Agent is currently ${agent_status === 'draining' || agent_status === 'retired' ? agent_status : loop_state}.`,
-        evidence: {
-          persona_version: 0,
-          persona_summary: '',
-          skill_ids: [],
-          experience_ids: [],
-        },
-        risks: [],
         availability: { agent_status, loop_state: this.state },
         generated_at: now,
       };
     }
 
     try {
-      // 检索相关记忆
-      const persona = await this.memory.getPersona();
-      const skills = await this.memory.listSkills();
-      const experiences = await this.memory.listExperiences();
-
-      // 调用 evaluator 生成声明内容
-      const content = await this.evaluator.evaluate({
-        task,
-        persona,
-        relevant_skills: skills,
-        relevant_experiences: experiences,
-      });
+      // 调用 evaluator 做简单自评（当前只返回 decision，详细字段待 bid 模块对齐）
+      const content = await this.evaluator.evaluate({ task });
 
       return {
         role_id,
@@ -197,19 +177,10 @@ export class Agent {
         availability: { agent_status, loop_state: this.state },
         generated_at: now,
       };
-    } catch (err) {
+    } catch {
       return {
         role_id,
         decision: 'error',
-        confidence: null,
-        rationale: `Evaluation error: ${err instanceof Error ? err.message : String(err)}`,
-        evidence: {
-          persona_version: 0,
-          persona_summary: '',
-          skill_ids: [],
-          experience_ids: [],
-        },
-        risks: [],
         availability: { agent_status, loop_state: this.state },
         generated_at: now,
       };
