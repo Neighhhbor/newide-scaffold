@@ -23,6 +23,7 @@ import {
 import { InMemoryArtifactStore } from './artifact-store';
 import { InMemoryCheckpointStore } from './checkpoint-store';
 import { InMemoryEventStore } from './event-store';
+import { assertTaskStatusTransition } from './task-state-machine';
 
 export interface RuntimeStores {
   events: InMemoryEventStore;
@@ -182,6 +183,7 @@ export class RuntimeOrchestrator {
       throw new Error(`Task ${taskId} was not found`);
     }
 
+    assertTaskStatusTransition(task.status, status);
     const updated: Task = {
       ...task,
       status,
