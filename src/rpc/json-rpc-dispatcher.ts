@@ -14,6 +14,20 @@ import {
 
 export type JsonRpcMethodHandler = (params: unknown) => unknown | Promise<unknown>;
 
+export class JsonRpcMethodError extends Error {
+  readonly data?: unknown;
+
+  constructor(
+    readonly code: number,
+    message: string,
+    data?: unknown,
+  ) {
+    super(message);
+    this.name = 'JsonRpcMethodError';
+    if (data !== undefined) this.data = data;
+  }
+}
+
 export class JsonRpcDispatcher {
   private readonly handlers = new Map<string, JsonRpcMethodHandler>();
 
@@ -44,7 +58,12 @@ export class JsonRpcDispatcher {
     try {
       const result = await handler(request.params);
       return hasResponse ? createSuccessResponse(request.id ?? null, result) : undefined;
-    } catch {
+    } catch (error) {
+      if (error instanceof JsonRpcMethodError) {
+        return hasResponse
+          ? createErrorResponse(request.id ?? null, error.code, error.message, error.data)
+          : undefined;
+      }
       return hasResponse
         ? createErrorResponse(
             request.id ?? null,
