@@ -123,6 +123,9 @@ export interface FrontendRunSnapshot {
     decision_id: string;
     decision_mode: CouncilDecision['decision_mode'];
     verdict: CouncilDecision['verdict'];
+    reason: string;
+    evidence_refs: string[];
+    risk_signals: string[];
     selected_artifact_refs: string[];
     can_create_merge_authorization: boolean;
     proposals: CouncilRunResult['proposals'];
@@ -208,6 +211,14 @@ export function buildFrontendRunSnapshot(
             decision_id: input.summary.council_decision_id,
             decision_mode: input.summary.council_decision_mode,
             verdict: input.summary.council_verdict,
+            reason: input.council_run_result?.decision.reason ?? '',
+            evidence_refs: [...(input.council_run_result?.decision.evidence_refs ?? [])],
+            risk_signals: [
+              ...new Set(
+                input.council_run_result?.proposals.flatMap((proposal) => proposal.known_risks) ??
+                  [],
+              ),
+            ],
             selected_artifact_refs: [...(input.summary.council_selected_artifact_refs ?? [])],
             can_create_merge_authorization:
               input.summary.council_can_create_merge_authorization ?? false,

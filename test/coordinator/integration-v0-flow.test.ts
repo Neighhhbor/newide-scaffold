@@ -182,6 +182,11 @@ describe('runIntegrationV0Flow', () => {
         proposals: result.selection_result.council_run_result?.proposals,
         reviews: result.selection_result.council_run_result?.reviews,
         output: result.selection_result.council_run_result?.output,
+        reason: result.selection_result.council_decision?.reason,
+        evidence_refs: result.selection_result.council_decision?.evidence_refs,
+        risk_signals: result.selection_result.council_run_result?.proposals.flatMap(
+          (proposal) => proposal.known_risks,
+        ),
       },
     });
 
