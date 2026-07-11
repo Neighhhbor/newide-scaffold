@@ -2,6 +2,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { AppRunSnapshot } from './run-registry';
+import { projectRunSnapshot } from './run-snapshot-projector';
 
 export interface RunTerminalOutputWriter {
   finalize(snapshot: AppRunSnapshot): Promise<void>;
@@ -11,28 +12,38 @@ export class FileRunTerminalOutputWriter implements RunTerminalOutputWriter {
   constructor(private readonly runsRoot = '.newide/runs') {}
 
   async finalize(snapshot: AppRunSnapshot): Promise<void> {
-    if (snapshot.status !== 'failed' && snapshot.status !== 'cancelled') return;
+    if (snapshot.status === 'running') return;
     const runDir = path.join(this.runsRoot, snapshot.run_id);
     await fs.mkdir(runDir, { recursive: true });
     const resultPath = path.join(runDir, 'result.json');
     const timelinePath = path.join(runDir, 'timeline.json');
     const frontendSnapshotPath = path.join(runDir, 'frontend-snapshot.json');
 
+    const fallbackWrites =
+      snapshot.status === 'completed'
+        ? []
+        : [
+            writeJsonIfMissing(resultPath, {
+              run_id: snapshot.run_id,
+              task_id: snapshot.task_id,
+              status: snapshot.status,
+              mode: snapshot.mode,
+              errors: snapshot.error ? [snapshot.error] : [],
+              result_path: resultPath,
+              timeline_path: timelinePath,
+              audit_path: path.join(runDir, 'audit.jsonl'),
+              frontend_snapshot_path: frontendSnapshotPath,
+              schema_version: snapshot.schema_version,
+            }),
+            writeJsonIfMissing(timelinePath, snapshot.events),
+          ];
     await Promise.all([
-      writeJsonIfMissing(resultPath, {
-        run_id: snapshot.run_id,
-        task_id: snapshot.task_id,
-        status: snapshot.status,
-        mode: snapshot.mode,
-        errors: snapshot.error ? [snapshot.error] : [],
-        result_path: resultPath,
-        timeline_path: timelinePath,
-        audit_path: path.join(runDir, 'audit.jsonl'),
-        frontend_snapshot_path: frontendSnapshotPath,
-        schema_version: snapshot.schema_version,
-      }),
-      writeJsonIfMissing(timelinePath, snapshot.events),
-      writeJsonIfMissing(frontendSnapshotPath, snapshot),
+      ...fallbackWrites,
+      fs.writeFile(
+        frontendSnapshotPath,
+        JSON.stringify(projectRunSnapshot(snapshot), null, 2),
+        'utf-8',
+      ),
     ]);
   }
 }

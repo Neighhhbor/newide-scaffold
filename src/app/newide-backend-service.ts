@@ -21,6 +21,8 @@ import {
   FileRunTerminalOutputWriter,
   type RunTerminalOutputWriter,
 } from './run-terminal-output-writer';
+import { projectRunSnapshot } from './run-snapshot-projector';
+import type { RunSnapshot } from '../protocol/run-snapshot';
 
 export interface RunCreateParams {
   prompt: string;
@@ -103,9 +105,9 @@ export class NewideBackendService {
             this.registry.complete(identity.run_id, result.frontend_snapshot);
           } else {
             this.registry.fail(identity.run_id, 'FLOW_FAILED', 'Integration flow failed');
-            await this.terminalWriter.finalize(this.registry.getSnapshot(identity.run_id));
           }
           await this.auditWriter.flush(identity.run_id);
+          await this.terminalWriter.finalize(this.registry.getSnapshot(identity.run_id));
         })
         .catch(async (error: unknown) => {
           const normalized = toError(error);
@@ -122,6 +124,10 @@ export class NewideBackendService {
 
   getSnapshot(runId: string): AppRunSnapshot {
     return this.registry.getSnapshot(runId);
+  }
+
+  getRunSnapshot(runId: string): RunSnapshot {
+    return projectRunSnapshot(this.registry.getSnapshot(runId));
   }
 
   async cancelRun(runId: string): Promise<{ cancelled: true }> {
