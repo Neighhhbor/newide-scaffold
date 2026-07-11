@@ -15,6 +15,7 @@ import { defaultMvpAgentRunDeps } from '../mvp/default-agent-run-deps';
 
 export class Agent {
   private state: AgentLoopState = 'idle';
+  private runQueue: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly memory: AgentMemoryScope,
@@ -58,11 +59,20 @@ export class Agent {
    * MVP 同步执行；后续可将 process 拆到异步调度。
    */
   async runOnce(task: AgentTaskRequest, options?: MemoryCycleOptions): Promise<MemoryCycleResult> {
-    this.state = 'running';
-    try {
-      return await runTaskMemoryCycle(this.memory, task, this.deps, options);
-    } finally {
-      this.state = 'sleeping';
-    }
+    if (this.state === 'stopped') throw new Error(`Agent is stopped: ${this.role_id}`);
+    const running = this.runQueue.then(async () => {
+      if (this.state === 'stopped') throw new Error(`Agent is stopped: ${this.role_id}`);
+      this.state = 'running';
+      try {
+        return await runTaskMemoryCycle(this.memory, task, this.deps, options);
+      } finally {
+        if (this.getState() !== 'stopped') this.state = 'sleeping';
+      }
+    });
+    this.runQueue = running.then(
+      () => undefined,
+      () => undefined,
+    );
+    return running;
   }
 }

@@ -23,6 +23,8 @@ export interface AgentTaskRequest {
   spec: string;
   /** 任务唯一标识；缺省则在 runOnce 内自动生成 */
   task_id?: string;
+  /** 所属协调运行 ID；与单次 Driver call_id 独立。 */
+  run_id?: string;
   /** Driver 调用 ID，写入 AgentContextSnapshot.driver_calls 供溯源 */
   call_id?: string;
   /** 执行该任务的 Driver 标识；缺省为 "mock-driver" */

@@ -30,6 +30,7 @@ export type TaskInstructionPlanner = (task: AgentTaskRequest) => Promise<string>
 export interface DriverInvokeInput {
   /** 本次任务 ID */
   task_id: string;
+  run_id?: string;
   /** Driver 调用 ID，写入 AgentContextSnapshot.driver_calls */
   call_id: string;
   /** 执行的 Driver 标识 */

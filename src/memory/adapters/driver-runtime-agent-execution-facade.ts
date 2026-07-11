@@ -26,6 +26,7 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
       {
         spec: input.instruction,
         task_id: input.task_id,
+        run_id: input.run_id,
         call_id: createId('call'),
         source_driver: this.options.source_driver,
       },
@@ -52,6 +53,7 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
           skills: cycle.retrieval.skills.length,
         },
         promotion: cycle.promotion.check,
+        context_pack_persisted: false,
         ...(execution.error
           ? { driver_error: { ...execution.error }, driver_error_code: execution.error.code }
           : {}),

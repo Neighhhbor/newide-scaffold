@@ -16,6 +16,39 @@ import type { AgentRunDeps } from '../runtime/agent-run-deps';
 import type { AgentTaskRequest } from '../agent-types';
 
 describe('memory MVP demo flow', () => {
+  it('serializes same-role runs and keeps stopped state terminal', async () => {
+    const repository = new InMemoryRepository();
+    const bufferRepository = new InMemoryBufferRepository();
+    let active = 0;
+    let maxActive = 0;
+    const releases: Array<() => void> = [];
+    const manager = AgentManager.create(repository, bufferRepository, {
+      ...defaultMvpAgentRunDeps,
+      invokeDriver: vi.fn(async (input) => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise<void>((resolve) => releases.push(resolve));
+        active -= 1;
+        return defaultMvpAgentRunDeps.invokeDriver(input);
+      }),
+    });
+    const agent = await manager.ensureAgent('serial_role');
+
+    const first = manager.runRole('serial_role', { spec: 'first', task_id: 'task_first' });
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    const second = manager.runRole('serial_role', { spec: 'second', task_id: 'task_second' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(releases).toHaveLength(1);
+    agent.stop();
+    releases.shift()?.();
+
+    const firstResult = await first;
+    await expect(second).rejects.toThrow('Agent is stopped');
+    expect(maxActive).toBe(1);
+    expect(firstResult.buffer_seq).toBe(1);
+    expect(agent.getState()).toBe('stopped');
+    await expect(agent.runOnce({ spec: 'third' })).rejects.toThrow('Agent is stopped');
+  });
   it('injects runtime deps and initializes the same role only once concurrently', async () => {
     const repository = new InMemoryRepository();
     const initialize = vi.spyOn(repository, 'initializeAgent');

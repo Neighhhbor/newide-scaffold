@@ -35,7 +35,6 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
     expect(driver.prompts[0]).toMatchObject({
       task_id: 'task_001',
       run_id: 'run_001',
-      run_id: expect.stringMatching(/^call_/),
       schema_version: SCHEMA_VERSION,
     });
     expect(result).toMatchObject({

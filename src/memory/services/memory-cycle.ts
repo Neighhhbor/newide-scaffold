@@ -167,6 +167,7 @@ export async function runTaskMemoryCycle(
   const invocation = await deps.invokeDriver(
     {
       task_id,
+      ...(task.run_id ? { run_id: task.run_id } : {}),
       call_id,
       source_driver,
       driver_context,
