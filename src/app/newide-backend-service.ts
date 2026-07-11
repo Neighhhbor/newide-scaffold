@@ -15,6 +15,7 @@ import {
   type AppRunEvent,
   type AppRunMode,
   type AppRunSnapshot,
+  type StagedTerminalTransition,
 } from './run-registry';
 import { FileRunAuditWriter, type RunAuditWriter } from './run-audit-writer';
 import {
@@ -40,6 +41,7 @@ export interface RunCreateResult {
 
 export class NewideBackendService {
   private readonly terminalRuns = new Map<string, Promise<void>>();
+  private readonly persistedTerminalEvents = new Set<string>();
 
   constructor(
     private readonly runner: CoordinatorRunner = new IntegrationV0CoordinatorRunner(),
@@ -53,10 +55,8 @@ export class NewideBackendService {
     const controller = new AbortController();
     return new Promise<RunCreateResult>((resolve, reject) => {
       let resolveTerminal!: () => void;
-      let rejectTerminal!: (reason: unknown) => void;
-      const terminalRun = new Promise<void>((resolveRun, rejectRun) => {
+      const terminalRun = new Promise<void>((resolveRun) => {
         resolveTerminal = resolveRun;
-        rejectTerminal = rejectRun;
       });
       let identity: { run_id: string; task_id: string } | undefined;
       const pendingTelemetry: TelemetryRecord[] = [];
@@ -91,7 +91,8 @@ export class NewideBackendService {
             this.terminalRuns.set(created.run_id, terminalRun);
             this.registry.create({ ...created, mode, controller });
             this.registry.subscribe(created.run_id, (event) => {
-              void this.auditWriter.append(event);
+              if (this.persistedTerminalEvents.delete(event.event_id)) return;
+              void this.auditWriter.append(event).catch(() => undefined);
             });
             for (const event of pendingEvents) this.appendDomainEvent(created, event);
             this.registry.appendEvent(created.run_id, 'run.started', { mode });
@@ -111,17 +112,18 @@ export class NewideBackendService {
             return;
           }
           if (result.summary.status === 'completed') {
-            const terminalSnapshot = this.registry.prepareCompletion(
-              identity.run_id,
-              result.frontend_snapshot,
-            );
-            await this.auditWriter.flush(identity.run_id);
-            await this.terminalWriter.finalize(terminalSnapshot);
-            this.registry.publishCompletion(identity.run_id);
+            const staged = this.registry.stageTerminal(identity.run_id, {
+              status: 'completed',
+              snapshot: result.frontend_snapshot,
+            });
+            if (staged) await this.persistTerminal(identity.run_id, staged);
           } else {
-            this.registry.fail(identity.run_id, 'FLOW_FAILED', 'Integration flow failed');
-            await this.auditWriter.flush(identity.run_id);
-            await this.terminalWriter.finalize(this.registry.getSnapshot(identity.run_id));
+            const staged = this.registry.stageTerminal(identity.run_id, {
+              status: 'failed',
+              code: 'FLOW_FAILED',
+              message: 'Integration flow failed',
+            });
+            if (staged) await this.persistTerminal(identity.run_id, staged);
           }
         })
         .catch(async (error: unknown) => {
@@ -130,11 +132,15 @@ export class NewideBackendService {
             reject(normalized);
             return;
           }
-          this.registry.fail(identity.run_id, 'RUNNER_FAILED', normalized.message);
-          await this.auditWriter.flush(identity.run_id);
-          await this.terminalWriter.finalize(this.registry.getSnapshot(identity.run_id));
+          const staged = this.registry.stageTerminal(identity.run_id, {
+            status: 'failed',
+            code: 'RUNNER_FAILED',
+            message: normalized.message,
+          });
+          if (staged) await this.persistTerminal(identity.run_id, staged);
         })
-        .then(resolveTerminal, rejectTerminal);
+        .then(resolveTerminal, resolveTerminal);
+      void terminalRun.then(() => this.terminalRuns.delete(identity?.run_id ?? ''));
     });
   }
 
@@ -147,14 +153,21 @@ export class NewideBackendService {
   }
 
   async waitForTerminal(runId: string): Promise<void> {
-    this.registry.getSnapshot(runId);
+    const before = this.registry.getSnapshot(runId);
     await this.terminalRuns.get(runId);
+    const snapshot = this.registry.getSnapshot(runId);
+    if (snapshot.status === 'failed' && snapshot.error?.code === 'TERMINAL_OUTPUT_FAILED') {
+      throw new Error(snapshot.error.message);
+    }
+    if (before.status === 'running' && snapshot.status === 'running') {
+      throw new Error(`Run ${runId} did not reach a terminal state`);
+    }
   }
 
   async cancelRun(runId: string): Promise<{ cancelled: true }> {
-    this.registry.cancel(runId);
-    await this.auditWriter.flush(runId);
-    await this.terminalWriter.finalize(this.registry.getSnapshot(runId));
+    const staged = this.registry.stageTerminal(runId, { status: 'cancelled' });
+    if (staged) await this.persistTerminal(runId, staged);
+    else await this.waitForTerminal(runId);
     return { cancelled: true };
   }
 
@@ -173,12 +186,37 @@ export class NewideBackendService {
   }
 
   private appendDomainEvent(identity: { run_id: string; task_id: string }, event: Event): void {
+    if (event.event_type === 'run.completed' || event.event_type === 'run.failed') return;
     if (event.run_id && event.run_id !== identity.run_id) return;
     if (event.task_id && event.task_id !== identity.task_id) return;
     this.registry.appendEvent(identity.run_id, event.event_type, event.payload, {
       event_id: event.event_id,
       created_at: event.created_at,
     });
+  }
+
+  private async persistTerminal(runId: string, staged: StagedTerminalTransition): Promise<void> {
+    try {
+      await this.terminalWriter.finalize(staged.snapshot);
+      await this.auditWriter.append(staged.event);
+      this.persistedTerminalEvents.add(staged.event.event_id);
+      this.registry.commitTerminal(runId, staged);
+    } catch (error) {
+      this.registry.abortTerminal(runId, staged.token);
+      const failure = this.registry.stageTerminal(runId, {
+        status: 'failed',
+        code: 'TERMINAL_OUTPUT_FAILED',
+        message: toError(error).message,
+      });
+      if (!failure) return;
+      try {
+        await this.auditWriter.append(failure.event);
+        this.persistedTerminalEvents.add(failure.event.event_id);
+      } catch {
+        // The in-memory failure remains authoritative when durable output is unavailable.
+      }
+      this.registry.commitTerminal(runId, failure);
+    }
   }
 }
 
