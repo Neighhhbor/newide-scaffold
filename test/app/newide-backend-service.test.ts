@@ -8,20 +8,22 @@ describe('NewideBackendService', () => {
     const runnerResult = new Promise<IntegrationV0Result>((resolve) => {
       finish = resolve;
     });
-    const service = new NewideBackendService(async (options) => {
-      options.onRunCreated?.({ run_id: 'run_1', task_id: 'task_1' });
-      await options.telemetry?.emit({
-        telemetry_id: 'telemetry_1',
-        event_type: 'driver.run_result',
-        owner: 'B-owned-observed',
-        subject_id: 'driver_result_1',
-        run_id: 'run_1',
-        task_id: 'task_1',
-        payload: { status: 'succeeded' },
-        created_at: '2026-07-11T08:00:00.000Z',
-        schema_version: 'v0',
-      });
-      return runnerResult;
+    const service = new NewideBackendService({
+      run: async (request) => {
+        request.onRunCreated?.({ run_id: 'run_1', task_id: 'task_1' });
+        await request.telemetry?.emit({
+          telemetry_id: 'telemetry_1',
+          event_type: 'driver.run_result',
+          owner: 'B-owned-observed',
+          subject_id: 'driver_result_1',
+          run_id: 'run_1',
+          task_id: 'task_1',
+          payload: { status: 'succeeded' },
+          created_at: '2026-07-11T08:00:00.000Z',
+          schema_version: 'v0',
+        });
+        return runnerResult;
+      },
     });
 
     await expect(service.createRun({ prompt: 'Build RPC' })).resolves.toEqual({
@@ -47,9 +49,11 @@ describe('NewideBackendService', () => {
   });
 
   it('records runner exceptions after identity as failed runs', async () => {
-    const service = new NewideBackendService(async (options) => {
-      options.onRunCreated?.({ run_id: 'run_failed', task_id: 'task_failed' });
-      throw new Error('driver process exited');
+    const service = new NewideBackendService({
+      run: async (request) => {
+        request.onRunCreated?.({ run_id: 'run_failed', task_id: 'task_failed' });
+        throw new Error('driver process exited');
+      },
     });
 
     await service.createRun({ prompt: 'Fail safely', mode: 'council' });
