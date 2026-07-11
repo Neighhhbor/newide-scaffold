@@ -107,7 +107,7 @@ export class SynthesisAgentCouncilProvider implements CouncilProvider {
     inputArtifactRefs: string[] = input.evidence_pack?.artifact_refs ?? [],
     options?: AgentExecutionOptions,
   ): Promise<AgentExecutionResult> {
-    return this.agentExecutionFacade.runAgent(
+    const result = await this.agentExecutionFacade.runAgent(
       {
         task_id: input.task_id,
         run_id: executionRunId,
@@ -119,6 +119,10 @@ export class SynthesisAgentCouncilProvider implements CouncilProvider {
       },
       options,
     );
+    if (result.status !== 'completed') {
+      throw new Error(`Council role ${roleId} failed with status ${result.status}`);
+    }
+    return result;
   }
 }
 
