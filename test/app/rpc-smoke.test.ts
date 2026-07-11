@@ -6,7 +6,6 @@ describe('RPC smoke script', () => {
   it('verifies single-agent, Council, cancellation, and protocol errors', async () => {
     const child = spawn('pnpm', ['rpc:smoke'], {
       cwd: process.cwd(),
-      env: { ...process.env, NEWIDE_BACKEND_RPC_TEST_MOCK: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
