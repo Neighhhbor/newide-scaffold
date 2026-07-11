@@ -39,6 +39,8 @@ export interface RunCreateResult {
 }
 
 export class NewideBackendService {
+  private readonly terminalRuns = new Map<string, Promise<void>>();
+
   constructor(
     private readonly runner: CoordinatorRunner = new IntegrationV0CoordinatorRunner(),
     private readonly registry = new InMemoryRunRegistry(),
@@ -50,6 +52,12 @@ export class NewideBackendService {
     const mode = params.mode ?? 'single_agent';
     const controller = new AbortController();
     return new Promise<RunCreateResult>((resolve, reject) => {
+      let resolveTerminal!: () => void;
+      let rejectTerminal!: (reason: unknown) => void;
+      const terminalRun = new Promise<void>((resolveRun, rejectRun) => {
+        resolveTerminal = resolveRun;
+        rejectTerminal = rejectRun;
+      });
       let identity: { run_id: string; task_id: string } | undefined;
       const pendingTelemetry: TelemetryRecord[] = [];
       const pendingEvents: Event[] = [];
@@ -80,6 +88,7 @@ export class NewideBackendService {
           onRunCreated: (created) => {
             if (identity) return;
             identity = created;
+            this.terminalRuns.set(created.run_id, terminalRun);
             this.registry.create({ ...created, mode, controller });
             this.registry.subscribe(created.run_id, (event) => {
               void this.auditWriter.append(event);
@@ -102,12 +111,18 @@ export class NewideBackendService {
             return;
           }
           if (result.summary.status === 'completed') {
-            this.registry.complete(identity.run_id, result.frontend_snapshot);
+            const terminalSnapshot = this.registry.prepareCompletion(
+              identity.run_id,
+              result.frontend_snapshot,
+            );
+            await this.auditWriter.flush(identity.run_id);
+            await this.terminalWriter.finalize(terminalSnapshot);
+            this.registry.publishCompletion(identity.run_id);
           } else {
             this.registry.fail(identity.run_id, 'FLOW_FAILED', 'Integration flow failed');
+            await this.auditWriter.flush(identity.run_id);
+            await this.terminalWriter.finalize(this.registry.getSnapshot(identity.run_id));
           }
-          await this.auditWriter.flush(identity.run_id);
-          await this.terminalWriter.finalize(this.registry.getSnapshot(identity.run_id));
         })
         .catch(async (error: unknown) => {
           const normalized = toError(error);
@@ -118,7 +133,8 @@ export class NewideBackendService {
           this.registry.fail(identity.run_id, 'RUNNER_FAILED', normalized.message);
           await this.auditWriter.flush(identity.run_id);
           await this.terminalWriter.finalize(this.registry.getSnapshot(identity.run_id));
-        });
+        })
+        .then(resolveTerminal, rejectTerminal);
     });
   }
 
@@ -128,6 +144,11 @@ export class NewideBackendService {
 
   getRunSnapshot(runId: string): RunSnapshot {
     return projectRunSnapshot(this.registry.getSnapshot(runId));
+  }
+
+  async waitForTerminal(runId: string): Promise<void> {
+    this.registry.getSnapshot(runId);
+    await this.terminalRuns.get(runId);
   }
 
   async cancelRun(runId: string): Promise<{ cancelled: true }> {
