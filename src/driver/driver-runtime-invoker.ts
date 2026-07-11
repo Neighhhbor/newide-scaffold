@@ -10,6 +10,7 @@ export interface DriverRuntimeInvokerMemoryItem {
 
 export interface DriverRuntimeInvokerInput {
   task_id: string;
+  run_id?: string;
   call_id: string;
   source_driver: string;
   driver_context: {
@@ -64,7 +65,7 @@ export function createDriverRuntimeInvoker(driver: DriverRuntimeHandle) {
         driver,
         {
           task_id: input.task_id,
-          run_id: input.call_id,
+          run_id: input.run_id ?? input.call_id,
           prompt: deterministicJson({
             task_instruction: input.driver_context.task_instruction,
             skills: input.driver_context.skills,

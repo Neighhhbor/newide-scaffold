@@ -9,6 +9,7 @@ import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
 import { IntegrationV0CoordinatorRunner } from '../coordinator/coordinator-runner';
+import { SynthesisAgentCouncilProvider } from '../council';
 import {
   CommandDriverTransport,
   ExternalDriverRuntime,
@@ -17,7 +18,7 @@ import {
 import {
   AgentManager,
   DriverRuntimeAgentExecutionFacade,
-  FileBufferRepository,
+  InMemoryBufferRepository,
   InMemoryRepository,
   defaultMvpAgentRunDeps,
 } from '../memory';
@@ -72,17 +73,18 @@ export function createProductionBackendService(
       unsetEnv: MODEL_OVERRIDE_ENV.filter((key) => driverEnv[key] === undefined),
     }),
   });
-  const manager = AgentManager.create(
-    new InMemoryRepository(),
-    new FileBufferRepository({ agentStateRoot: path.join(repoRoot, '.newide', 'memory') }),
-    { ...defaultMvpAgentRunDeps, invokeDriver: createDriverRuntimeInvoker(driver) },
-  );
+  const manager = AgentManager.create(new InMemoryRepository(), new InMemoryBufferRepository(), {
+    ...defaultMvpAgentRunDeps,
+    invokeDriver: createDriverRuntimeInvoker(driver),
+  });
+  const agentExecutionFacade = new DriverRuntimeAgentExecutionFacade({
+    manager,
+    source_driver: driver.driver_id,
+  });
   const runner = new IntegrationV0CoordinatorRunner({
     driver,
-    agentExecutionFacade: new DriverRuntimeAgentExecutionFacade({
-      manager,
-      source_driver: driver.driver_id,
-    }),
+    agentExecutionFacade,
+    councilProvider: new SynthesisAgentCouncilProvider({ agentExecutionFacade }),
   });
   return new NewideBackendService(runner);
 }

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -52,9 +52,11 @@ describe('backend RPC stdio entrypoint', () => {
     );
     writeFileSync(
       path.join(runnerDir, 'fake-driver.mjs'),
-      `let body='';
+      `import { appendFileSync } from 'node:fs';
+let body='';
 process.stdin.on('data', chunk => body += chunk);
 process.stdin.on('end', () => {
+  appendFileSync(new URL('./invocations.log', import.meta.url), 'invoke\\n');
   const input = JSON.parse(body);
   const created_at = new Date().toISOString();
   const artifact = { artifact_id: 'artifact_fake_acp', type: 'driver_result', uri: 'artifact://fake/result', producer_id: 'claude-fake', task_id: input.task_id, created_at, schema_version: input.schema_version };
@@ -73,22 +75,30 @@ process.stdin.on('end', () => {
     );
     expect(snapshot.snapshot?.delivery_report.driver_diagnostics.driver_id).toBe('claude-fake');
     expect(snapshot.snapshot?.delivery_report.driver_diagnostics.driver_id).not.toBe('mock-driver');
-    const processedBuffer = path.join(
-      '.newide',
-      'memory',
-      'role_ts_engineer',
-      'buffer',
-      'processed',
-      'report_1.json',
+    expect(snapshot.events).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: 'agent.execution_completed' })]),
     );
-    expect(existsSync(processedBuffer)).toBe(true);
-    expect(JSON.parse(readFileSync(processedBuffer, 'utf8')).source_driver).toBe('acp-external');
+
+    const councilCreated = await service.createRun({
+      prompt: 'Exercise production council composition.',
+      mode: 'council',
+    });
+    const councilSnapshot = await waitForTerminal(service, councilCreated.run_id);
+    expect(councilSnapshot.status).toBe('completed');
+    expect(councilSnapshot.events.map((event) => event.type)).toContain('council.completed');
+    expect(
+      readFileSync(path.join(runnerDir, 'invocations.log'), 'utf8').trim().split('\n'),
+    ).toHaveLength(6);
 
     await new Promise((resolve) => setTimeout(resolve, 50));
     rmSync(runnerDir, { recursive: true });
     rmSync(path.join('.newide', 'runs', created.run_id), { recursive: true, force: true });
     rmSync(path.join('.newide', 'worktrees', created.task_id), { recursive: true, force: true });
-    rmSync(path.join('.newide', 'memory'), { recursive: true, force: true });
+    rmSync(path.join('.newide', 'runs', councilCreated.run_id), { recursive: true, force: true });
+    rmSync(path.join('.newide', 'worktrees', councilCreated.task_id), {
+      recursive: true,
+      force: true,
+    });
   }, 15_000);
 
   it('answers ping over a real child process and exits on stdin EOF', async () => {
@@ -120,10 +130,6 @@ async function waitForTerminal(
   service: ReturnType<typeof createProductionBackendService>,
   runId: string,
 ) {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    const snapshot = service.getSnapshot(runId);
-    if (snapshot.status !== 'running') return snapshot;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error(`Run ${runId} did not reach a terminal state`);
+  await service.waitForTerminal(runId);
+  return service.getSnapshot(runId);
 }
