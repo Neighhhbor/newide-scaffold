@@ -21,7 +21,11 @@ describe('RunSnapshot protocol', () => {
       mode: 'council',
       current: { stage: 'intervention', active_node_code: 'N18' },
       events: [],
-      error: { code: 'RUNNER_FAILED', message: 'driver exited' },
+      error: {
+        code: 'RUNNER_FAILED',
+        message: 'driver exited',
+        details: { phase: 'driver', retryable: false },
+      },
     });
 
     expect(projected).toMatchObject({
@@ -30,7 +34,13 @@ describe('RunSnapshot protocol', () => {
       mode: 'council',
       status: 'failed',
       council: { enabled: true, status: 'failed', can_create_merge_authorization: false },
-      errors: [{ code: 'RUNNER_FAILED', message: 'driver exited' }],
+      errors: [
+        {
+          code: 'RUNNER_FAILED',
+          message: 'driver exited',
+          details: { phase: 'driver', retryable: false },
+        },
+      ],
       final_output: { status: 'failed', artifact_refs: [], files_written: [] },
     });
     expect(runSnapshotSchema.parse(projected)).toEqual(projected);

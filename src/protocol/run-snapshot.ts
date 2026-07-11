@@ -45,6 +45,7 @@ export const runSnapshotSchema = z
         .object({
           code: z.string().min(1),
           message: z.string().min(1),
+          details: recordSchema.optional(),
         })
         .strict(),
     ),

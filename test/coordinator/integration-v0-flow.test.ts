@@ -15,6 +15,11 @@ import {
 import { SCHEMA_VERSION, createId, type ArtifactRef } from '../../src/core';
 import type { CouncilProvider, CouncilRoundInput } from '../../src/council';
 import type { AgentExecutionFacade, AgentExecutionRequest } from '../../src/memory';
+import type { HookResult } from '../../src/hook';
+import type {
+  MaterializationInput,
+  MaterializationResult,
+} from '../../src/coordinator/worktree-materializer';
 
 describe('runIntegrationV0Flow', () => {
   const createdRunDirs = new Set<string>();
@@ -104,6 +109,39 @@ describe('runIntegrationV0Flow', () => {
     }
     expect(driverRequestedDelivery.status).toBe('acked');
     expect(driverRequestedDelivery.ack_at).toBeDefined();
+  });
+
+  it('reports a structured GATE_DENIED failure', async () => {
+    const result = await runFlow({ hookEngine: fakeHookEngine('deny') });
+
+    expect(result.summary.failure).toMatchObject({
+      code: 'GATE_DENIED',
+      message: 'Gate deny-gate denied the run',
+      details: {
+        phase: 'gate',
+        gate_results: [
+          { gate_id: 'deny-gate', decision: 'deny', reason: 'policy rejected the artifact' },
+        ],
+      },
+    });
+    expect(result.summary.status).toBe('failed');
+  });
+
+  it.each([
+    ['failed', 'MATERIALIZATION_FAILED'],
+    ['partial', 'MATERIALIZATION_PARTIAL'],
+  ] as const)('reports %s materialization as %s', async (status, code) => {
+    const failure = { artifact_id: 'artifact_1', reason: `${status} write` };
+    const result = await runFlow({ materializer: fakeMaterializer(status, [failure]) });
+
+    expect(result.summary.failure).toMatchObject({
+      code,
+      details: {
+        phase: 'materialization',
+        status,
+        failures: [failure],
+      },
+    });
   });
 
   it('should run with council mode when enabled', async () => {
@@ -815,6 +853,54 @@ describe('runIntegrationV0Flow', () => {
     return result;
   }
 });
+
+function fakeHookEngine(decision: 'deny' | 'allow'): { handleEvent: () => Promise<HookResult> } {
+  return {
+    handleEvent: async () => ({
+      hook_point: 'task.completed',
+      matched: true,
+      gate_requests: [],
+      gate_results: [
+        {
+          gate_result_id: createId('gate_result'),
+          gate_id: decision === 'deny' ? 'deny-gate' : 'allow-gate',
+          gate_point: 'task.completed',
+          request_id: createId('gate_request'),
+          subject_id: 'task_under_review',
+          decision,
+          reason: decision === 'deny' ? 'policy rejected the artifact' : 'allowed',
+          required_actions: decision === 'deny' ? ['fix-policy'] : [],
+          target_state: decision === 'deny' ? 'blocked' : 'allowed',
+          created_at: new Date().toISOString(),
+          schema_version: SCHEMA_VERSION,
+        },
+      ],
+      final_decision: decision,
+      created_at: new Date().toISOString(),
+      schema_version: SCHEMA_VERSION,
+    }),
+  };
+}
+
+function fakeMaterializer(
+  status: MaterializationResult['status'],
+  failures: MaterializationResult['failures'],
+): { materialize: (input: MaterializationInput) => Promise<MaterializationResult> } {
+  return {
+    materialize: async (input) => ({
+      materialization_id: createId('materialization'),
+      task_id: input.task_id,
+      worktree_path: '.newide/worktrees/fake',
+      materialized_artifacts: status === 'failed' ? [] : input.artifacts,
+      files_written: status === 'failed' ? [] : ['partial.ts'],
+      changed_files: status === 'failed' ? [] : ['partial.ts'],
+      status,
+      failures,
+      created_at: new Date().toISOString(),
+      schema_version: SCHEMA_VERSION,
+    }),
+  };
+}
 
 async function readJson(filePath: string): Promise<unknown> {
   return JSON.parse(await fs.readFile(filePath, 'utf-8'));

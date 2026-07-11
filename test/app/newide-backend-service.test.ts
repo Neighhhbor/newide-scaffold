@@ -460,6 +460,81 @@ describe('NewideBackendService', () => {
       await rm(tempRoot, { recursive: true, force: true });
     }
   });
+
+  it('preserves a gate failure across events, audit, snapshot, and terminal output', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'backend-gate-failure-'));
+    const runsRoot = path.join(tempRoot, 'runs');
+    const auditWriter = new FileRunAuditWriter(runsRoot);
+    const service = new NewideBackendService(
+      new IntegrationV0CoordinatorRunner({
+        worktreePath: path.join(tempRoot, 'worktrees'),
+        runsRoot,
+        hookEngine: {
+          handleEvent: async () => ({
+            hook_point: 'task.completed',
+            matched: true,
+            gate_requests: [],
+            gate_results: [
+              {
+                gate_result_id: 'gate_result_denied',
+                gate_id: 'policy-gate',
+                gate_point: 'task.completed',
+                request_id: 'gate_request_denied',
+                subject_id: 'task_under_review',
+                decision: 'deny',
+                reason: 'policy rejected the artifact',
+                required_actions: ['fix-policy'],
+                target_state: 'blocked',
+                created_at: '2026-07-11T08:00:00.000Z',
+                schema_version: 'v0',
+              },
+            ],
+            final_decision: 'deny',
+            created_at: '2026-07-11T08:00:00.000Z',
+            schema_version: 'v0',
+          }),
+        },
+      }),
+      new InMemoryRunRegistry(),
+      auditWriter,
+      new FileRunTerminalOutputWriter(runsRoot),
+    );
+
+    try {
+      const created = await service.createRun({ prompt: 'Reject this artifact' });
+      await service.waitForTerminal(created.run_id);
+      await auditWriter.flush(created.run_id);
+
+      const snapshot = service.getRunSnapshot(created.run_id);
+      expect(snapshot.errors).toEqual([
+        expect.objectContaining({
+          code: 'GATE_DENIED',
+          details: expect.objectContaining({ phase: 'gate' }),
+        }),
+      ]);
+      expect(snapshot.checkpoint).toBeDefined();
+      expect(snapshot.final_output?.files_written).toEqual([]);
+
+      const events = service.getSnapshot(created.run_id).events;
+      expect(events.filter((event) => event.type === 'gate.result')).toHaveLength(1);
+      expect(events.filter((event) => event.type === 'worktree.materialized')).toHaveLength(1);
+      expect(events.at(-1)).toMatchObject({ type: 'run.failed', payload: { code: 'GATE_DENIED' } });
+
+      const audit = (await readFile(path.join(runsRoot, created.run_id, 'audit.jsonl'), 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(audit.at(-1)).toMatchObject({
+        type: 'run.failed',
+        payload: { code: 'GATE_DENIED', details: { phase: 'gate' } },
+      });
+      await expect(
+        readJson(path.join(runsRoot, created.run_id, 'frontend-snapshot.json')),
+      ).resolves.toMatchObject({ checkpoint: {}, final_output: { files_written: [] } });
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 async function viWaitFor(predicate: () => boolean): Promise<void> {
