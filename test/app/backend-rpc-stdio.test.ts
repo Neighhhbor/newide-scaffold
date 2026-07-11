@@ -46,13 +46,16 @@ describe('backend RPC stdio entrypoint', () => {
 
   it('executes the production C-to-B-to-A chain through a real driver:run process', async () => {
     const runnerDir = mkdtempSync(path.join(os.tmpdir(), 'newide-fake-acp-'));
-    writeFileSync(
-      path.join(runnerDir, 'package.json'),
-      '{"scripts":{"driver:run":"node fake-driver.mjs"}}',
-    );
-    writeFileSync(
-      path.join(runnerDir, 'fake-driver.mjs'),
-      `import { appendFileSync } from 'node:fs';
+    let created: { run_id: string; task_id: string } | undefined;
+    let councilCreated: { run_id: string; task_id: string } | undefined;
+    try {
+      writeFileSync(
+        path.join(runnerDir, 'package.json'),
+        '{"scripts":{"driver:run":"node fake-driver.mjs"}}',
+      );
+      writeFileSync(
+        path.join(runnerDir, 'fake-driver.mjs'),
+        `import { appendFileSync } from 'node:fs';
 let body='';
 process.stdin.on('data', chunk => body += chunk);
 process.stdin.on('end', () => {
@@ -63,42 +66,54 @@ process.stdin.on('end', () => {
   process.stdout.write(JSON.stringify({ driver_run_result_id: 'driver_result_fake_acp', session_id: 'session_fake_acp', status: 'succeeded', artifacts: [artifact], transcript_ref: { ...artifact, artifact_id: 'transcript_fake_acp', type: 'transcript' }, tool_events: [], diagnostics: { driver_id: 'claude-fake', duration_ms: 1, notes: ['fake ACP process'] }, created_at, schema_version: input.schema_version }));
 });
 `,
-    );
+      );
 
-    const service = createProductionBackendService({ ACP_DRIVER_RUNNER_DIR: runnerDir });
-    const created = await service.createRun({ prompt: 'Exercise production composition.' });
-    const snapshot = await waitForTerminal(service, created.run_id);
+      const service = createProductionBackendService({ ACP_DRIVER_RUNNER_DIR: runnerDir });
+      created = await service.createRun({ prompt: 'Exercise production composition.' });
+      const snapshot = await waitForTerminal(service, created.run_id);
 
-    expect(snapshot.status).toBe('completed');
-    expect(snapshot.events.map((event) => event.type)).toEqual(
-      expect.arrayContaining(['agent.execution_requested', 'agent.execution_completed']),
-    );
-    expect(snapshot.snapshot?.delivery_report.driver_diagnostics.driver_id).toBe('claude-fake');
-    expect(snapshot.snapshot?.delivery_report.driver_diagnostics.driver_id).not.toBe('mock-driver');
-    expect(snapshot.events).toEqual(
-      expect.arrayContaining([expect.objectContaining({ type: 'agent.execution_completed' })]),
-    );
+      expect(snapshot.status).toBe('completed');
+      expect(snapshot.events.map((event) => event.type)).toEqual(
+        expect.arrayContaining(['agent.execution_requested', 'agent.execution_completed']),
+      );
+      expect(snapshot.snapshot?.delivery_report.driver_diagnostics.driver_id).toBe('claude-fake');
+      expect(snapshot.snapshot?.delivery_report.driver_diagnostics.driver_id).not.toBe(
+        'mock-driver',
+      );
+      expect(snapshot.events).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: 'agent.execution_completed' })]),
+      );
 
-    const councilCreated = await service.createRun({
-      prompt: 'Exercise production council composition.',
-      mode: 'council',
-    });
-    const councilSnapshot = await waitForTerminal(service, councilCreated.run_id);
-    expect(councilSnapshot.status).toBe('completed');
-    expect(councilSnapshot.events.map((event) => event.type)).toContain('council.completed');
-    expect(
-      readFileSync(path.join(runnerDir, 'invocations.log'), 'utf8').trim().split('\n'),
-    ).toHaveLength(6);
-
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    rmSync(runnerDir, { recursive: true });
-    rmSync(path.join('.newide', 'runs', created.run_id), { recursive: true, force: true });
-    rmSync(path.join('.newide', 'worktrees', created.task_id), { recursive: true, force: true });
-    rmSync(path.join('.newide', 'runs', councilCreated.run_id), { recursive: true, force: true });
-    rmSync(path.join('.newide', 'worktrees', councilCreated.task_id), {
-      recursive: true,
-      force: true,
-    });
+      councilCreated = await service.createRun({
+        prompt: 'Exercise production council composition.',
+        mode: 'council',
+      });
+      const councilSnapshot = await waitForTerminal(service, councilCreated.run_id);
+      expect(councilSnapshot.status).toBe('completed');
+      expect(councilSnapshot.events.map((event) => event.type)).toContain('council.completed');
+      expect(
+        readFileSync(path.join(runnerDir, 'invocations.log'), 'utf8').trim().split('\n'),
+      ).toHaveLength(6);
+    } finally {
+      rmSync(runnerDir, { recursive: true, force: true });
+      if (created) {
+        rmSync(path.join('.newide', 'runs', created.run_id), { recursive: true, force: true });
+        rmSync(path.join('.newide', 'worktrees', created.task_id), {
+          recursive: true,
+          force: true,
+        });
+      }
+      if (councilCreated) {
+        rmSync(path.join('.newide', 'runs', councilCreated.run_id), {
+          recursive: true,
+          force: true,
+        });
+        rmSync(path.join('.newide', 'worktrees', councilCreated.task_id), {
+          recursive: true,
+          force: true,
+        });
+      }
+    }
   }, 15_000);
 
   it('answers ping over a real child process and exits on stdin EOF', async () => {
