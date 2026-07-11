@@ -153,6 +153,7 @@ export async function runIntegrationV0Flow(
   const threadId = run.run_id; // Use run_id as thread_id for v0
   timeline.push({ name: 'RunCreated', id: run.run_id });
   orchestrator.updateRunStatus(run.run_id, 'running');
+  orchestrator.updateTaskStatus(task.task_id, 'claimed');
   orchestrator.updateTaskStatus(task.task_id, 'running');
 
   // 3. Select driver (injected or default MockDriver)

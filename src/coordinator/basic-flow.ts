@@ -59,6 +59,7 @@ export async function runBasicFlow(options?: BasicFlowOptions): Promise<BasicFlo
   const run = orchestrator.createRun(task.task_id);
   timeline.push({ name: 'RunCreated', id: run.run_id });
   orchestrator.updateRunStatus(run.run_id, 'running');
+  orchestrator.updateTaskStatus(task.task_id, 'claimed');
   orchestrator.updateTaskStatus(task.task_id, 'running');
 
   const roleProfileRef: RoleProfileRef = {
