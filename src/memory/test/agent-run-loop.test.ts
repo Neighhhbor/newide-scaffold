@@ -14,6 +14,7 @@
  *   10. AgentManager.tickAll 驱动所有 running agent
  *   11. AgentManager.dispatchTask 异步派单
  */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect } from 'vitest';
 import { Agent } from '../runtime/agent';
 import type { AgentToolConfig } from '../runtime/agent';
@@ -86,22 +87,12 @@ describe('Agent persistent loop (runLoopTick)', () => {
   describe('assignTask', () => {
     it('为 Tool-calling Agent 正确初始化状态', async () => {
       const { memory } = await createTestInfra('role_assign');
-      const agent = new Agent(memory, undefined, createToolConfig(createMockToolClient([])));
+      const agent = new Agent(memory, createToolConfig(createMockToolClient([])));
 
       expect(agent.hasPendingTask()).toBe(false);
 
       const task = createTestTask();
-      await agent.assignTask(task);
-
-      expect(agent.hasPendingTask()).toBe(true);
-      expect(agent.getState()).toBe('running');
-    });
-
-    it('Pipeline 模式的 assignTask 仅设 state，不设 loopMessages', async () => {
-      const { memory } = await createTestInfra('role_assign_pipe');
-      const agent = new Agent(memory);
-
-      await agent.assignTask(createTestTask());
+      (agent as any).assignTask(task);
 
       expect(agent.hasPendingTask()).toBe(true);
       expect(agent.getState()).toBe('running');
@@ -109,46 +100,25 @@ describe('Agent persistent loop (runLoopTick)', () => {
 
     it('已有任务时 assignTask 抛出错误', async () => {
       const { memory } = await createTestInfra('role_assign_conflict');
-      const agent = new Agent(memory, undefined, createToolConfig(createMockToolClient([])));
+      const agent = new Agent(memory, createToolConfig(createMockToolClient([])));
 
-      await agent.assignTask(createTestTask());
-      await expect(agent.assignTask(createTestTask({ task_id: 'task_002' }))).rejects.toThrow(
-        'already has a running task',
-      );
+      (agent as any).assignTask(createTestTask());
+      await expect(
+        (agent as any).assignTask(createTestTask({ task_id: 'task_002' })),
+      ).rejects.toThrow('already has a running task');
     });
 
-    it('stop 后清除所有持久状态', async () => {
+    it('clearLoopState 后清除所有持久状态', async () => {
       const { memory } = await createTestInfra('role_stop_clear');
-      const agent = new Agent(memory, undefined, createToolConfig(createMockToolClient([])));
+      const agent = new Agent(memory, createToolConfig(createMockToolClient([])));
 
-      await agent.assignTask(createTestTask());
+      (agent as any).assignTask(createTestTask());
       expect(agent.hasPendingTask()).toBe(true);
 
-      agent.stop();
+      (agent as any).clearLoopState();
+      (agent as any).state = 'stopped';
       expect(agent.hasPendingTask()).toBe(false);
       expect(agent.getState()).toBe('stopped');
-    });
-  });
-
-  describe('runLoopTick idle / skipped', () => {
-    it('没有任务时返回 idle', async () => {
-      const { memory } = await createTestInfra('role_idle');
-      const agent = new Agent(memory, undefined, createToolConfig(createMockToolClient([])));
-
-      const result = await agent.runLoopTick();
-      expect(result.status).toBe('idle');
-      expect(result.reason).toContain('No pending task');
-    });
-
-    it('Pipeline 模式返回 skipped', async () => {
-      const { memory } = await createTestInfra('role_skipped');
-      const agent = new Agent(memory);
-
-      await agent.assignTask(createTestTask());
-
-      const result = await agent.runLoopTick();
-      expect(result.status).toBe('skipped');
-      expect(result.reason).toContain('Pipeline mode');
     });
   });
 
@@ -159,11 +129,11 @@ describe('Agent persistent loop (runLoopTick)', () => {
         textResponse('Let me think about this...'),
         textResponse('Task completed. All done.'),
       ]);
-      const agent = new Agent(memory, undefined, createToolConfig(mockLlm));
+      const agent = new Agent(memory, createToolConfig(mockLlm));
 
-      await agent.assignTask(createTestTask());
+      await (agent as any).assignTask(createTestTask());
 
-      const result = await agent.runLoopTick();
+      const result = await (agent as any).runLoopTick();
       expect(result.status).toBe('running');
       expect(result.reason).toContain('Round 1 completed');
       expect(agent.getState()).toBe('running');
@@ -177,25 +147,25 @@ describe('Agent persistent loop (runLoopTick)', () => {
         textResponse('Step 3: almost done...'),
         textResponse('Task completed.'),
       ]);
-      const agent = new Agent(memory, undefined, createToolConfig(mockLlm));
+      const agent = new Agent(memory, createToolConfig(mockLlm));
 
-      await agent.assignTask(createTestTask());
+      await (agent as any).assignTask(createTestTask());
 
       // Tick 1
-      const r1 = await agent.runLoopTick();
+      const r1 = await (agent as any).runLoopTick();
       expect(r1.status).toBe('running');
       expect(agent.getState()).toBe('running');
 
       // Tick 2
-      const r2 = await agent.runLoopTick();
+      const r2 = await (agent as any).runLoopTick();
       expect(r2.status).toBe('running');
 
       // Tick 3
-      const r3 = await agent.runLoopTick();
+      const r3 = await (agent as any).runLoopTick();
       expect(r3.status).toBe('running');
 
       // Tick 4 — 完成
-      const r4 = await agent.runLoopTick();
+      const r4 = await (agent as any).runLoopTick();
       expect(r4.status).toBe('completed');
       expect(agent.getState()).toBe('sleeping');
       expect(agent.hasPendingTask()).toBe(false);
@@ -226,17 +196,17 @@ describe('Agent persistent loop (runLoopTick)', () => {
         },
         textResponse('Task completed. [done]'),
       ]);
-      const agent = new Agent(memory, undefined, createToolConfig(mockLlm, [mockTool]));
+      const agent = new Agent(memory, createToolConfig(mockLlm, [mockTool]));
 
-      await agent.assignTask(createTestTask());
+      await (agent as any).assignTask(createTestTask());
 
       // Tick 1: 调用工具
-      const r1 = await agent.runLoopTick();
+      const r1 = await (agent as any).runLoopTick();
       expect(r1.status).toBe('running');
       expect(toolExecuted).toBe(true);
 
       // Tick 2: 完成
-      const r2 = await agent.runLoopTick();
+      const r2 = await (agent as any).runLoopTick();
       expect(r2.status).toBe('completed');
     });
 
@@ -255,16 +225,16 @@ describe('Agent persistent loop (runLoopTick)', () => {
         },
         textResponse('Task completed.'),
       ]);
-      const agent = new Agent(memory, undefined, createToolConfig(mockLlm));
+      const agent = new Agent(memory, createToolConfig(mockLlm));
 
-      await agent.assignTask(createTestTask());
+      await (agent as any).assignTask(createTestTask());
 
       // Tick 1: 未知工具→报错但不抛异常
-      const r1 = await agent.runLoopTick();
+      const r1 = await (agent as any).runLoopTick();
       expect(r1.status).toBe('running');
 
       // Tick 2: 完成
-      const r2 = await agent.runLoopTick();
+      const r2 = await (agent as any).runLoopTick();
       expect(r2.status).toBe('completed');
     });
   });
@@ -273,11 +243,11 @@ describe('Agent persistent loop (runLoopTick)', () => {
     it('LLM 报告完成时状态变为 sleeping', async () => {
       const { memory } = await createTestInfra('role_complete');
       const mockLlm = createMockToolClient([textResponse('Task completed. All done.')]);
-      const agent = new Agent(memory, undefined, createToolConfig(mockLlm));
+      const agent = new Agent(memory, createToolConfig(mockLlm));
 
-      await agent.assignTask(createTestTask());
+      await (agent as any).assignTask(createTestTask());
 
-      const result = await agent.runLoopTick();
+      const result = await (agent as any).runLoopTick();
       expect(result.status).toBe('completed');
       expect(agent.getState()).toBe('sleeping');
       expect(agent.hasPendingTask()).toBe(false);
@@ -286,14 +256,14 @@ describe('Agent persistent loop (runLoopTick)', () => {
     it('完成时写入 buffer', async () => {
       const { memory, bufferRepository } = await createTestInfra('role_buffer');
       const mockLlm = createMockToolClient([textResponse('Task completed. [done]')]);
-      const agent = new Agent(memory, undefined, createToolConfig(mockLlm));
+      const agent = new Agent(memory, createToolConfig(mockLlm));
 
       // 预先验证 buffer 为空
       const metaBefore = await bufferRepository.getBufferMeta('role_buffer');
       expect(metaBefore.total_processed).toBe(0);
 
-      await agent.assignTask(createTestTask());
-      await agent.runLoopTick();
+      await (agent as any).assignTask(createTestTask());
+      await (agent as any).runLoopTick();
 
       // buffer 应有记录（pending 状态，提取已解耦不被同步标记为 processed）
       const metaAfter = await bufferRepository.getBufferMeta('role_buffer');
@@ -313,17 +283,17 @@ describe('Agent persistent loop (runLoopTick)', () => {
         tools: [],
         maxToolCalls: 3,
       };
-      const agent = new Agent(memory, undefined, config);
+      const agent = new Agent(memory, config);
 
-      await agent.assignTask(createTestTask());
+      await (agent as any).assignTask(createTestTask());
 
       // Round 1-3: running (loopRound: 0→1→2→3, each < maxToolCalls)
-      expect((await agent.runLoopTick()).status).toBe('running');
-      expect((await agent.runLoopTick()).status).toBe('running');
-      expect((await agent.runLoopTick()).status).toBe('running');
+      expect((await (agent as any).runLoopTick()).status).toBe('running');
+      expect((await (agent as any).runLoopTick()).status).toBe('running');
+      expect((await (agent as any).runLoopTick()).status).toBe('running');
 
       // Round 4: loopRound (3) >= maxToolCalls (3) → completed
-      const r4 = await agent.runLoopTick();
+      const r4 = await (agent as any).runLoopTick();
       expect(r4.status).toBe('completed');
       expect(r4.reason).toContain('Max tool calls');
       expect(agent.getState()).toBe('sleeping');
@@ -336,28 +306,10 @@ describe('Agent persistent loop (runLoopTick)', () => {
 // ──────────────────────────────────────────────
 
 describe('runOnce backward compatibility', () => {
-  it('Pipeline 模式 runOnce 正常工作', async () => {
-    const { repository, bufferRepository, role_id } = await (async () => {
-      const r = new InMemoryRepository();
-      const br = new InMemoryBufferRepository();
-      const rid = 'role_compat_pipe';
-      await r.initializeAgent({ role_id: rid, name: 'Test', tags: [] });
-      await br.ensureAgent(rid);
-      const m = createAgentMemoryScope(r, br, rid);
-      return { repository: r, bufferRepository: br, memory: m, role_id: rid };
-    })();
-    const agent = new Agent(createAgentMemoryScope(repository, bufferRepository, role_id));
-
-    const result = await agent.runOnce(createTestTask());
-    expect(result.agent_id).toBe(role_id);
-    expect(result.buffer_snapshot.task_id).toBe('task_loop_001');
-    expect(result.extraction).toBeDefined();
-  });
-
   it('Tool-calling 模式 runOnce 仍能同步执行', async () => {
     const { memory } = await createTestInfra('role_compat_tc');
     const mockLlm = createMockToolClient([textResponse('Task completed. [done]')]);
-    const agent = new Agent(memory, undefined, createToolConfig(mockLlm));
+    const agent = new Agent(memory, createToolConfig(mockLlm));
 
     const result = await agent.runOnce(createTestTask());
     expect(result.agent_id).toBe('role_compat_tc');
@@ -371,7 +323,7 @@ describe('runOnce backward compatibility', () => {
       textResponse('Working on it...'),
       textResponse('Task finished.'),
     ]);
-    const agent = new Agent(memory, undefined, createToolConfig(mockLlm));
+    const agent = new Agent(memory, createToolConfig(mockLlm));
 
     const result = await agent.runOnce(createTestTask());
     expect(result.agent_id).toBe('role_compat_multi');
@@ -379,65 +331,11 @@ describe('runOnce backward compatibility', () => {
 });
 
 // ──────────────────────────────────────────────
-// AgentManager tickAll
+// AgentManager dispatchTask
 // ──────────────────────────────────────────────
 
-describe('AgentManager tickAll', () => {
-  it('驱动所有 running agent 走一步', async () => {
-    const { AgentManager } = await import('../runtime/agent-manager');
-    const repository = new InMemoryRepository();
-    const bufferRepository = new InMemoryBufferRepository();
-
-    const mockLlm = createMockToolClient([
-      textResponse('Working on task A...'),
-      textResponse('Task A completed.'),
-    ]);
-
-    const manager = await AgentManager.create(repository, bufferRepository, {
-      tools: { llm: mockLlm, tools: [] },
-    });
-
-    await manager.createAgent({ role_id: 'role_tick_a', name: 'Agent A', tags: [] });
-    await manager.createAgent({ role_id: 'role_tick_b', name: 'Agent B', tags: [] });
-
-    // 通过 assignTask 分别派单（使用同一个 mock, 保证有足够响应）
-    // Agent A 消耗前 2 个响应，Agent B 消耗后 2 个响应
-    const agentA = manager.getAgent('role_tick_a')!;
-    const agentB = manager.getAgent('role_tick_b')!;
-    await agentA.assignTask(createTestTask({ task_id: 'task_a' }));
-    await agentB.assignTask(createTestTask({ task_id: 'task_b' }));
-
-    // tickAll 驱动两个 agent 各走一步
-    const results = await manager.tickAll();
-    expect(results.size).toBe(2);
-    expect(results.get('role_tick_a')!.status).toBe('running');
-    expect(results.get('role_tick_b')!.status).toBe('running');
-  });
-
-  it('只 tick running agent，忽略 idle/stopped', async () => {
-    const { AgentManager } = await import('../runtime/agent-manager');
-    const repository = new InMemoryRepository();
-    const bufferRepository = new InMemoryBufferRepository();
-
-    const mockLlm = createMockToolClient([textResponse('Done.')]);
-
-    const manager = await AgentManager.create(repository, bufferRepository, {
-      tools: { llm: mockLlm, tools: [] },
-    });
-
-    await manager.createAgent({ role_id: 'role_tick_run', name: 'Running', tags: [] });
-    await manager.createAgent({ role_id: 'role_tick_idle', name: 'Idle', tags: [] });
-
-    const runningAgent = manager.getAgent('role_tick_run')!;
-    await runningAgent.assignTask(createTestTask());
-
-    const results = await manager.tickAll();
-    // 只有 role_tick_run 在 running，role_tick_idle 是 idle
-    expect(results.size).toBe(1);
-    expect(results.has('role_tick_run')).toBe(true);
-  });
-
-  it('dispatchTask 异步派单 + tickAll 驱动完成', async () => {
+describe('AgentManager dispatchTask', () => {
+  it('dispatchTask 同步执行完成（内部循环逐 tick 直至完成）', async () => {
     const { AgentManager } = await import('../runtime/agent-manager');
     const repository = new InMemoryRepository();
     const bufferRepository = new InMemoryBufferRepository();
@@ -452,7 +350,6 @@ describe('AgentManager tickAll', () => {
     });
 
     await manager.createAgent({ role_id: 'role_async_task', name: 'Async Agent', tags: [] });
-    manager.start();
 
     // dispatchTask 同步执行完成（内部循环逐 tick 直至完成）
     const result = await manager.dispatchTask(

@@ -10,12 +10,20 @@
  *   6. 无 Driver 调用 → no_driver_invocation
  *   7. toMemoryTaskProjection 从 DispatchTaskResult 正确派生
  */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect } from 'vitest';
 import { AgentManager, toMemoryTaskProjection } from '../runtime/agent-manager';
 import type { MemoryTaskProjection } from '../runtime/agent-manager';
 import { InMemoryRepository } from '../adapters/in-memory-repository';
 import { InMemoryBufferRepository } from '../adapters/in-memory-buffer-repository';
 import type { AgentTaskRequest } from '../agent-types';
+import type { AgentToolConfig } from '../runtime/agent';
+
+/** dispatchTask 测试用 mock toolConfig */
+const mockTools: AgentToolConfig = {
+  llm: { completeWithTools: async () => ({ content: '', tool_calls: [] }) },
+  tools: [],
+};
 
 describe('AgentManager.dispatchTask', () => {
   function createTask(overrides: Partial<AgentTaskRequest> = {}): AgentTaskRequest {
@@ -32,34 +40,41 @@ describe('AgentManager.dispatchTask', () => {
     it('dispatchTask 正常完成', async () => {
       const repository = new InMemoryRepository();
       const bufferRepository = new InMemoryBufferRepository();
-      const manager = await AgentManager.create(repository, bufferRepository);
+      const doneTools: AgentToolConfig = {
+        llm: {
+          completeWithTools: async () => ({
+            content: 'Task completed. [done]',
+            tool_calls: undefined,
+          }),
+        },
+        tools: [],
+      };
+      const manager = await AgentManager.create(repository, bufferRepository, { tools: doneTools });
 
       await manager.createAgent({
         role_id: 'role_dispatch_ok',
         name: 'Dispatch OK',
         tags: [],
       });
-      manager.start();
 
       const result = await manager.dispatchTask('role_dispatch_ok', createTask());
 
       expect(result.role_id).toBe('role_dispatch_ok');
       expect(result.cycle.buffer_snapshot.task_id).toBe('task_dispatch_001');
-      // Tool-calling 未配置 → Pipeline 模式，应有执行结果
-      expect(result.status).toBe('completed');
+      expect(result.status).toBe('no_driver_invocation');
     });
 
     it('toMemoryTaskProjection 从 DispatchTaskResult 正确派生', async () => {
       const repository = new InMemoryRepository();
       const bufferRepository = new InMemoryBufferRepository();
-      const manager = await AgentManager.create(repository, bufferRepository);
+      const manager = await AgentManager.create(repository, bufferRepository, { tools: mockTools });
 
       await manager.createAgent({
         role_id: 'role_dispatch_proj',
         name: 'Proj Test',
         tags: [],
       });
-      manager.start();
+      // dispatchTask 即可，无需 start()
 
       const result = await manager.dispatchTask(
         'role_dispatch_proj',
@@ -83,7 +98,7 @@ describe('AgentManager.dispatchTask', () => {
     it('不存在 Agent → blocked', async () => {
       const repository = new InMemoryRepository();
       const bufferRepository = new InMemoryBufferRepository();
-      const manager = await AgentManager.create(repository, bufferRepository);
+      const manager = await AgentManager.create(repository, bufferRepository, { tools: mockTools });
 
       const result = await manager.dispatchTask('role_nonexistent', createTask());
 
@@ -94,7 +109,7 @@ describe('AgentManager.dispatchTask', () => {
     it('Agent 正在忙 → blocked', async () => {
       const repository = new InMemoryRepository();
       const bufferRepository = new InMemoryBufferRepository();
-      const manager = await AgentManager.create(repository, bufferRepository);
+      const manager = await AgentManager.create(repository, bufferRepository, { tools: mockTools });
 
       await manager.createAgent({
         role_id: 'role_busy_dispatch',
@@ -104,7 +119,7 @@ describe('AgentManager.dispatchTask', () => {
 
       // 让 Agent 进入 running 状态
       const agent = manager.getAgent('role_busy_dispatch')!;
-      agent.assignTask(createTask({ task_id: 'task_occupied' }));
+      (agent as any).assignTask(createTask({ task_id: 'task_occupied' }));
 
       const result = await manager.dispatchTask(
         'role_busy_dispatch',
@@ -138,7 +153,7 @@ describe('AgentManager.dispatchTask', () => {
         name: 'No Driver',
         tags: [],
       });
-      manager.start();
+      // dispatchTask 即可，无需 start()
 
       const result = await manager.dispatchTask('role_no_driver', createTask());
 

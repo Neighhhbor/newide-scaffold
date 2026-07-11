@@ -71,8 +71,6 @@ export interface AgentRuntimeConfig {
     /** 额外的自定义工具（如 request_council 等） */
     additional?: Tool[];
   };
-  /** 可选的 AgentRunDeps（后处理链，默认使用 MVP deps） */
-  deps?: AgentManagerOptions['deps'];
 }
 
 // ──────────────────────────────────────────────
@@ -112,14 +110,13 @@ export async function createAgentRuntime(config: AgentRuntimeConfig): Promise<Ag
   }
 
   // 3. 构建 AgentManagerOptions
-  const managerOptions = {
-    ...(config.deps ? { deps: config.deps } : {}),
+  const managerOptions: AgentManagerOptions = {
     tools: {
       llm: config.llm,
       tools,
       ...(config.systemPrompt ? { systemPrompt: config.systemPrompt } : {}),
     },
-  } as AgentManagerOptions;
+  };
 
   // 4. 返回 AgentManager（async create 自动加载所有已注册 Agent）
   return AgentManager.create(repository, bufferRepository, managerOptions);

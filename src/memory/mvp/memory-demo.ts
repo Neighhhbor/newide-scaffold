@@ -3,9 +3,9 @@
  *
  * 展示完整流程：
  *   多 Agent 自评 → collectCompetitionClaims（只返回参选者）
- *   → 外部选 Agent → dispatchTask（自定义 mock driver）
- *   → 主动 extractBuffer（真实 LLM 提取）
- *   → 主动 promoteExperiences（真实 LLM 晋升）
+ *   → 外部选 Agent → dispatchTask（真实 LLM + mock InvokeDriverTool）
+ *   → extractBuffer（真实 LLM 提取）
+ *   → promoteExperiences（真实 LLM 晋升）
  *
  * 运行：npx tsx src/memory/mvp/memory-demo.ts
  */
@@ -13,18 +13,18 @@ import { AgentManager } from '../runtime/agent-manager';
 import { InMemoryRepository } from '../adapters/in-memory-repository';
 import { InMemoryBufferRepository } from '../adapters/in-memory-buffer-repository';
 import { createAgentMemoryScope } from '../adapters/agent-memory-scope';
-import {
-  extractBufferForAgent,
-  promoteExperiencesForAgent,
-  ingestTaskBuffer,
-} from '../services/memory-cycle';
+import { extractBufferForAgent, promoteExperiencesForAgent } from '../services/memory-cycle';
 import { LiteLLMClientAdapter } from '../adapters/litellm-client-adapter';
-import type { AgentRunDeps } from '../runtime/agent-run-deps';
+import { DeepSeekToolCallingClient } from '../adapters/deepseek-tool-calling-client';
+import { InvokeDriverTool } from '../runtime/tools/invoke-driver-tool';
 import type { DriverReturn } from '../schemas';
 
 // ═══════════════════════════════════════
-// 自定义 mock DriverReturn — 带中文细节
+// 真实 LLM
 // ═══════════════════════════════════════
+
+const llmClient = new LiteLLMClientAdapter();
+const toolLlm = new DeepSeekToolCallingClient();
 
 const mockDriverReturn: DriverReturn = {
   summary: '成功修复登录页面 CSS 布局问题',
@@ -57,31 +57,6 @@ const mockDriverReturn: DriverReturn = {
 };
 
 // ═══════════════════════════════════════
-// 自定义 pipeline deps — mock driver + 空提取/晋升
-// ═══════════════════════════════════════
-
-const mockPipelineDeps: AgentRunDeps = {
-  queryMemory: async () => ({ experiences: [], skills: [] }),
-  planTaskInstruction: async (task) => task.spec,
-  invokeDriver: async () => mockDriverReturn,
-  extractor: {
-    extract: async () => ({
-      experiences: [],
-      result: {
-        experiences_created: 0,
-        experiences_updated: 0,
-        negative_experiences: 0,
-        skills_promoted: 0,
-      },
-    }),
-  },
-  promote: async () => ({
-    check: { eligible: false, auto_approved: false, reasons: [], blocking_rules: ['deferred'] },
-  }),
-  contextCleaner: { clean: async () => null },
-};
-
-// ═══════════════════════════════════════
 // 主流程
 // ═══════════════════════════════════════
 
@@ -89,9 +64,12 @@ async function main(): Promise<void> {
   const repository = new InMemoryRepository();
   const bufferRepository = new InMemoryBufferRepository();
 
-  // Manager 使用 mock pipeline（提取/晋升延迟到手动调用）
+  // Manager 使用 LiteLLMClientAdapter（同时支持 LlmClient + ToolCallingClient）
   const manager = await AgentManager.create(repository, bufferRepository, {
-    deps: mockPipelineDeps,
+    tools: {
+      llm: toolLlm,
+      tools: [new InvokeDriverTool(async () => mockDriverReturn)],
+    },
   });
 
   // ── Step 1: 创建多个 Agent ──
@@ -146,7 +124,6 @@ async function main(): Promise<void> {
   const winner = batch.claims[0]!;
   console.log(`\n=== 3. 派发给 ${winner.role_id} — dispatchTask ===`);
 
-  manager.start();
   const dispatchResult = await manager.dispatchTask(winner.role_id, task);
   console.log(`  状态: ${dispatchResult.status}`);
   console.log(`  buffer 序号: ${dispatchResult.cycle.buffer_seq}`);
@@ -164,36 +141,25 @@ async function main(): Promise<void> {
   // ── Step 4: 主动 LLM 提取 + 晋升（分两步）──
   console.log('\n=== 4. 主动提取 + 晋升 ===');
 
-  const llm = new LiteLLMClientAdapter();
   const memory = createAgentMemoryScope(repository, bufferRepository, winner.role_id);
 
-  // dispatchTask 的 pipeline 已处理 buffer，手动重新注入一条待处理 buffer
-  const ingested = await ingestTaskBuffer(memory, {
-    task,
-    task_id: task.task_id,
-    call_id: task.call_id,
-    source_driver: task.source_driver,
-    driver_return: mockDriverReturn,
-  });
-  console.log(`  注入待处理 buffer: seq=${ingested.seq}`);
+  // dispatchTask 返回的 buffer 已包含完整的 mockDriverReturn
+  // 直接用它的 seq 进行提取和晋升
+  const seq = dispatchResult.cycle.buffer_seq;
 
   // 4a. 仅提取（使用 extractBufferForAgent — 传 role_id 即可）
   console.log('\n  ── 4a. extractBufferForAgent ──');
   console.log('  >> 输入: buffer snapshot (driver_return)');
-  console.log(`     summary: ${ingested.snapshot.driver_return.summary}`);
-  console.log(
-    `     decisions: ${JSON.stringify(ingested.snapshot.driver_return.decisions, null, 4)}`,
-  );
-  console.log(
-    `     artifacts: ${JSON.stringify(ingested.snapshot.driver_return.artifacts, null, 4)}`,
-  );
+  console.log(`     summary: ${dr.summary}`);
+  console.log(`     decisions: ${JSON.stringify(dr.decisions, null, 4)}`);
+  console.log(`     artifacts: ${JSON.stringify(dr.artifacts, null, 4)}`);
 
   const extraction = await extractBufferForAgent(
     winner.role_id,
-    ingested.seq,
+    seq,
     repository,
     bufferRepository,
-    llm,
+    llmClient,
   );
 
   console.log(`  << 输出: ExtractionOutput`);
@@ -243,7 +209,7 @@ async function main(): Promise<void> {
     winner.role_id,
     repository,
     bufferRepository,
-    llm,
+    llmClient,
   );
 
   console.log(`  << 输出: ${outcomes.length} 个 PromotionOutcome`);

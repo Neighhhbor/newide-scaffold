@@ -1,39 +1,26 @@
 /**
  * Agent 运行时（员工）
  *
- * 持有 AgentMemoryScope 与可注入的 AgentRunDeps；负责 bid、runOnce 状态机。
+ * 持有 AgentMemoryScope，通过 LLM tool-calling 执行任务。
  *
- * ## 两种执行模式
+ * ## 执行模式
  *
- * 1. **Pipeline 模式**（默认）— 硬编码的「查记忆 → Driver → buffer → 提取 → 晋升」流程
- *    通过 AgentRunDeps 注入各环节实现，由 runTaskMemoryCycle 编排。
+ * Tool-calling 模式 — Agent 的 LLM 自主调用工具（query_memory / invoke_driver 等），
+ * 通过 `executeTask()` 或 `runOnce()` 触发内部逐 tick 循环。
  *
- * 2. **Tool-calling 模式**（传入 toolConfig 时启用）— 顶层 Agent 的 LLM 自主 tool-calling
- *    拥有 query_memory/invoke_driver 等工具，自主决策执行流程。
- *    Driver 作为插槽由外部注入，memory 模块不关心其内部实现。
+ * ## 构造方式
  *
- * ## 两种执行路径
- *
- * - `runOnce(task)` — 同步一次性执行（Pipeline / Tool-calling 均可），向后兼容
- * - `assignTask(task)` + 多次 `runLoopTick()` — 异步逐 tick 执行（仅 Tool-calling 模式）
- *
- * ## 向后兼容
- *
- * - `new Agent(memory)` 或 `new Agent(memory, deps)` → Pipeline 模式
- * - `new Agent(memory, deps, { llm, tools })` → Tool-calling 模式
- * - `runOnce()` 在两种模式下均可用
- * - 所有现有代码和测试不受影响
+ * ```ts
+ * const agent = new Agent(memory, { llm, tools: [...] });
+ * ```
  */
 import type { AgentHandle, DriverReturn, AgentStatus } from '../schemas';
 import type { AgentMemoryScope } from '../ports/agent-memory-scope';
 import type { AgentLoopState, AgentLoopTickResult, AgentTaskRequest } from '../agent-types';
 import type { MemoryCycleResult } from '../types';
-import type { AgentRunDeps } from './agent-run-deps';
 import type { CompetitionClaimEvaluator } from '../ports/competition-claim-evaluator';
 import type { AgentCompetitionClaim } from '../competition-types';
 import { createMockCompetitionClaimEvaluator } from '../adapters/mock-competition-claim-evaluator';
-import { runTaskMemoryCycle } from '../services/memory-cycle';
-import { defaultMvpAgentRunDeps } from '../mvp/default-agent-run-deps';
 import { ToolRegistry, type Tool, type ToolCallMessage, type ToolCallingClient } from './tool';
 import { createId, nowTimestamp } from '../../core';
 import { writePendingBuffer } from '../services/buffer-writer';
@@ -82,14 +69,11 @@ export class Agent {
 
   constructor(
     private readonly memory: AgentMemoryScope,
-    private readonly deps: AgentRunDeps = defaultMvpAgentRunDeps,
-    toolConfig?: AgentToolConfig,
+    toolConfig: AgentToolConfig,
     evaluator?: CompetitionClaimEvaluator,
   ) {
     this.toolConfig = toolConfig;
-    if (toolConfig) {
-      this.toolRegistry = new ToolRegistry(toolConfig.tools);
-    }
+    this.toolRegistry = new ToolRegistry(toolConfig.tools);
     this.evaluator = evaluator ?? createMockCompetitionClaimEvaluator('participate');
   }
 
@@ -108,29 +92,6 @@ export class Agent {
   /** 是否有待处理的任务 */
   hasPendingTask(): boolean {
     return this.currentTask !== null;
-  }
-
-  /**
-   * 目标态持久 run loop 入口。
-   *
-   * 当前不会启动后台 worker 或任务队列，只把 Agent 放入 sleeping 状态，等待
-   * AgentManager.submitTask 通过 assignTask 显式派发任务。
-   */
-  startLoop(): void {
-    if (this.state !== 'stopped') {
-      this.state = 'sleeping';
-    }
-  }
-
-  wake(): void {
-    if (this.state === 'sleeping') {
-      this.state = 'idle';
-    }
-  }
-
-  stop(): void {
-    this.state = 'stopped';
-    this.clearLoopState();
   }
 
   /**
@@ -207,7 +168,7 @@ export class Agent {
    *
    * 调用前必须先通过 assignTask 设置任务。
    */
-  async runLoopTick(): Promise<AgentLoopTickResult> {
+  private async runLoopTick(): Promise<AgentLoopTickResult> {
     // 没有任务 → idle
     if (!this.currentTask) {
       return { status: 'idle', reason: 'No pending task.' };
@@ -312,7 +273,7 @@ export class Agent {
    *
    * @throws 如果 Agent 已有正在运行的任务
    */
-  async assignTask(task: AgentTaskRequest): Promise<void> {
+  private async assignTask(task: AgentTaskRequest): Promise<void> {
     if (this.currentTask) {
       throw new Error(
         `Agent ${this.memory.role_id} already has a running task (${this.currentTask.task_id}). ` +
@@ -357,10 +318,7 @@ export class Agent {
   async runOnce(task: AgentTaskRequest): Promise<MemoryCycleResult> {
     this.state = 'running';
     try {
-      if (this.toolConfig && this.toolRegistry) {
-        return await this.runOnceWithTools(task);
-      }
-      return await runTaskMemoryCycle(this.memory, task, this.deps);
+      return await this.runOnceWithTools(task);
     } finally {
       this.state = 'sleeping';
     }
@@ -382,26 +340,21 @@ export class Agent {
   async executeTask(task: AgentTaskRequest): Promise<MemoryCycleResult> {
     this.state = 'running';
     try {
-      if (this.toolConfig && this.toolRegistry) {
-        await this.assignTask(task);
+      await this.assignTask(task);
 
-        while (this.state === 'running') {
-          const tick = await this.runLoopTick();
-          if (tick.status === 'completed' || tick.status === 'idle') {
-            break;
-          }
+      while (this.state === 'running') {
+        const tick = await this.runLoopTick();
+        if (tick.status === 'completed' || tick.status === 'idle') {
+          break;
         }
-
-        const result = this.lastCycleResult;
-        if (!result) {
-          await this.finalizeLoop();
-          return this.lastCycleResult!;
-        }
-        return result;
       }
 
-      // Pipeline 降级
-      return await runTaskMemoryCycle(this.memory, task, this.deps);
+      const result = this.lastCycleResult;
+      if (!result) {
+        await this.finalizeLoop();
+        return this.lastCycleResult!;
+      }
+      return result;
     } finally {
       this.state = 'sleeping';
     }

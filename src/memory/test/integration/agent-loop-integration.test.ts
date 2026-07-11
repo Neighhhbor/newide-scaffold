@@ -42,7 +42,6 @@ function loadEnv(): void {
   const content = readFileSync(envPath, 'utf-8');
   for (const line of content.split('\n')) {
     const trimmed = line.trim();
-    // 跳过空行和注释
     if (!trimmed || trimmed.startsWith('#')) continue;
 
     const eqIndex = trimmed.indexOf('=');
@@ -51,7 +50,6 @@ function loadEnv(): void {
     const key = trimmed.slice(0, eqIndex).trim();
     const value = trimmed.slice(eqIndex + 1).trim();
 
-    // 只加载 DeepSeek 相关变量，不覆盖已存在的环境变量
     if (key === 'DEEPSEEK_API_KEY' && !process.env[key]) {
       process.env[key] = value;
     }
@@ -182,7 +180,7 @@ describe('Agent loop integration (real DeepSeek API)', () => {
         tags: [],
       });
 
-      manager.start();
+      // dispatchTask 即可，无需 start()
 
       // ── 6. 提交简单任务 ──
       //     任务应该足够简单，让 LLM 自然决定调用 invoke_driver
