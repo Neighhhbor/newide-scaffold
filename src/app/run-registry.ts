@@ -6,7 +6,7 @@
 import type { FrontendRunSnapshot } from '../coordinator/frontend-run-snapshot';
 
 export type AppRunMode = 'single_agent' | 'council';
-export type AppRunStatus = 'running' | 'completed' | 'failed';
+export type AppRunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 export type AppRunStage = 'executing' | 'council' | 'delivery' | 'intervention';
 
 export interface AppRunEvent {
@@ -44,6 +44,7 @@ type RunEventListener = (event: AppRunEvent) => void;
 
 interface MutableRunRecord extends AppRunSnapshot {
   listeners: Set<RunEventListener>;
+  controller?: AbortController;
 }
 
 const EVENT_NODE_CODES: Readonly<Record<string, string>> = {
@@ -66,7 +67,12 @@ export class InMemoryRunRegistry {
 
   constructor(private readonly now: () => string = () => new Date().toISOString()) {}
 
-  create(input: { run_id: string; task_id: string; mode: AppRunMode }): AppRunSnapshot {
+  create(input: {
+    run_id: string;
+    task_id: string;
+    mode: AppRunMode;
+    controller?: AbortController;
+  }): AppRunSnapshot {
     const record: MutableRunRecord = {
       schema_version: 'v0',
       revision: 0,
@@ -78,6 +84,7 @@ export class InMemoryRunRegistry {
       },
       events: [],
       listeners: new Set(),
+      ...(input.controller ? { controller: input.controller } : {}),
     };
     this.records.set(input.run_id, record);
     return this.clone(record);
@@ -101,6 +108,7 @@ export class InMemoryRunRegistry {
 
   complete(runId: string, snapshot: FrontendRunSnapshot): AppRunSnapshot {
     const record = this.require(runId);
+    if (record.status === 'cancelled') return this.clone(record);
     record.status = 'completed';
     record.current = { stage: 'delivery', active_node_code: 'N18' };
     record.snapshot = snapshot;
@@ -110,6 +118,7 @@ export class InMemoryRunRegistry {
 
   fail(runId: string, code: string, message: string): AppRunSnapshot {
     const record = this.require(runId);
+    if (record.status === 'cancelled') return this.clone(record);
     record.status = 'failed';
     record.current = { stage: 'intervention', active_node_code: 'N18' };
     record.error = { code, message };
@@ -119,6 +128,16 @@ export class InMemoryRunRegistry {
 
   getSnapshot(runId: string): AppRunSnapshot {
     return this.clone(this.require(runId));
+  }
+
+  cancel(runId: string): AppRunSnapshot {
+    const record = this.require(runId);
+    if (record.status !== 'running') return this.clone(record);
+    record.controller?.abort(new Error('Run cancelled'));
+    record.status = 'cancelled';
+    record.current = { stage: 'intervention', active_node_code: 'N18' };
+    this.appendEvent(runId, 'run.cancelled', { status: 'cancelled' });
+    return this.clone(record);
   }
 
   subscribe(runId: string, listener: RunEventListener): () => void {
@@ -134,7 +153,7 @@ export class InMemoryRunRegistry {
   }
 
   private clone(record: MutableRunRecord): AppRunSnapshot {
-    const { listeners: _listeners, ...snapshot } = record;
+    const { listeners: _listeners, controller: _controller, ...snapshot } = record;
     return { ...snapshot, current: { ...snapshot.current }, events: [...snapshot.events] };
   }
 }

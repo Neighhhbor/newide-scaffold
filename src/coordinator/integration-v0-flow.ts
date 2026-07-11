@@ -93,6 +93,7 @@ export interface IntegrationV0Options {
   councilProvider?: CouncilProvider;
   worktreePath?: string;
   telemetry?: TelemetrySink;
+  signal?: AbortSignal;
   onRunCreated?: (identity: { run_id: string; task_id: string }) => void;
 }
 
@@ -129,6 +130,7 @@ export interface IntegrationV0Result {
 export async function runIntegrationV0Flow(
   options?: IntegrationV0Options,
 ): Promise<IntegrationV0Result> {
+  options?.signal?.throwIfAborted();
   const orchestrator = new RuntimeOrchestrator(
     options?.telemetry ? { telemetry: options.telemetry } : undefined,
   );
@@ -213,6 +215,7 @@ export async function runIntegrationV0Flow(
     ],
     artifact_refs: [],
   });
+  options?.signal?.throwIfAborted();
   const contextEvent = orchestrator.appendEvent({
     event_type: 'memory.context_pack_built',
     subject_id: contextPack.context_pack_id,
@@ -334,6 +337,7 @@ export async function runIntegrationV0Flow(
       schema_version: SCHEMA_VERSION,
     });
   }
+  options?.signal?.throwIfAborted();
 
   if (agentExecutionResult) {
     const agentExecutionEvent = orchestrator.appendEvent({
@@ -443,6 +447,7 @@ export async function runIntegrationV0Flow(
     ...taskCompletedEvent,
     event_type: 'task.completed',
   });
+  options?.signal?.throwIfAborted();
 
   const hookEvent = orchestrator.appendEvent({
     event_type: 'hook.matched',
@@ -518,6 +523,7 @@ export async function runIntegrationV0Flow(
     gate_results: gateResults,
     evidence_pack: evidencePack,
   });
+  options?.signal?.throwIfAborted();
 
   if (selectionResult.council_decision) {
     const councilDecision = selectionResult.council_decision;
@@ -583,6 +589,7 @@ export async function runIntegrationV0Flow(
     task_id: task.task_id,
     artifacts: selectionResult.selected_artifacts,
   });
+  options?.signal?.throwIfAborted();
 
   const materializationEvent = orchestrator.appendEvent({
     event_type: 'worktree.materialized',

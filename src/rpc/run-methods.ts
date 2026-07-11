@@ -14,6 +14,7 @@ export interface RunMethodsService {
   createRun(params: RunCreateParams): Promise<RunCreateResult>;
   getSnapshot(runId: string): AppRunSnapshot;
   subscribe(runId: string, listener: (event: AppRunEvent) => void): () => void;
+  cancelRun(runId: string): { cancelled: true };
 }
 
 const createParamsSchema = z
@@ -58,6 +59,10 @@ export class RunRpcMethods {
       this.subscriptions.get(run_id)?.();
       this.subscriptions.delete(run_id);
       return { unsubscribed: true };
+    });
+    dispatcher.register('run.cancel', (params) => {
+      const { run_id } = parseParams(runIdParamsSchema, params);
+      return this.callWithRunError(() => this.service.cancelRun(run_id));
     });
   }
 
