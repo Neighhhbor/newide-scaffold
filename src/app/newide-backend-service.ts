@@ -38,6 +38,7 @@ export class NewideBackendService {
 
   createRun(params: RunCreateParams): Promise<RunCreateResult> {
     const mode = params.mode ?? 'single_agent';
+    const controller = new AbortController();
     return new Promise<RunCreateResult>((resolve, reject) => {
       let identity: { run_id: string; task_id: string } | undefined;
       const pendingTelemetry: TelemetryRecord[] = [];
@@ -57,10 +58,11 @@ export class NewideBackendService {
           prompt: params.prompt,
           mode,
           telemetry,
+          signal: controller.signal,
           onRunCreated: (created) => {
             if (identity) return;
             identity = created;
-            this.registry.create({ ...created, mode });
+            this.registry.create({ ...created, mode, controller });
             this.registry.appendEvent(created.run_id, 'run.started', { mode });
             for (const record of pendingTelemetry) this.appendTelemetry(created, record);
             resolve({ ...created, status: 'running' });
@@ -96,6 +98,11 @@ export class NewideBackendService {
 
   getSnapshot(runId: string): AppRunSnapshot {
     return this.registry.getSnapshot(runId);
+  }
+
+  cancelRun(runId: string): { cancelled: true } {
+    this.registry.cancel(runId);
+    return { cancelled: true };
   }
 
   subscribe(runId: string, listener: (event: AppRunEvent) => void): () => void {

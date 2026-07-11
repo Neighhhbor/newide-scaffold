@@ -52,4 +52,23 @@ describe('InMemoryRunRegistry', () => {
     expect(() => registry.getSnapshot('missing')).toThrow(RunNotFoundError);
     expect(() => registry.subscribe('missing', () => undefined)).toThrow(RunNotFoundError);
   });
+
+  it('aborts and records a running cancellation exactly once', () => {
+    const registry = new InMemoryRunRegistry(() => '2026-07-11T08:00:00.000Z');
+    const controller = new AbortController();
+    registry.create({
+      run_id: 'run_cancelled',
+      task_id: 'task_cancelled',
+      mode: 'single_agent',
+      controller,
+    });
+
+    expect(registry.cancel('run_cancelled')).toMatchObject({
+      status: 'cancelled',
+      current: { stage: 'intervention', active_node_code: 'N18' },
+      events: [{ sequence: 1, type: 'run.cancelled' }],
+    });
+    expect(controller.signal.aborted).toBe(true);
+    expect(registry.cancel('run_cancelled').events).toHaveLength(1);
+  });
 });

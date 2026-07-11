@@ -15,6 +15,7 @@ export interface CoordinatorRunRequest {
   prompt: string;
   mode: 'single_agent' | 'council';
   telemetry?: TelemetrySink;
+  signal?: AbortSignal;
   onRunCreated?: (identity: { run_id: string; task_id: string }) => void;
 }
 
@@ -26,7 +27,7 @@ export type IntegrationFlow = (options: IntegrationV0Options) => Promise<Integra
 
 type RunnerDefaults = Omit<
   IntegrationV0Options,
-  'driverPrompt' | 'enableCouncil' | 'telemetry' | 'onRunCreated'
+  'driverPrompt' | 'enableCouncil' | 'telemetry' | 'signal' | 'onRunCreated'
 >;
 
 export class IntegrationV0CoordinatorRunner implements CoordinatorRunner {
@@ -41,6 +42,7 @@ export class IntegrationV0CoordinatorRunner implements CoordinatorRunner {
       driverPrompt: request.prompt,
       enableCouncil: request.mode === 'council',
       ...(request.telemetry ? { telemetry: request.telemetry } : {}),
+      ...(request.signal ? { signal: request.signal } : {}),
       ...(request.onRunCreated ? { onRunCreated: request.onRunCreated } : {}),
     });
   }

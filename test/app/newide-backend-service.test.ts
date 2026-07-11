@@ -63,6 +63,31 @@ describe('NewideBackendService', () => {
       error: { code: 'RUNNER_FAILED', message: 'driver process exited' },
     });
   });
+
+  it('cancels the runner without replacing cancelled state with failure', async () => {
+    let receivedSignal: AbortSignal | undefined;
+    const service = new NewideBackendService({
+      run: async (request) => {
+        receivedSignal = request.signal;
+        request.onRunCreated?.({ run_id: 'run_cancelled', task_id: 'task_cancelled' });
+        await new Promise((_, reject) => {
+          request.signal?.addEventListener('abort', () => reject(request.signal?.reason), {
+            once: true,
+          });
+        });
+        throw new Error('unreachable');
+      },
+    });
+
+    await service.createRun({ prompt: 'Cancel safely' });
+    expect(service.cancelRun('run_cancelled')).toEqual({ cancelled: true });
+    expect(receivedSignal?.aborted).toBe(true);
+    await viWaitFor(() => service.getSnapshot('run_cancelled').status === 'cancelled');
+    expect(service.getSnapshot('run_cancelled')).toMatchObject({
+      status: 'cancelled',
+      events: [{ type: 'run.started' }, { type: 'run.cancelled' }],
+    });
+  });
 });
 
 async function viWaitFor(predicate: () => boolean): Promise<void> {
