@@ -26,7 +26,7 @@ export interface AppRunSnapshot {
   };
   events: AppRunEvent[];
   snapshot?: FrontendRunSnapshot;
-  error?: { code: string; message: string };
+  error?: { code: string; message: string; details?: Record<string, unknown> };
 }
 
 export class RunNotFoundError extends Error {
@@ -137,7 +137,13 @@ export class InMemoryRunRegistry {
     runId: string,
     input:
       | { status: 'completed'; snapshot: FrontendRunSnapshot }
-      | { status: 'failed'; code: string; message: string }
+      | {
+          status: 'failed';
+          code: string;
+          message: string;
+          details?: Record<string, unknown>;
+          snapshot?: FrontendRunSnapshot;
+        }
       | { status: 'cancelled' },
   ): StagedTerminalTransition | undefined {
     const record = this.require(runId);
@@ -151,7 +157,14 @@ export class InMemoryRunRegistry {
         : input.status === 'failed'
           ? 'run.failed'
           : 'run.cancelled';
-    const payload = input.status === 'failed' ? { code: input.code } : { status: input.status };
+    const payload =
+      input.status === 'failed'
+        ? {
+            code: input.code,
+            message: input.message,
+            ...(input.details ? { details: input.details } : {}),
+          }
+        : { status: input.status };
     const event = this.buildEvent(record, type, payload);
     const snapshot: AppRunSnapshot = {
       ...this.clone(record),
@@ -162,8 +175,18 @@ export class InMemoryRunRegistry {
         active_node_code: 'N18',
       },
       events: [...record.events, event],
-      ...(input.status === 'completed' ? { snapshot: input.snapshot } : {}),
-      ...(input.status === 'failed' ? { error: { code: input.code, message: input.message } } : {}),
+      ...((input.status === 'completed' || input.status === 'failed') && input.snapshot
+        ? { snapshot: input.snapshot }
+        : {}),
+      ...(input.status === 'failed'
+        ? {
+            error: {
+              code: input.code,
+              message: input.message,
+              ...(input.details ? { details: input.details } : {}),
+            },
+          }
+        : {}),
     };
     return { token, event, snapshot };
   }

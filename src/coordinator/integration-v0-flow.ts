@@ -17,7 +17,7 @@ import {
   type DriverRunResult,
   type DriverRuntimeHandle,
 } from '../driver';
-import { HookEngine } from '../hook';
+import { HookEngine, type HookEvent, type HookResult } from '../hook';
 import { DecisionAggregator, type GateResult } from '../gate';
 import {
   MockMemoryProvider,
@@ -32,7 +32,11 @@ import {
   type SelectionMode,
 } from './artifact-finalizer';
 import { buildDriverRunResultFromAgentExecution } from './agent-execution-driver-result';
-import { WorktreeMaterializer, type MaterializationResult } from './worktree-materializer';
+import {
+  WorktreeMaterializer,
+  type MaterializationInput,
+  type MaterializationResult,
+} from './worktree-materializer';
 import {
   MockCouncil,
   type CouncilDecision,
@@ -65,6 +69,7 @@ export interface IntegrationV0Summary {
   task_id: string;
   mode: SelectionMode;
   status: 'completed' | 'failed';
+  failure?: IntegrationV0Failure;
   worktree_path: string;
   artifacts_materialized: number;
   files_written: string[];
@@ -94,12 +99,34 @@ export interface IntegrationV0Summary {
   schema_version: SchemaVersion;
 }
 
+export interface IntegrationV0Failure {
+  code:
+    | 'DRIVER_FAILED'
+    | 'GATE_DENIED'
+    | 'GATE_BLOCKED'
+    | 'ARTIFACT_NOT_SELECTED'
+    | 'MATERIALIZATION_FAILED'
+    | 'MATERIALIZATION_PARTIAL';
+  message: string;
+  details: Record<string, unknown>;
+}
+
+export interface IntegrationV0HookEngine {
+  handleEvent(event: HookEvent): Promise<HookResult>;
+}
+
+export interface IntegrationV0Materializer {
+  materialize(input: MaterializationInput): Promise<MaterializationResult>;
+}
+
 export interface IntegrationV0Options {
   driver?: DriverRuntimeHandle;
   driverPrompt?: string;
   agentExecutionFacade?: AgentExecutionFacade;
   enableCouncil?: boolean;
   councilProvider?: CouncilProvider;
+  hookEngine?: IntegrationV0HookEngine;
+  materializer?: IntegrationV0Materializer;
   worktreePath?: string;
   runsRoot?: string;
   telemetry?: TelemetrySink;
@@ -437,29 +464,31 @@ export async function runIntegrationV0Flow(
   });
   timeline.push({ name: 'TaskCompleted', id: taskCompletedEvent.event_id });
 
-  const hookEngine = new HookEngine({
-    config: {
-      version: 'hook-0.1',
-      settings: {
-        fail_fast: false,
-        default_timeout: 30,
-        parallel: false,
-        output_format: 'json',
-        emergency_env_var: 'AGENT_EMERGENCY_SKIP',
-      },
-      gates: {
-        'allow-gate': {
-          type: 'command',
-          run: 'node -e "process.exit(0)"',
-          retry_threshold: 1,
+  const hookEngine =
+    options?.hookEngine ??
+    new HookEngine({
+      config: {
+        version: 'hook-0.1',
+        settings: {
+          fail_fast: false,
+          default_timeout: 30,
+          parallel: false,
+          output_format: 'json',
+          emergency_env_var: 'AGENT_EMERGENCY_SKIP',
+        },
+        gates: {
+          'allow-gate': {
+            type: 'command',
+            run: 'node -e "process.exit(0)"',
+            retry_threshold: 1,
+          },
+        },
+        hooks: {
+          'task.completed': [{ gate: 'allow-gate', priority: 100, timeout: 30 }],
         },
       },
-      hooks: {
-        'task.completed': [{ gate: 'allow-gate', priority: 100, timeout: 30 }],
-      },
-    },
-    aggregator: new DecisionAggregator(),
-  });
+      aggregator: new DecisionAggregator(),
+    });
 
   const hookResult = await hookEngine.handleEvent({
     ...taskCompletedEvent,
@@ -602,9 +631,11 @@ export async function runIntegrationV0Flow(
   timeline.push({ name: 'ArtifactSelected', id: selectionEvent.event_id });
 
   // 13. Worktree materialization (C: Coordinator)
-  const materializer = new WorktreeMaterializer({
-    baseWorktreePath: options?.worktreePath || '.newide/worktrees',
-  });
+  const materializer =
+    options?.materializer ??
+    new WorktreeMaterializer({
+      baseWorktreePath: options?.worktreePath || '.newide/worktrees',
+    });
 
   const materializationResult = await materializer.materialize({
     task_id: task.task_id,
@@ -634,6 +665,12 @@ export async function runIntegrationV0Flow(
   const materialized =
     materializationResult.status === 'completed' && materializationResult.files_written.length > 0;
   const flowCompleted = driverSucceeded && gatesPassed && hasSelectedArtifact && materialized;
+  const failure = buildIntegrationFailure({
+    driverResult,
+    gateResults,
+    hasSelectedArtifact,
+    materializationResult,
+  });
 
   // 15. Save checkpoint (C: Coordinator long-running state)
   const diffArtifactId =
@@ -718,6 +755,9 @@ export async function runIntegrationV0Flow(
     task_id: task.task_id,
     payload: {
       status: finalRunStatus,
+      ...(failure
+        ? { code: failure.code, message: failure.message, details: failure.details }
+        : {}),
     },
   });
   timeline.push({
@@ -746,6 +786,7 @@ export async function runIntegrationV0Flow(
     task_id: task.task_id,
     mode: selectionResult.mode,
     status: finalRunStatus,
+    ...(failure ? { failure } : {}),
     worktree_path: materializationResult.worktree_path,
     artifacts_materialized: materializationResult.materialized_artifacts.length,
     files_written: materializationResult.files_written,
@@ -865,4 +906,74 @@ export async function runIntegrationV0Flow(
     frontend_snapshot: frontendSnapshot,
     result_manifest: resultManifest,
   };
+}
+
+function buildIntegrationFailure(input: {
+  driverResult: DriverRunResult;
+  gateResults: GateResult[];
+  hasSelectedArtifact: boolean;
+  materializationResult: MaterializationResult;
+}): IntegrationV0Failure | undefined {
+  if (input.driverResult.status !== 'succeeded') {
+    return {
+      code: 'DRIVER_FAILED',
+      message: input.driverResult.error?.message ?? 'Driver execution failed',
+      details: { phase: 'driver', ...(input.driverResult.error ?? {}) },
+    };
+  }
+  const denied = input.gateResults.find((gate) => gate.decision === 'deny');
+  if (denied) {
+    return {
+      code: 'GATE_DENIED',
+      message: `Gate ${denied.gate_id} denied the run`,
+      details: { phase: 'gate', gate_results: input.gateResults },
+    };
+  }
+  const blocked = input.gateResults.find(
+    (gate) => gate.decision === 'ask' || gate.decision === 'defer',
+  );
+  if (blocked) {
+    return {
+      code: 'GATE_BLOCKED',
+      message: `Gate ${blocked.gate_id} blocked the run`,
+      details: { phase: 'gate', gate_results: input.gateResults },
+    };
+  }
+  if (!input.hasSelectedArtifact) {
+    return {
+      code: 'ARTIFACT_NOT_SELECTED',
+      message: 'No artifact was selected',
+      details: { phase: 'artifact_selection' },
+    };
+  }
+  const materializationDetails = {
+    phase: 'materialization',
+    status: input.materializationResult.status,
+    worktree_path: input.materializationResult.worktree_path,
+    files_written: input.materializationResult.files_written,
+    changed_files: input.materializationResult.changed_files,
+    failures: input.materializationResult.failures,
+  };
+  if (input.materializationResult.status === 'failed') {
+    return {
+      code: 'MATERIALIZATION_FAILED',
+      message: 'Worktree materialization failed',
+      details: materializationDetails,
+    };
+  }
+  if (input.materializationResult.status === 'partial') {
+    return {
+      code: 'MATERIALIZATION_PARTIAL',
+      message: 'Worktree materialization completed partially',
+      details: materializationDetails,
+    };
+  }
+  if (input.materializationResult.files_written.length === 0) {
+    return {
+      code: 'MATERIALIZATION_FAILED',
+      message: 'Worktree materialization wrote no files',
+      details: materializationDetails,
+    };
+  }
+  return undefined;
 }

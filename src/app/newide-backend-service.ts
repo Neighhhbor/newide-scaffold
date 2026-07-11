@@ -116,10 +116,13 @@ export class NewideBackendService {
             });
             if (staged) await this.persistTerminal(identity.run_id, staged);
           } else {
+            const failure = result.summary.failure;
             const staged = this.registry.stageTerminal(identity.run_id, {
               status: 'failed',
-              code: 'FLOW_FAILED',
-              message: 'Integration flow failed',
+              code: failure?.code ?? 'FLOW_FAILED',
+              message: failure?.message ?? 'Integration flow failed',
+              ...(failure?.details ? { details: failure.details } : {}),
+              snapshot: result.frontend_snapshot,
             });
             if (staged) await this.persistTerminal(identity.run_id, staged);
           }

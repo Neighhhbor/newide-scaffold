@@ -58,10 +58,14 @@ describe('RunRpcMethods', () => {
       sequence: 3,
       run_id: 'run_1',
       task_id: 'task_1',
-      type: 'run.completed',
+      type: 'run.failed',
       source: 'coordinator',
       created_at: '2026-07-11T08:00:00.000Z',
-      payload: { status: 'completed' },
+      payload: {
+        code: 'GATE_DENIED',
+        message: 'Gate policy-gate denied the run',
+        details: { phase: 'gate' },
+      },
       schema_version: 'v0',
     });
     await session.handleLine(
@@ -81,10 +85,14 @@ describe('RunRpcMethods', () => {
             sequence: 3,
             run_id: 'run_1',
             task_id: 'task_1',
-            type: 'run.completed',
+            type: 'run.failed',
             source: 'coordinator',
             created_at: '2026-07-11T08:00:00.000Z',
-            payload: { status: 'completed' },
+            payload: {
+              code: 'GATE_DENIED',
+              message: 'Gate policy-gate denied the run',
+              details: { phase: 'gate' },
+            },
             schema_version: 'v0',
           },
         },
