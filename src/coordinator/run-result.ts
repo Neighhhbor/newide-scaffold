@@ -13,6 +13,7 @@ import type { SchemaVersion, TaskId, RunId, Timestamp } from '../core';
 import type { SelectionMode } from './artifact-finalizer';
 import type { ArtifactOutput } from './artifact-output';
 import type { CouncilDecision } from '../council';
+import type { MaterializationFailure, MaterializationResult } from './worktree-materializer';
 
 export type RunResultStatus = 'completed' | 'failed';
 
@@ -35,6 +36,9 @@ export interface IntegrationRunResultManifest {
   mode: SelectionMode;
   driver_id: string;
   artifact_outputs: ArtifactOutput[];
+  changed_files: string[];
+  materialization_status: MaterializationResult['status'];
+  materialization_failures: MaterializationFailure[];
   result_path: string;
   summary_path: string;
   timeline_path: string;
@@ -90,6 +94,9 @@ export interface BuildRunResultManifestInput {
   mode: SelectionMode;
   driver_id: string;
   artifact_outputs: readonly ArtifactOutput[];
+  changed_files: readonly string[];
+  materialization_status: MaterializationResult['status'];
+  materialization_failures: readonly MaterializationFailure[];
   result_path: string;
   summary_path: string;
   timeline_path: string;
@@ -119,6 +126,9 @@ export function buildRunResultManifest(
     mode: input.mode,
     driver_id: input.driver_id,
     artifact_outputs: [...input.artifact_outputs],
+    changed_files: [...input.changed_files],
+    materialization_status: input.materialization_status,
+    materialization_failures: [...input.materialization_failures],
     result_path: input.result_path,
     summary_path: input.summary_path,
     timeline_path: input.timeline_path,

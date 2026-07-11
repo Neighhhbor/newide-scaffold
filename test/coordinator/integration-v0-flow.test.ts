@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import {
   runIntegrationV0Flow,
   type IntegrationV0Options,
@@ -358,6 +359,9 @@ describe('runIntegrationV0Flow', () => {
       mode: result.summary.mode,
       driver_id: result.summary.driver_diagnostics.driver_id,
       artifact_outputs: result.summary.artifact_outputs,
+      materialization_status: 'completed',
+      changed_files: result.materialization_result.changed_files,
+      materialization_failures: [],
       result_path: `.newide/runs/${result.run_id}/result.json`,
       summary_path: `.newide/runs/${result.run_id}/summary.json`,
       timeline_path: `.newide/runs/${result.run_id}/timeline.json`,
@@ -411,6 +415,22 @@ describe('runIntegrationV0Flow', () => {
 
     // Verify worktree path in summary matches materialization result
     expect(result.summary.worktree_path).toBe(result.materialization_result.worktree_path);
+    expect(result.materialization_result).toMatchObject({
+      status: 'completed',
+      failures: [],
+    });
+    expect(result.summary).toMatchObject({
+      materialization_status: 'completed',
+      changed_files: result.materialization_result.changed_files,
+      materialization_failures: [],
+    });
+    const generated = path.join(
+      result.materialization_result.worktree_path,
+      'generated/mock-driver-output.txt',
+    );
+    await expect(fs.readFile(generated, 'utf-8')).resolves.toBe(
+      `MockDriver completed task ${result.task_id}\n`,
+    );
   });
 
   it('should include materialized artifact outputs in summary', async () => {
@@ -422,7 +442,7 @@ describe('runIntegrationV0Flow', () => {
         artifact_id: artifact.artifact_id,
         type: artifact.type,
         uri: artifact.uri,
-        materialized_record_path: result.materialization_result.files_written[0],
+        materialized_path: result.materialization_result.files_written[0],
       }),
     ]);
   });

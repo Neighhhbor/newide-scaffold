@@ -68,6 +68,9 @@ export interface IntegrationV0Summary {
   worktree_path: string;
   artifacts_materialized: number;
   files_written: string[];
+  changed_files: string[];
+  materialization_status: MaterializationResult['status'];
+  materialization_failures: MaterializationResult['failures'];
   artifact_outputs: ArtifactOutput[];
   driver_diagnostics: {
     driver_id: string;
@@ -616,6 +619,9 @@ export async function runIntegrationV0Flow(
     payload: {
       worktree_path: materializationResult.worktree_path,
       files_written: materializationResult.files_written.length,
+      changed_files: materializationResult.changed_files,
+      status: materializationResult.status,
+      failures: materializationResult.failures,
     },
   });
   timeline.push({ name: 'WorktreeMaterialized', id: materializationEvent.event_id });
@@ -624,7 +630,8 @@ export async function runIntegrationV0Flow(
   const driverSucceeded = driverResult.status === 'succeeded';
   const gatesPassed = gateResults.length > 0 && gateResults.every((g) => g.decision === 'allow');
   const hasSelectedArtifact = selectionResult.selected_artifacts.length > 0;
-  const materialized = materializationResult.files_written.length > 0;
+  const materialized =
+    materializationResult.status === 'completed' && materializationResult.files_written.length > 0;
   const flowCompleted = driverSucceeded && gatesPassed && hasSelectedArtifact && materialized;
 
   // 15. Save checkpoint (C: Coordinator long-running state)
@@ -741,6 +748,9 @@ export async function runIntegrationV0Flow(
     worktree_path: materializationResult.worktree_path,
     artifacts_materialized: materializationResult.materialized_artifacts.length,
     files_written: materializationResult.files_written,
+    changed_files: materializationResult.changed_files,
+    materialization_status: materializationResult.status,
+    materialization_failures: materializationResult.failures,
     artifact_outputs: artifactOutputs,
     driver_diagnostics: {
       driver_id: driverResult.diagnostics.driver_id,
@@ -802,6 +812,9 @@ export async function runIntegrationV0Flow(
     mode: selectionResult.mode,
     driver_id: driverResult.diagnostics.driver_id,
     artifact_outputs: artifactOutputs,
+    changed_files: materializationResult.changed_files,
+    materialization_status: materializationResult.status,
+    materialization_failures: materializationResult.failures,
     result_path: outputPaths.result_path,
     summary_path: outputPaths.summary_path,
     timeline_path: outputPaths.timeline_path,
