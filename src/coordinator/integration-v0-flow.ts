@@ -1030,7 +1030,11 @@ function buildIntegrationFailure(input: {
     return {
       code: 'GATE_BLOCKED',
       message: 'Required gates were not evaluated',
-      details: { phase: 'gate', gate_phase: 'pre_selection', gate_results: [] },
+      details: {
+        phase: 'gate',
+        gate_phase: input.postCouncilGatesRequired ? 'pre_council' : 'pre_selection',
+        gate_results: [],
+      },
     };
   }
   const preGatePhase = input.postCouncilGatesRequired ? 'pre_council' : 'pre_selection';
