@@ -4,16 +4,59 @@ import type { AppRunSnapshot } from './run-registry';
 
 export function projectRunSnapshot(input: AppRunSnapshot): RunSnapshot {
   const rich = input.snapshot;
+  const task = rich?.task;
   const artifacts = asRecords(rich?.artifacts ?? []);
   const finalStatus = terminalStatus(input.status);
+  const runStarted = input.events.find((event) => event.type === 'run.started');
+  const terminalEvent = [...input.events]
+    .reverse()
+    .find((event) => ['run.completed', 'run.failed', 'run.cancelled'].includes(event.type));
 
   return {
+    ...(task ? { contract_version: 'frontend-workflow.v0.1' as const } : {}),
     schema_version: input.schema_version,
     run_id: input.run_id,
     task_id: input.task_id,
     mode: input.mode,
     status: input.status,
-    current: { ...input.current },
+    current: { ...input.current, ...(task ? { task_status: task.status } : {}) },
+    ...(task
+      ? {
+          task: {
+            task_id: task.task_id,
+            status: task.status,
+            spec: task.spec,
+            completion_criteria: [...task.completion_criteria],
+            risk_level: task.risk_level,
+            affected_paths: [...(task.affected_paths ?? [])],
+            ...(task.role_id ? { role_id: task.role_id } : {}),
+            ...(task.budget ? { budget: { ...task.budget } } : {}),
+            created_at: task.created_at,
+            updated_at: task.updated_at,
+            schema_version: task.schema_version,
+          },
+          run: {
+            run_id: input.run_id,
+            task_id: input.task_id,
+            status: input.status,
+            mode: input.mode,
+            event_ids: input.events.map((event) => event.event_id),
+            ...(runStarted ? { started_at: runStarted.created_at } : {}),
+            ...(terminalEvent ? { completed_at: terminalEvent.created_at } : {}),
+            checkpoint_id: rich.checkpoint.checkpoint_id,
+          },
+          flow: {
+            active_node_code: rich.flow.active_node_code,
+            node_statuses: asRecords(rich.flow.node_statuses),
+          },
+          delivery_report: {
+            worktree_path: rich.delivery_report.worktree_path,
+            files_written: [...rich.delivery_report.files_written],
+            artifacts_materialized: rich.delivery_report.artifacts_materialized,
+          },
+          links: asRecord(rich.links),
+        }
+      : {}),
     timeline: [...input.events],
     agent_runs: input.events
       .filter((event) => event.source === 'agent')

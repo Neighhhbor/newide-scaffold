@@ -14,8 +14,19 @@ interface JsonRpcMessage {
   error?: { code: number; message: string; data?: unknown };
 }
 
-const runnerDir = await createFakeAcpRunner();
+type SmokeMode = 'single_agent' | 'council' | 'all';
+
+const smokeMode = readSmokeMode(process.argv.slice(2));
+
+const configuredRunnerDir = process.env.RPC_SMOKE_ACP_RUNNER_DIR;
+const usesTemporaryRunner = configuredRunnerDir === undefined;
+const runnerDir = configuredRunnerDir
+  ? path.resolve(configuredRunnerDir)
+  : await createFakeAcpRunner();
 const invocationLog = path.join(runnerDir, 'invocations.log');
+const runtime = usesTemporaryRunner
+  ? 'production-composition-fake-acp'
+  : 'production-composition-external-acp';
 const child = spawn('pnpm', ['backend:rpc'], {
   cwd: process.cwd(),
   env: { ...process.env, ACP_DRIVER_RUNNER_DIR: runnerDir },
@@ -53,26 +64,36 @@ const taskIds: string[] = [];
 let backendExitError: Error | undefined;
 
 try {
-  const single = await runAndVerify('single_agent');
-  const council = await runAndVerify('council');
-  const driverInvocations = await countDriverInvocations();
-  assert(driverInvocations === 6, `Expected 6 driver invocations, received ${driverInvocations}`);
-  const cancelled = await createAndCancel();
-  const parseError = await sendRaw('not-json\n', (message) => message.id === null);
-  assert(parseError.error?.code === -32700, 'Malformed JSON did not return parse error');
-  const unknown = await requestRaw('unknown.method', {});
-  assert(unknown.error?.code === -32601, 'Unknown method did not return -32601');
+  const single = smokeMode === 'council' ? undefined : await runAndVerify('single_agent');
+  const council = smokeMode === 'single_agent' ? undefined : await runAndVerify('council');
+  const driverInvocations = usesTemporaryRunner ? await countDriverInvocations() : undefined;
+  if (driverInvocations !== undefined) {
+    const expectedInvocations = smokeMode === 'all' ? 6 : smokeMode === 'single_agent' ? 1 : 5;
+    assert(
+      driverInvocations === expectedInvocations,
+      `Expected ${expectedInvocations} driver invocations, received ${driverInvocations}`,
+    );
+  }
+  const cancelled = smokeMode === 'all' ? await createAndCancel() : undefined;
+  const parseError =
+    smokeMode === 'all' ? await sendRaw('not-json\n', (message) => message.id === null) : undefined;
+  if (parseError) {
+    assert(parseError.error?.code === -32700, 'Malformed JSON did not return parse error');
+  }
+  const unknown = smokeMode === 'all' ? await requestRaw('unknown.method', {}) : undefined;
+  if (unknown) assert(unknown.error?.code === -32601, 'Unknown method did not return -32601');
 
   process.stdout.write(
     `${JSON.stringify({
       status: 'ok',
-      runtime: 'production-composition-fake-acp',
-      single_agent: single,
-      council,
-      driver_invocations: driverInvocations,
-      cancelled,
-      malformed_json_error: parseError.error?.code,
-      unknown_method_error: unknown.error?.code,
+      runtime,
+      mode: smokeMode,
+      ...(single ? { single_agent: single } : {}),
+      ...(council ? { council } : {}),
+      ...(driverInvocations === undefined ? {} : { driver_invocations: driverInvocations }),
+      ...(cancelled ? { cancelled } : {}),
+      ...(parseError ? { malformed_json_error: parseError.error?.code } : {}),
+      ...(unknown ? { unknown_method_error: unknown.error?.code } : {}),
     })}\n`,
   );
 } finally {
@@ -89,16 +110,21 @@ try {
       ...taskIds.map((taskId) =>
         fs.rm(`.newide/worktrees/${taskId}`, { recursive: true, force: true }),
       ),
-      fs.rm(runnerDir, { recursive: true, force: true }),
+      ...(usesTemporaryRunner ? [fs.rm(runnerDir, { recursive: true, force: true })] : []),
     ]);
   }
 }
 if (backendExitError) throw backendExitError;
 
 async function runAndVerify(mode: 'single_agent' | 'council'): Promise<Record<string, unknown>> {
+  const prompt = usesTemporaryRunner
+    ? `RPC smoke ${mode}`
+    : mode === 'single_agent'
+      ? '编写一个网页贪吃蛇游戏。请在工作区创建或覆盖 snake-single.html，要求可直接在浏览器打开运行，包含键盘控制、计分和重新开始功能。'
+      : '编写一个网页贪吃蛇游戏。请以 snake-council.html 为最终候选文件，要求可直接在浏览器打开运行，包含键盘控制、计分和重新开始功能。';
   const created = await request<{ run_id: string; task_id: string; status: 'running' }>(
     'run.create',
-    { prompt: `RPC smoke ${mode}`, mode },
+    { prompt, mode },
   );
   runIds.push(created.run_id);
   taskIds.push(created.task_id);
@@ -106,9 +132,26 @@ async function runAndVerify(mode: 'single_agent' | 'council'): Promise<Record<st
   const snapshot = await waitForTerminal(created.run_id);
   assert(snapshot.status === 'completed', `${mode} run ended as ${snapshot.status}`);
   assert(snapshot.timeline.length > 0, `${mode} snapshot has no timeline`);
+  assert(
+    snapshot.contract_version === 'frontend-workflow.v0.1',
+    `${mode} snapshot has no frontend workflow contract version`,
+  );
+  assert(snapshot.task?.task_id === created.task_id, `${mode} task view is inconsistent`);
+  assert(snapshot.task?.spec === prompt, `${mode} task view lost the submitted prompt`);
+  assert(snapshot.run?.run_id === created.run_id, `${mode} run view is inconsistent`);
+  assert(snapshot.run?.event_ids.length === snapshot.timeline.length, `${mode} event_ids drifted`);
+  assert(snapshot.flow?.node_statuses.length === 19, `${mode} flow has no N0-N18 projection`);
+  assert(snapshot.delivery_report?.worktree_path, `${mode} delivery has no worktree path`);
+  assert(snapshot.links?.result_path, `${mode} snapshot has no result link`);
   assert(snapshot.artifacts.length > 0, `${mode} snapshot has no artifacts`);
   assert(snapshot.gates.length > 0, `${mode} snapshot has no gates`);
   assert(snapshot.final_output?.status === 'completed', `${mode} final output is incomplete`);
+  const sourceFile = usesTemporaryRunner
+    ? undefined
+    : await validateSnakeArtifact(
+        snapshot,
+        mode === 'single_agent' ? 'snake-single.html' : 'snake-council.html',
+      );
   if (mode === 'council') {
     assert(snapshot.council?.verdict === 'select', 'Council snapshot has no selected decision');
     assert(
@@ -138,10 +181,14 @@ async function runAndVerify(mode: 'single_agent' | 'council'): Promise<Record<st
       'Council candidate content was not materialized',
     );
     const materialized = snapshot.final_output.files_written[0];
-    assert(
-      (await fs.readFile(materialized, 'utf8')).startsWith('production composition smoke '),
-      'Council materialized file does not contain driver output',
-    );
+    const materializedContent = await fs.readFile(materialized, 'utf8');
+    assert(materializedContent.length > 0, 'Council materialized file is empty');
+    if (usesTemporaryRunner) {
+      assert(
+        materializedContent.startsWith('production composition smoke '),
+        'Council materialized file does not contain fake driver output',
+      );
+    }
   }
   await assertRunFiles(created.run_id);
   const notificationTypes = messages
@@ -157,6 +204,8 @@ async function runAndVerify(mode: 'single_agent' | 'council'): Promise<Record<st
     run_id: created.run_id,
     events: snapshot.timeline.length,
     artifacts: snapshot.artifacts.length,
+    files_written: snapshot.final_output.files_written,
+    ...(sourceFile ? { source_file: sourceFile } : {}),
   };
 }
 
@@ -175,13 +224,48 @@ async function createAndCancel(): Promise<Record<string, unknown>> {
 }
 
 async function waitForTerminal(runId: string): Promise<RunSnapshot> {
-  const deadline = Date.now() + 30_000;
+  const timeoutMs = readTimeoutMs();
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const snapshot = await request<RunSnapshot>('run.getSnapshot', { run_id: runId });
     if (snapshot.status !== 'running') return snapshot;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error(`Run ${runId} did not reach a terminal state`);
+}
+
+async function validateSnakeArtifact(
+  snapshot: RunSnapshot,
+  expectedFilename: string,
+): Promise<string> {
+  const sourceFile = snapshot.artifacts
+    .map((artifact) => artifact.source_path ?? artifact.metadata?.path)
+    .find(
+      (artifactPath): artifactPath is string =>
+        typeof artifactPath === 'string' && path.basename(artifactPath) === expectedFilename,
+    );
+  assert(sourceFile, `No selected artifact points to ${expectedFilename}`);
+  const html = await fs.readFile(sourceFile, 'utf8');
+  const normalized = html.toLowerCase();
+  assert(normalized.includes('<html'), `${expectedFilename} is not an HTML document`);
+  assert(normalized.includes('<script'), `${expectedFilename} has no game script`);
+  assert(
+    normalized.includes('<canvas') || normalized.includes('grid'),
+    `${expectedFilename} has no game board`,
+  );
+  assert(/score|得分/.test(normalized), `${expectedFilename} has no score UI`);
+  assert(/restart|重新开始/.test(normalized), `${expectedFilename} has no restart UI`);
+  return sourceFile;
+}
+
+function readTimeoutMs(): number {
+  const value = Number(
+    process.env.RPC_SMOKE_TIMEOUT_MS ?? (usesTemporaryRunner ? 30_000 : 300_000),
+  );
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`RPC_SMOKE_TIMEOUT_MS must be a positive finite number: ${String(value)}`);
+  }
+  return value;
 }
 
 async function assertRunFiles(runId: string): Promise<void> {
@@ -306,4 +390,11 @@ process.stdin.on('end', () => {
     await fs.rm(directory, { recursive: true, force: true });
     throw error;
   }
+}
+
+function readSmokeMode(args: string[]): SmokeMode {
+  const modeIndex = args.indexOf('--mode');
+  const value = modeIndex >= 0 ? args[modeIndex + 1] : 'all';
+  if (value === 'single_agent' || value === 'council' || value === 'all') return value;
+  throw new Error(`Invalid --mode value: ${value ?? '(missing)'}`);
 }

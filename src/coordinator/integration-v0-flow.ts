@@ -577,6 +577,7 @@ export async function runIntegrationV0Flow(
       driver_result: driverResult,
       gate_results: preGateResults,
       evidence_pack: evidencePack,
+      question: task.spec,
     },
     {
       ...(options?.signal ? { signal: options.signal } : {}),
@@ -960,6 +961,7 @@ export async function runIntegrationV0Flow(
     frontend_snapshot_path: outputPaths.frontend_snapshot_path,
   };
   const frontendSnapshot = buildFrontendRunSnapshot({
+    task,
     summary,
     timeline,
     checkpoint: savedCheckpoint,
