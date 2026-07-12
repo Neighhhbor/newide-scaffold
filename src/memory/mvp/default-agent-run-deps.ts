@@ -25,7 +25,7 @@ import { mockPlanTaskInstruction } from './adapters/mock-task-instruction-planne
 export const defaultMvpAgentRunDeps: AgentRunDeps = {
   queryMemory: repositoryRetrieveMemoryForTask,
   planTaskInstruction: mockPlanTaskInstruction,
-  invokeDriver: async (input) => ({ report: await invokeMockDriver(input) }),
+  invokeDriver: invokeMockDriver,
   extractor: new RuleBasedExperienceExtractor(),
   promote: ruleBasedSkillPromotion,
   contextCleaner: new NullContextCleaner(),

@@ -14,7 +14,6 @@ import type { AgentTaskRequest } from '../agent-types';
 import type { MemoryQueryStrategy } from '../services/memory-query';
 import type { DriverContext, PromotionOutcome } from '../types';
 import type { TelemetrySink } from '../../telemetry/telemetry-sink';
-import type { DriverRunResult } from '../../driver';
 
 /**
  * 顶层 Agent 任务指令规划器。
@@ -30,22 +29,12 @@ export type TaskInstructionPlanner = (task: AgentTaskRequest) => Promise<string>
 export interface DriverInvokeInput {
   /** 本次任务 ID */
   task_id: string;
-  run_id?: string;
   /** Driver 调用 ID，写入 AgentContextSnapshot.driver_calls */
   call_id: string;
   /** 执行的 Driver 标识 */
   source_driver: string;
   /** Driver 可见的全部上下文：task_instruction + skills + experiences */
   driver_context: DriverContext;
-}
-
-export interface DriverInvocationResult {
-  report: DriverReturn;
-  execution?: DriverRunResult;
-}
-
-export interface DriverInvokeOptions {
-  signal?: AbortSignal;
 }
 
 /**
@@ -68,10 +57,7 @@ export interface AgentRunDeps {
   /** 顶层 Agent 规划 Driver 任务指令（非 task.spec） */
   planTaskInstruction: TaskInstructionPlanner;
   /** 携带 DriverContext 调用 Driver，返回 6 字段报告 */
-  invokeDriver: (
-    input: DriverInvokeInput,
-    options?: DriverInvokeOptions,
-  ) => Promise<DriverInvocationResult>;
+  invokeDriver: (input: DriverInvokeInput) => Promise<DriverReturn>;
   /** 从 buffer 原材料提取结构化经验 */
   extractor: ExperienceExtractor;
   /** 检查并将符合条件的经验晋升为 Skill */

@@ -27,7 +27,7 @@ export function createDefaultLlmAgentRunDeps(options?: DeepSeekLlmClientOptions)
   return {
     queryMemory: repositoryRetrieveMemoryForTask,
     planTaskInstruction: (task) => planner.plan(task),
-    invokeDriver: async (input) => ({ report: await invokeMockDriver(input) }),
+    invokeDriver: invokeMockDriver,
     extractor: new LlmExperienceExtractor(llm),
     promote: new LlmSkillPromotion(llm).promote,
     contextCleaner: new LlmContextCleaner(llm),
