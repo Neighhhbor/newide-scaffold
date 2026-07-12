@@ -335,6 +335,10 @@ pnpm exec tsx src/memory/test/integration/api-smoke.ts
 
 `extractBuffer()` 使用 LLM 提取经验并保存，但**不会**把 Buffer 从 `pending` 标记为 `processed`。这与 `processPendingBuffer()` 的行为不一致——后者在保存经验后会更新 Buffer 状态。调用方如果不了解这一区别，反复调用 `extractBuffer()` 会导致同一条 Buffer 被重复提取。
 
-### 10. PG Repository 测试未纳入 CI
+### 10. PG + File 组合的集成测试缺失
+
+当前 `PgMemoryRepository` 和 `FileBufferRepository` 各有独立的单元测试，但**没有**同时使用 PG + File 的组合集成测试（即 `createAgentRuntime({ storage: { pg: {...}, agentStateRoot: '...' } })` 跑完整 Agent loop 的测试）。生产环境使用 PG + File 时，Agent 从 dispatchTask 到写 Buffer 的完整链路没有自动化回归覆盖。
+
+### 11. PG Repository 测试未纳入 CI
 
 `pg-memory-repository.test.ts` 整个测试套件在缺少 `MEMORY_PG_TEST_URL` 环境变量时**完全跳过**（使用 `describe.skip`）。由于 CI 环境通常不提供 PostgreSQL 实例，这些测试从未在 CI 中运行，`PgMemoryRepository` 的回归无法被自动化捕获。
