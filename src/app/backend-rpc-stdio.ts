@@ -11,7 +11,12 @@ import { pathToFileURL } from 'node:url';
 import { IntegrationV0CoordinatorRunner } from '../coordinator/coordinator-runner';
 import { SynthesisAgentCouncilProvider } from '../council';
 import { CommandDriverTransport, ExternalDriverRuntime } from '../driver';
-import { InMemoryBufferRepository, InMemoryRepository } from '../memory';
+import {
+  InMemoryBufferRepository,
+  InMemoryRepository,
+  LiteLLMToolCallingClient,
+  type ToolCallingClient,
+} from '../memory';
 import { JsonRpcDispatcher, JsonRpcLineSession } from '../rpc/json-rpc-dispatcher';
 import { RunRpcMethods } from '../rpc/run-methods';
 import { DriverRuntimeAgentExecutionFacade } from './driver-runtime-agent-execution-facade';
@@ -28,8 +33,13 @@ export interface BackendRpcServer {
   close(): void;
 }
 
+export interface ProductionBackendServiceDependencies {
+  agentLlm?: ToolCallingClient;
+}
+
 export function createProductionBackendService(
   env: NodeJS.ProcessEnv = process.env,
+  dependencies: ProductionBackendServiceDependencies = {},
 ): NewideBackendService {
   const repoRoot = process.cwd();
   const runnerDir = path.resolve(
@@ -68,6 +78,7 @@ export function createProductionBackendService(
     driver,
     repository: new InMemoryRepository(),
     bufferRepository: new InMemoryBufferRepository(),
+    llm: dependencies.agentLlm ?? new LiteLLMToolCallingClient(),
   });
   const runner = new IntegrationV0CoordinatorRunner({
     driver,
