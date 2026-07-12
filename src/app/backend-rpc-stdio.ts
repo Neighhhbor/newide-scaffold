@@ -75,6 +75,7 @@ export function createProductionBackendService(
   });
   const manager = AgentManager.create(new InMemoryRepository(), new InMemoryBufferRepository(), {
     ...defaultMvpAgentRunDeps,
+    planTaskInstruction: async (task) => task.spec,
     invokeDriver: createDriverRuntimeInvoker(driver),
   });
   const agentExecutionFacade = new DriverRuntimeAgentExecutionFacade({

@@ -161,8 +161,18 @@ export interface CouncilRunRequest {
 
 export type CouncilRoundInput = CouncilRunRequest;
 
+export interface CouncilLifecycleEvent {
+  type:
+    | 'council.proposal.completed'
+    | 'council.review.completed'
+    | 'council.synthesis.completed'
+    | 'council.failed';
+  payload: Record<string, unknown>;
+}
+
 export interface CouncilExecutionOptions {
   signal?: AbortSignal;
+  onLifecycleEvent?: (event: CouncilLifecycleEvent) => void | Promise<void>;
 }
 
 export interface CouncilProvider {

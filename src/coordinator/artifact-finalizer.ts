@@ -11,6 +11,7 @@ import type { GateResult } from '../gate';
 import {
   MockCouncil,
   type CouncilDecision,
+  type CouncilLifecycleEvent,
   type CouncilProvider,
   type CouncilRunResult,
   type EvidencePack,
@@ -43,6 +44,7 @@ export interface ArtifactSelectionInput {
 
 export interface ArtifactSelectionExecutionOptions {
   signal?: AbortSignal;
+  onCouncilLifecycleEvent?: (event: CouncilLifecycleEvent) => void | Promise<void>;
 }
 
 export interface ArtifactSelectorOptions {
@@ -134,7 +136,14 @@ export class ArtifactSelector {
         evidence_pack: input.evidence_pack,
         schema_version: SCHEMA_VERSION,
       },
-      execution,
+      execution
+        ? {
+            ...(execution.signal ? { signal: execution.signal } : {}),
+            ...(execution.onCouncilLifecycleEvent
+              ? { onLifecycleEvent: execution.onCouncilLifecycleEvent }
+              : {}),
+          }
+        : undefined,
     );
     const councilDecision = councilRunResult.decision;
 

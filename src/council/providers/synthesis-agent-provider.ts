@@ -5,14 +5,11 @@
  * 不直接调用 A 方向 DriverRuntimeHandle。
  */
 import { SCHEMA_VERSION, createId, nowTimestamp, type ArtifactRef } from '../../core';
-import type {
-  AgentExecutionFacade,
-  AgentExecutionOptions,
-  AgentExecutionResult,
-} from '../../memory';
+import type { AgentExecutionFacade, AgentExecutionResult } from '../../memory';
 import type {
   CouncilDecision,
   CouncilExecutionOptions,
+  CouncilLifecycleEvent,
   CouncilOutput,
   CouncilProvider,
   CouncilRunResult,
@@ -21,6 +18,41 @@ import type {
   Proposal,
   Review,
 } from '../contract';
+
+export type CouncilRoleFailureCode =
+  | 'COUNCIL_PROPOSAL_FAILED'
+  | 'COUNCIL_REVIEW_FAILED'
+  | 'COUNCIL_SYNTHESIS_FAILED';
+
+type CouncilPhase = 'proposal' | 'review' | 'synthesis';
+
+export class CouncilRoleExecutionError extends Error {
+  readonly code: CouncilRoleFailureCode;
+  readonly phase = 'council';
+
+  constructor(
+    readonly council_phase: CouncilPhase,
+    readonly role_id: string,
+    readonly agent_status: AgentExecutionResult['status'],
+    readonly agent_run_id?: string,
+    readonly driver_run_result_id?: string,
+  ) {
+    super(`Council ${council_phase} role failed`);
+    this.name = 'CouncilRoleExecutionError';
+    this.code = failureCode(council_phase);
+  }
+
+  get details(): Record<string, unknown> {
+    return {
+      phase: this.phase,
+      council_phase: this.council_phase,
+      role_id: this.role_id,
+      agent_status: this.agent_status,
+      ...(this.agent_run_id ? { agent_run_id: this.agent_run_id } : {}),
+      ...(this.driver_run_result_id ? { driver_run_result_id: this.driver_run_result_id } : {}),
+    };
+  }
+}
 
 export interface SynthesisAgentCouncilProviderOptions {
   agentExecutionFacade: AgentExecutionFacade;
@@ -44,17 +76,23 @@ export class SynthesisAgentCouncilProvider implements CouncilProvider {
       'proposer_a',
       'Produce proposal A.',
       input.evidence_pack?.artifact_refs ?? [],
+      'proposal',
       options,
     );
+    const proposalA = buildProposal(input, proposerA);
+    await emitLifecycle(options, completedProposalEvent(proposalA, proposerA));
     const proposerB = await this.runRole(
       input,
       executionRunId,
       'proposer_b',
       'Produce proposal B.',
       input.evidence_pack?.artifact_refs ?? [],
+      'proposal',
       options,
     );
-    const generatedProposals = [buildProposal(input, proposerA), buildProposal(input, proposerB)];
+    const proposalB = buildProposal(input, proposerB);
+    await emitLifecycle(options, completedProposalEvent(proposalB, proposerB));
+    const generatedProposals = [proposalA, proposalB];
     const proposals = [...input.proposals, ...generatedProposals];
     const reviewer = await this.runRole(
       input,
@@ -62,18 +100,41 @@ export class SynthesisAgentCouncilProvider implements CouncilProvider {
       'reviewer',
       `Review proposals: ${proposals.map((proposal) => proposal.proposal_id).join(', ')}`,
       proposals.flatMap((proposal) => proposal.artifact_refs),
+      'review',
       options,
     );
     const reviews = proposals.map((proposal) => buildReview(proposal, reviewer));
+    await emitLifecycle(options, {
+      type: 'council.review.completed',
+      payload: {
+        role_id: reviewer.role_id,
+        agent_run_id: reviewer.agent_run_id,
+        driver_run_result_id: reviewer.driver_run_result_id,
+        proposal_ids: proposals.map((proposal) => proposal.proposal_id),
+        review_ids: reviews.map((review) => review.review_id),
+        artifact_refs: reviewer.artifact_refs.map((artifact) => artifact.artifact_id),
+      },
+    });
     const synthesizer = await this.runRole(
       input,
       executionRunId,
       'synthesizer',
       `Synthesize final candidate from proposals and reviews for: ${input.question}`,
       proposals.flatMap((proposal) => proposal.artifact_refs),
+      'synthesis',
       options,
     );
     const synthesis = buildSynthesis(input, proposals, reviews, synthesizer);
+    await emitLifecycle(options, {
+      type: 'council.synthesis.completed',
+      payload: {
+        role_id: synthesizer.role_id,
+        agent_run_id: synthesizer.agent_run_id,
+        driver_run_result_id: synthesizer.driver_run_result_id,
+        synthesis_id: synthesis.synthesis_id,
+        artifact_refs: synthesis.artifact_refs,
+      },
+    });
     const selectedArtifactRefs = synthesizer.artifact_refs.map((artifact) => artifact.artifact_id);
     const generatedArtifactRefs = [
       ...proposerA.artifact_refs,
@@ -105,25 +166,87 @@ export class SynthesisAgentCouncilProvider implements CouncilProvider {
     roleId: string,
     instruction: string,
     inputArtifactRefs: string[] = input.evidence_pack?.artifact_refs ?? [],
-    options?: AgentExecutionOptions,
+    phase: CouncilPhase,
+    options?: CouncilExecutionOptions,
   ): Promise<AgentExecutionResult> {
-    const result = await this.agentExecutionFacade.runAgent(
-      {
-        task_id: input.task_id,
-        run_id: executionRunId,
-        role_id: roleId,
-        instruction,
-        input_artifact_refs: inputArtifactRefs,
-        context_policy: 'council_synthesis_default',
-        schema_version: SCHEMA_VERSION,
-      },
-      options,
-    );
+    let result: AgentExecutionResult;
+    try {
+      result = await this.agentExecutionFacade.runAgent(
+        {
+          task_id: input.task_id,
+          run_id: executionRunId,
+          role_id: roleId,
+          instruction,
+          input_artifact_refs: inputArtifactRefs,
+          context_policy: 'council_synthesis_default',
+          schema_version: SCHEMA_VERSION,
+        },
+        options?.signal ? { signal: options.signal } : undefined,
+      );
+    } catch (error) {
+      if (options?.signal?.aborted) throw error;
+      const failure = new CouncilRoleExecutionError(phase, roleId, 'failed');
+      await emitFailureLifecycle(options, failure);
+      throw failure;
+    }
+    options?.signal?.throwIfAborted();
     if (result.status !== 'completed') {
-      throw new Error(`Council role ${roleId} failed with status ${result.status}`);
+      const failure = new CouncilRoleExecutionError(
+        phase,
+        roleId,
+        result.status,
+        result.agent_run_id,
+        result.driver_run_result_id,
+      );
+      await emitFailureLifecycle(options, failure);
+      throw failure;
     }
     return result;
   }
+}
+
+function completedProposalEvent(
+  proposal: Proposal,
+  result: AgentExecutionResult,
+): CouncilLifecycleEvent {
+  return {
+    type: 'council.proposal.completed',
+    payload: {
+      role_id: result.role_id,
+      agent_run_id: result.agent_run_id,
+      driver_run_result_id: result.driver_run_result_id,
+      proposal_id: proposal.proposal_id,
+      artifact_refs: proposal.artifact_refs,
+    },
+  };
+}
+
+function failedEvent(error: CouncilRoleExecutionError): CouncilLifecycleEvent {
+  return { type: 'council.failed', payload: { code: error.code, ...error.details } };
+}
+
+async function emitLifecycle(
+  options: CouncilExecutionOptions | undefined,
+  event: CouncilLifecycleEvent,
+): Promise<void> {
+  await options?.onLifecycleEvent?.(event);
+}
+
+async function emitFailureLifecycle(
+  options: CouncilExecutionOptions | undefined,
+  failure: CouncilRoleExecutionError,
+): Promise<void> {
+  try {
+    await emitLifecycle(options, failedEvent(failure));
+  } catch {
+    // Preserve the stable Council role error when its failure observer is unavailable.
+  }
+}
+
+function failureCode(phase: CouncilPhase): CouncilRoleFailureCode {
+  if (phase === 'proposal') return 'COUNCIL_PROPOSAL_FAILED';
+  if (phase === 'review') return 'COUNCIL_REVIEW_FAILED';
+  return 'COUNCIL_SYNTHESIS_FAILED';
 }
 
 function buildProposal(input: CouncilRoundInput, result: AgentExecutionResult): Proposal {
