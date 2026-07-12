@@ -5,7 +5,7 @@
  * Metrics、DriverReturn 等可校验、可落库的领域实体。不含运行时编排类。
  */
 
-import { z } from "zod";
+import { z } from 'zod';
 
 // ═══════════════════════════════════════════
 //  Enums
@@ -13,64 +13,49 @@ import { z } from "zod";
 
 /** 用户对任务完成情况的评分 */
 export const UserRatingSchema = z.enum([
-  "resolved",
-  "partially_resolved",
-  "unresolved",
-  "not_rated",
+  'resolved',
+  'partially_resolved',
+  'unresolved',
+  'not_rated',
 ]);
 export type UserRating = z.infer<typeof UserRatingSchema>;
 
 /** Agent 生命周期状态 */
-export const AgentStatusSchema = z.enum([
-  "created",
-  "active",
-  "idle",
-  "draining",
-  "retired",
-]);
+export const AgentStatusSchema = z.enum(['created', 'active', 'idle', 'draining', 'retired']);
 export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 
 /** Agent 退休原因枚举 */
 export const RetiredReasonSchema = z.enum([
-  "performance_degradation",
-  "inactivity",
-  "persona_drift",
-  "manual",
-  "split",
+  'performance_degradation',
+  'inactivity',
+  'persona_drift',
+  'manual',
+  'split',
 ]);
 export type RetiredReason = z.infer<typeof RetiredReasonSchema>;
 
 /** 缓冲区报告提取状态机 */
-export const ExtractionStatusSchema = z.enum([
-  "pending",
-  "processing",
-  "processed",
-  "dead_letter",
-]);
+export const ExtractionStatusSchema = z.enum(['pending', 'processing', 'processed', 'dead_letter']);
 export type ExtractionStatus = z.infer<typeof ExtractionStatusSchema>;
 
 /** 技能审核状态 */
-export const ReviewStatusSchema = z.enum(["pending", "approved", "rejected"]);
+export const ReviewStatusSchema = z.enum(['pending', 'approved', 'rejected']);
 export type ReviewStatus = z.infer<typeof ReviewStatusSchema>;
 
 /** 技能在市场中的状态 */
-export const MarketStatusSchema = z.enum([
-  "available",
-  "superseded",
-  "retired_unique",
-]);
+export const MarketStatusSchema = z.enum(['available', 'superseded', 'retired_unique']);
 export type MarketStatus = z.infer<typeof MarketStatusSchema>;
 
 /** 经验类型：正经验记录成功方案，负经验记录失败教训 */
-export const ExperienceTypeSchema = z.enum(["positive", "negative"]);
+export const ExperienceTypeSchema = z.enum(['positive', 'negative']);
 export type ExperienceType = z.infer<typeof ExperienceTypeSchema>;
 
 /** 引用的经验在本次任务中的效果 */
 export const EffectivenessSchema = z.enum([
-  "fully_effective",
-  "partially_effective",
-  "ineffective",
-  "not_applicable",
+  'fully_effective',
+  'partially_effective',
+  'ineffective',
+  'not_applicable',
 ]);
 export type Effectiveness = z.infer<typeof EffectivenessSchema>;
 
@@ -101,6 +86,8 @@ export const DriverReturnSchema = z.object({
   ),
   /** 任务执行的全局自然语言总结 */
   summary: z.string(),
+  /** 本次任务执行的整体效果评估 */
+  effectiveness: EffectivenessSchema.optional(),
   /** 关键决策记录：决策点 → 可选方案 → 最终选择 + 理由 */
   decisions: z.array(
     z.object({
@@ -471,21 +458,16 @@ export interface DerivedMetrics {
  * 纯函数，不依赖外部状态。
  * 活跃度评分使用公式：1 / (1 + daysSinceLastTask / 14)
  */
-export function calculateDerivedMetrics(
-  m: AgentMetrics,
-): DerivedMetrics {
+export function calculateDerivedMetrics(m: AgentMetrics): DerivedMetrics {
   const daysSinceLastTask = m.last_task_at
     ? (Date.now() - new Date(m.last_task_at).getTime()) / (1000 * 60 * 60 * 24)
     : 30;
 
   return {
-    success_rate:
-      m.tasks_completed > 0 ? m.tasks_succeeded / m.tasks_completed : 0,
+    success_rate: m.tasks_completed > 0 ? m.tasks_succeeded / m.tasks_completed : 0,
     bid_win_rate: m.tasks_bid > 0 ? m.tasks_won / m.tasks_bid : 0,
-    experience_density:
-      m.total_tasks > 0 ? m.experience_count / m.total_tasks : 0,
-    skill_density:
-      m.experience_count > 0 ? m.skill_count / m.experience_count : 0,
+    experience_density: m.total_tasks > 0 ? m.experience_count / m.total_tasks : 0,
+    skill_density: m.experience_count > 0 ? m.skill_count / m.experience_count : 0,
     activity_score: 1.0 / (1.0 + daysSinceLastTask / 14),
   };
 }
