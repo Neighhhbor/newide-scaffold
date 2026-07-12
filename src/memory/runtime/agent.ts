@@ -134,7 +134,7 @@ export class Agent {
         availability: {
           agent_status,
           loop_state: this.state,
-          busy: loop_state === 'running' ? true : undefined,
+          ...(loop_state === 'running' ? { busy: true } : {}),
         },
         generated_at: now,
       };
@@ -145,7 +145,7 @@ export class Agent {
         availability: {
           agent_status,
           loop_state: this.state,
-          busy: loop_state === 'running' ? true : undefined,
+          ...(loop_state === 'running' ? { busy: true } : {}),
         },
         generated_at: now,
       };
