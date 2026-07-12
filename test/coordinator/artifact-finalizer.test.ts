@@ -8,7 +8,7 @@ import { MockCouncil } from '../../src/coordinator/../council';
 import { SCHEMA_VERSION, createId, nowTimestamp, type ArtifactRef } from '../../src/core';
 import type { DriverRunResult } from '../../src/driver';
 import type { GateResult } from '../../src/gate';
-import type { EvidencePack } from '../../src/council';
+import type { CouncilProvider, EvidencePack } from '../../src/council';
 
 describe('ArtifactSelector', () => {
   const createMockDriverResult = (
@@ -65,9 +65,11 @@ describe('ArtifactSelector', () => {
 
   const createMockEvidencePack = (): EvidencePack => ({
     evidence_pack_id: createId('evidence_pack'),
+    task_id: 'task-1',
     context_pack_ref: 'context-1',
     artifact_refs: ['artifact-1'],
     gate_result_refs: ['gate-result-1'],
+    summary: 'Mock evidence pack for artifact selection tests',
     created_at: nowTimestamp(),
     schema_version: SCHEMA_VERSION,
   });
@@ -164,8 +166,16 @@ describe('ArtifactSelector', () => {
       expect(result.mode).toBe('council');
       expect(result.selected_artifacts).toHaveLength(1);
       expect(result.metadata.council_decision_id).toBeDefined();
+      expect(result.metadata.decision_mode).toBe('advisory');
       expect(result.metadata.proposal_id).toBeDefined();
-      expect(result.metadata.verdict).toBe('accept');
+      expect(result.metadata.verdict).toBe('select');
+      expect(result.metadata.can_create_merge_authorization).toBe(false);
+      expect(result.council_decision).toMatchObject({
+        task_id: 'task-1',
+        decision_mode: 'advisory',
+        verdict: 'select',
+        can_create_merge_authorization: false,
+      });
     });
 
     it('should not select artifact when no artifacts available', async () => {
@@ -186,8 +196,62 @@ describe('ArtifactSelector', () => {
 
       expect(result.mode).toBe('council');
       expect(result.selected_artifacts).toHaveLength(0);
-      // MockCouncil will accept the proposal, but we have no artifact to select
-      expect(result.metadata.verdict).toBe('accept');
+      // MockCouncil can select the proposal, but there is no driver artifact to materialize.
+      expect(result.metadata.verdict).toBe('select');
+    });
+
+    it('should select a council-generated artifact when decision points to it', async () => {
+      const synthesisArtifact: ArtifactRef = {
+        artifact_id: 'artifact_synthesis_001',
+        type: 'patch',
+        uri: 'artifact://patch/synthesis',
+        producer_id: 'synthesizer',
+        task_id: 'task-1',
+        created_at: nowTimestamp(),
+        schema_version: SCHEMA_VERSION,
+      };
+      const councilProvider: CouncilProvider = {
+        async runCouncilRound(input) {
+          const decision = {
+            decision_id: 'council_decision_001',
+            run_id: input.run_id,
+            task_id: input.task_id,
+            decision_mode: input.decision_mode,
+            selected_artifact_refs: [synthesisArtifact.artifact_id],
+            verdict: 'select' as const,
+            reason: 'Selected synthesis artifact.',
+            evidence_refs: [],
+            can_create_merge_authorization: false,
+            created_at: nowTimestamp(),
+            schema_version: SCHEMA_VERSION,
+          };
+
+          return {
+            council_run_id: 'council_run_001',
+            run_id: input.run_id,
+            task_id: input.task_id,
+            proposals: input.proposals,
+            reviews: [],
+            decision,
+            generated_artifact_refs: [synthesisArtifact],
+            selected_artifact_refs: [synthesisArtifact.artifact_id],
+            created_at: nowTimestamp(),
+            schema_version: SCHEMA_VERSION,
+          };
+        },
+      };
+      const selector = createArtifactSelector('council', councilProvider);
+
+      const result = await selector.selectArtifacts({
+        run_id: 'run-1',
+        task_id: 'task-1',
+        driver_result: createMockDriverResult('succeeded'),
+        gate_results: [createMockGateResult('allow')],
+        evidence_pack: createMockEvidencePack(),
+      });
+
+      expect(result.selected_artifacts).toEqual([synthesisArtifact]);
+      expect(result.metadata.generated_artifact_refs).toEqual(['artifact_synthesis_001']);
     });
 
     it('should throw when councilProvider is missing in council mode', async () => {

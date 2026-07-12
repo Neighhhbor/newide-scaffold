@@ -31,3 +31,8 @@ src/memory/docs/
 # Claude Code 本地文件
 **/CLAUDE.md
 .claude/
+
+# ZCode 本地计划文件
+.zcode/
+
+/.npmrc

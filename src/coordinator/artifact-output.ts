@@ -13,6 +13,7 @@ export interface ArtifactOutput {
   type: ArtifactRef['type'];
   uri: string;
   source_path?: string;
+  materialized_path?: string;
   materialized_record_path?: string;
 }
 
@@ -40,9 +41,19 @@ export function buildArtifactOutputs(input: BuildArtifactOutputsInput): Artifact
     if (materializedRecordPath) {
       output.materialized_record_path = materializedRecordPath;
     }
+    const materializedPath = findMaterializedPath(artifact, input.materialized_record_paths);
+    if (materializedPath) output.materialized_path = materializedPath;
 
     return output;
   });
+}
+
+function findMaterializedPath(artifact: ArtifactRef, paths: readonly string[]): string | undefined {
+  if (artifact.content?.target_path) {
+    return paths.find((filePath) => filePath.endsWith(artifact.content!.target_path!));
+  }
+  if (artifact.content && paths.length === 1) return paths[0];
+  return undefined;
 }
 
 function readStringMetadata(

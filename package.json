@@ -18,6 +18,9 @@
     "verify": "pnpm lint && pnpm typecheck && pnpm test",
     "example:basic": "tsx src/examples/basic-flow.ts",
     "example:integration-v0": "tsx src/examples/integration-v0.ts",
+    "example:driver-adapter": "tsx src/examples/driver-adapter-flow.ts",
+    "backend:rpc": "node --import tsx src/app/backend-rpc-stdio.ts",
+    "rpc:smoke": "node --import tsx scripts/rpc-smoke.ts",
     "eval:instance": "tsx eval/run-instance.ts",
     "eval:smoke": "tsx eval/run-smoke.ts",
     "eval:sweevo-harness": "tsx eval/run-sweevo-harness.ts",
@@ -33,6 +36,10 @@
     ]
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.9",
+    "@ai-sdk/openai": "^4.0.8",
+    "ai": "^7.0.17",
+    "js-yaml": "^5.2.1",
     "pg": "^8.22.0",
     "zod": "^4.0.5"
   },
@@ -40,6 +47,7 @@
     "@commitlint/cli": "^21.0.2",
     "@commitlint/config-conventional": "^21.0.2",
     "@eslint/js": "^9.29.0",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.0.1",
     "@types/pg": "^8.20.0",
     "eslint": "^9.29.0",

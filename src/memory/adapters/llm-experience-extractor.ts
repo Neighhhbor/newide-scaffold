@@ -23,6 +23,7 @@ import type {
 } from '../schemas';
 import type { ExtractionOutput } from '../types';
 import { RuleBasedExperienceExtractor } from './rule-based-experience-extractor';
+import { EXTRACTOR_SYSTEM_PROMPT } from '../prompts/experience-extractor';
 
 // ═══════════════════════════════════════════
 //  LLM response schema
@@ -112,26 +113,7 @@ function buildExtractionPrompt(dr: DriverReturn, agentContext?: AgentContextSnap
   return sections.join('\n\n');
 }
 
-const SYSTEM_PROMPT = `You are an experience extractor. Extract transferable experience knowledge from task execution records.
-
-Extraction principles:
-1. Executor-independent (don't bind to specific Driver)
-2. Preserve decisions, not operational details
-3. Extract transferable patterns
-4. Negative experiences should describe what went wrong and why
-
-Output JSON only with this exact format:
-{
-  "experiences": [
-    {
-      "description": "Short summary of the experience (one line)",
-      "content": "Full experience content describing what was learned, the context, and why it matters",
-      "type": "positive" or "negative",
-      "confidence": 0.0 to 1.0,
-      "tags": ["tag1", "tag2"]
-    }
-  ]
-}`;
+// Prompt 已移至 prompts/experience-extractor.ts
 
 // ═══════════════════════════════════════════
 //  Experience mapper
@@ -188,7 +170,7 @@ export class LlmExperienceExtractor implements ExperienceExtractor {
 
       const raw = await this.llm.complete({
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: EXTRACTOR_SYSTEM_PROMPT },
           { role: 'user', content: userPrompt },
         ],
         responseFormat: { type: 'json_object' },
