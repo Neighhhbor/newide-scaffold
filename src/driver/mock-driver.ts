@@ -19,6 +19,15 @@ export class MockDriver implements DriverRuntimeHandle {
 
   async sendPrompt(input: DriverPrompt): Promise<DriverRunResult> {
     const created_at = nowTimestamp();
+    const patch = [
+      'diff --git a/generated/mock-driver-output.txt b/generated/mock-driver-output.txt',
+      'new file mode 100644',
+      '--- /dev/null',
+      '+++ b/generated/mock-driver-output.txt',
+      '@@ -0,0 +1 @@',
+      `+MockDriver completed task ${input.task_id}`,
+      '',
+    ].join('\n');
     const patchArtifact: ArtifactRef = {
       artifact_id: createId('artifact'),
       type: 'patch',
@@ -29,6 +38,11 @@ export class MockDriver implements DriverRuntimeHandle {
       metadata: {
         prompt_length: input.prompt.length,
         context_pack_id: input.context_pack_ref?.context_pack_id,
+      },
+      content: {
+        kind: 'patch',
+        content_ref: `data:text/x-diff,${encodeURIComponent(patch)}`,
+        media_type: 'text/x-diff',
       },
       created_at,
       schema_version: SCHEMA_VERSION,

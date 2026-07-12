@@ -42,6 +42,29 @@ describe('buildArtifactOutputs', () => {
       },
     ]);
   });
+
+  it('should expose a real materialized content path', () => {
+    const artifact = createArtifact({
+      artifact_id: 'artifact_content',
+      content: {
+        kind: 'text',
+        content_ref: 'data:text/plain,result',
+        target_path: 'output/result.txt',
+      },
+    });
+
+    expect(
+      buildArtifactOutputs({
+        artifacts: [artifact],
+        materialized_record_paths: ['.newide/worktrees/task_001/output/result.txt'],
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        artifact_id: 'artifact_content',
+        materialized_path: '.newide/worktrees/task_001/output/result.txt',
+      }),
+    ]);
+  });
 });
 
 type ArtifactRefOverrides = Pick<ArtifactRef, 'artifact_id'> &

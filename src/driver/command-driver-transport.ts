@@ -94,9 +94,9 @@ export class CommandDriverTransport implements ExternalDriverTransport {
       if (this.timeoutMs !== undefined) {
         timeout = setTimeout(() => {
           timedOut = true;
-          child.kill('SIGTERM');
+          terminateChild(child.pid, 'SIGTERM');
           forceKillTimeout = setTimeout(() => {
-            child.kill('SIGKILL');
+            terminateChild(child.pid, 'SIGKILL');
           }, 1_000);
         }, this.timeoutMs);
       }
@@ -139,6 +139,11 @@ export class CommandDriverTransport implements ExternalDriverTransport {
           return;
         }
 
+        if ((code !== 0 || signal) && stdoutIsDriverRunResult(stdout)) {
+          resolve(stdout);
+          return;
+        }
+
         if (code !== 0) {
           reject(
             new Error(
@@ -178,6 +183,10 @@ export class CommandDriverTransport implements ExternalDriverTransport {
       stdio: ['pipe', 'pipe', 'pipe'],
     };
 
+    if (this.timeoutMs !== undefined && process.platform !== 'win32') {
+      options.detached = true;
+    }
+
     if (this.cwd !== undefined) {
       options.cwd = this.cwd;
     }
@@ -214,4 +223,38 @@ function summarizeText(input: string, maxLength = 500): string {
   }
 
   return `${text.slice(0, maxLength - 3)}...`;
+}
+
+function stdoutIsDriverRunResult(stdout: string): boolean {
+  if (!stdout.trim()) {
+    return false;
+  }
+
+  try {
+    assertDriverRunResult(JSON.parse(stdout), 'Command driver');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function terminateChild(pid: number | undefined, signal: NodeJS.Signals): void {
+  if (pid === undefined) {
+    return;
+  }
+
+  try {
+    if (process.platform !== 'win32') {
+      process.kill(-pid, signal);
+      return;
+    }
+  } catch {
+    // Fall back to killing the direct child below.
+  }
+
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // The process may have already exited.
+  }
 }

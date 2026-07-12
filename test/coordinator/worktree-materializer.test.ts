@@ -38,6 +38,126 @@ describe('WorktreeMaterializer', () => {
   });
 
   describe('materialize', () => {
+    it('writes inline text content to its target path', async () => {
+      const artifact: ArtifactRef = {
+        ...createMockArtifact('patch'),
+        content: {
+          kind: 'text',
+          content_ref: 'data:text/plain,hello%20newIDE',
+          target_path: 'output/hello.txt',
+          media_type: 'text/plain',
+        },
+      };
+
+      const result = await materializer.materialize({ task_id: 'task-1', artifacts: [artifact] });
+
+      const target = path.join(testBaseDir, 'task-1', 'output/hello.txt');
+      await expect(fs.readFile(target, 'utf-8')).resolves.toBe('hello newIDE');
+      expect(result).toMatchObject({
+        status: 'completed',
+        changed_files: [target],
+        failures: [],
+      });
+    });
+
+    it('copies file content into a safe target path', async () => {
+      const source = path.join(testBaseDir, 'source.txt');
+      await fs.mkdir(testBaseDir, { recursive: true });
+      await fs.writeFile(source, 'copied content', 'utf-8');
+      const artifact: ArtifactRef = {
+        ...createMockArtifact('diff'),
+        content: {
+          kind: 'file',
+          content_ref: source,
+          target_path: 'copied/result.txt',
+        },
+      };
+
+      const result = await materializer.materialize({ task_id: 'task-1', artifacts: [artifact] });
+
+      const target = path.join(testBaseDir, 'task-1', 'copied/result.txt');
+      await expect(fs.readFile(target, 'utf-8')).resolves.toBe('copied content');
+      expect(result.changed_files).toEqual([target]);
+    });
+
+    it('applies a patch artifact inside the task worktree', async () => {
+      const patch = [
+        'diff --git a/hello.txt b/hello.txt',
+        'new file mode 100644',
+        '--- /dev/null',
+        '+++ b/hello.txt',
+        '@@ -0,0 +1 @@',
+        '+hello from patch',
+        '',
+      ].join('\n');
+      const artifact: ArtifactRef = {
+        ...createMockArtifact('patch'),
+        content: {
+          kind: 'patch',
+          content_ref: `data:text/x-diff,${encodeURIComponent(patch)}`,
+          media_type: 'text/x-diff',
+        },
+      };
+
+      const result = await materializer.materialize({ task_id: 'task-1', artifacts: [artifact] });
+
+      const target = path.join(testBaseDir, 'task-1', 'hello.txt');
+      expect(result.status).toBe('completed');
+      expect(result.failures).toEqual([]);
+      await expect(fs.readFile(target, 'utf-8')).resolves.toBe('hello from patch\n');
+      expect(result.changed_files).toContain(target);
+    });
+
+    it('rejects target paths outside the task worktree', async () => {
+      const artifact: ArtifactRef = {
+        ...createMockArtifact('patch'),
+        content: {
+          kind: 'text',
+          content_ref: 'data:text/plain,blocked',
+          target_path: '../outside.txt',
+        },
+      };
+
+      const result = await materializer.materialize({ task_id: 'task-1', artifacts: [artifact] });
+
+      expect(result).toMatchObject({
+        status: 'failed',
+        changed_files: [],
+        failures: [{ artifact_id: artifact.artifact_id }],
+      });
+      await expect(fs.stat(path.join(testBaseDir, 'outside.txt'))).rejects.toThrow();
+    });
+
+    it('reports partial materialization when one artifact fails', async () => {
+      const valid: ArtifactRef = {
+        ...createMockArtifact('patch'),
+        content: {
+          kind: 'text',
+          content_ref: 'data:text/plain,valid',
+          target_path: 'valid.txt',
+        },
+      };
+      const invalid: ArtifactRef = {
+        ...createMockArtifact('patch'),
+        content: {
+          kind: 'text',
+          content_ref: 'data:text/plain,invalid',
+          target_path: '../invalid.txt',
+        },
+      };
+
+      const result = await materializer.materialize({
+        task_id: 'task-1',
+        artifacts: [valid, invalid],
+      });
+
+      expect(result.status).toBe('partial');
+      expect(result.materialized_artifacts).toEqual([valid]);
+      expect(result.failures).toEqual([
+        expect.objectContaining({ artifact_id: invalid.artifact_id }),
+      ]);
+    });
+
     it('should create worktree directory', async () => {
       const input: MaterializationInput = {
         task_id: 'task-1',

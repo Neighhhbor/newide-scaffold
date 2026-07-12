@@ -59,6 +59,7 @@ export async function runBasicFlow(options?: BasicFlowOptions): Promise<BasicFlo
   const run = orchestrator.createRun(task.task_id);
   timeline.push({ name: 'RunCreated', id: run.run_id });
   orchestrator.updateRunStatus(run.run_id, 'running');
+  orchestrator.updateTaskStatus(task.task_id, 'claimed');
   orchestrator.updateTaskStatus(task.task_id, 'running');
 
   const roleProfileRef: RoleProfileRef = {
@@ -228,34 +229,50 @@ export async function runBasicFlow(options?: BasicFlowOptions): Promise<BasicFlo
     proposal_id: createId('proposal'),
     run_id: run.run_id,
     task_id: task.task_id,
+    agent_id: driver.driver_id,
     artifact_refs: [registeredArtifact.artifact_id],
     summary: 'Use the deterministic mock patch artifact.',
+    claims: [],
+    affected_paths: [],
+    assumptions: [],
+    known_risks: [],
+    completion_evidence: [firstGateResult.gate_result_id],
     created_at: nowTimestamp(),
     schema_version: SCHEMA_VERSION,
   };
   const evidencePack: EvidencePack = {
     evidence_pack_id: createId('evidence_pack'),
+    task_id: task.task_id,
     context_pack_ref: contextPack.context_pack_id,
     artifact_refs: [registeredArtifact.artifact_id],
     gate_result_refs: [firstGateResult.gate_result_id],
+    summary: 'Mock patch artifact and deterministic gate result for v0 council decision.',
     created_at: nowTimestamp(),
     schema_version: SCHEMA_VERSION,
   };
   const council = new MockCouncil();
-  const councilDecision = await council.runCouncilRound({
+  const councilRunResult = await council.runCouncilRound({
     run_id: run.run_id,
     task_id: task.task_id,
+    trigger: 'manual',
+    decision_mode: 'advisory',
+    question: 'Select the v0 mock patch artifact.',
     proposals: [proposal],
     evidence_pack: evidencePack,
+    schema_version: SCHEMA_VERSION,
   });
+  const councilDecision = councilRunResult.decision;
   const councilEvent = orchestrator.appendEvent({
     event_type: 'council.decision',
     subject_id: councilDecision.decision_id,
     run_id: run.run_id,
     task_id: task.task_id,
     payload: {
+      decision_mode: councilDecision.decision_mode,
       selected_proposal_id: councilDecision.selected_proposal_id,
       verdict: councilDecision.verdict,
+      comparison_ref: councilDecision.comparison_ref,
+      can_create_merge_authorization: councilDecision.can_create_merge_authorization,
     },
   });
   timeline.push({ name: 'CouncilDecision', id: councilEvent.event_id });
