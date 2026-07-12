@@ -72,9 +72,11 @@ const mockGateResult: GateResult = {
 // Mock evidence pack
 const mockEvidencePack: EvidencePack = {
   evidence_pack_id: createId('evidence_pack'),
+  task_id: 'demo-task-2',
   context_pack_ref: 'demo-context',
   artifact_refs: ['artifact-1'],
   gate_result_refs: ['gate-result-1'],
+  summary: 'Demo evidence pack for council artifact selection',
   created_at: nowTimestamp(),
   schema_version: SCHEMA_VERSION,
 };
