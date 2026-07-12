@@ -5,6 +5,18 @@ import { buildFrontendRunSnapshot } from '../../src/coordinator/frontend-run-sna
 describe('buildFrontendRunSnapshot', () => {
   it('should build a frontend-readable run snapshot from integration outputs', () => {
     const snapshot = buildFrontendRunSnapshot({
+      task: {
+        task_id: 'task_001',
+        status: 'completed',
+        role_id: 'role_ts_engineer',
+        risk_level: 'low',
+        spec: 'Build a result',
+        completion_criteria: ['Result exists'],
+        affected_paths: ['src/**'],
+        created_at: '2026-07-07T00:00:00.000Z',
+        updated_at: '2026-07-07T00:00:01.000Z',
+        schema_version: SCHEMA_VERSION,
+      },
       summary: {
         run_id: 'run_001',
         task_id: 'task_001',
@@ -89,6 +101,11 @@ describe('buildFrontendRunSnapshot', () => {
       schema_version: SCHEMA_VERSION,
       run_id: 'run_001',
       task_id: 'task_001',
+      task: {
+        status: 'completed',
+        spec: 'Build a result',
+        completion_criteria: ['Result exists'],
+      },
       current: {
         stage: 'delivery',
         task_status: 'completed',

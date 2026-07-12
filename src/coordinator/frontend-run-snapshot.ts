@@ -4,7 +4,7 @@
  * 这个文件只负责把 integration-v0 已有输出整理成前端可读 view model。
  * 它不读取/写入文件，不调用 driver、gate、council 或 mailbox，也不修改 task/run 状态。
  */
-import type { Checkpoint, Message, MessageId, SchemaVersion, Timestamp } from '../core';
+import type { Checkpoint, Message, MessageId, SchemaVersion, Task, Timestamp } from '../core';
 import type { ArtifactOutput } from './artifact-output';
 import type { RunResultStatus, IntegrationRunOutputPaths } from './run-result';
 import type { SelectionMode } from './artifact-finalizer';
@@ -57,6 +57,7 @@ export interface FrontendRunNodeStatus {
 }
 
 export interface BuildFrontendRunSnapshotInput {
+  task: Task;
   summary: FrontendRunSnapshotSummary;
   timeline: readonly FrontendRunSnapshotTimelineItem[];
   checkpoint: Checkpoint;
@@ -71,6 +72,7 @@ export interface FrontendRunSnapshot {
   generated_at: Timestamp;
   run_id: string;
   task_id: string;
+  task: Task;
   current: {
     stage: FrontendStage;
     task_status: RunResultStatus;
@@ -146,6 +148,7 @@ export function buildFrontendRunSnapshot(
     generated_at: input.summary.created_at,
     run_id: input.summary.run_id,
     task_id: input.summary.task_id,
+    task: { ...input.task },
     current: {
       stage: getFrontendStage(input.summary),
       task_status: input.summary.status,

@@ -40,6 +40,7 @@ export interface ArtifactSelectionInput {
   driver_result: DriverRunResult;
   gate_results: GateResult[];
   evidence_pack?: EvidencePack;
+  question?: string;
 }
 
 export interface ArtifactSelectionExecutionOptions {
@@ -131,7 +132,7 @@ export class ArtifactSelector {
         task_id: input.task_id,
         trigger: 'manual',
         decision_mode: 'advisory',
-        question: 'Select the best driver output artifact for v0 integration.',
+        question: input.question ?? 'Select the best driver output artifact for v0 integration.',
         proposals: [proposal],
         evidence_pack: input.evidence_pack,
         schema_version: SCHEMA_VERSION,

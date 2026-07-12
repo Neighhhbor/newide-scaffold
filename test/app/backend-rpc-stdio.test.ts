@@ -150,9 +150,9 @@ process.stdin.on('end', () => {
       ).toHaveLength(6);
       const driverPrompts = readFileSync(path.join(runnerDir, 'prompts.log'), 'utf8');
       expect(driverPrompts).toContain('Exercise production composition.');
-      expect(driverPrompts).toContain('Produce proposal A.');
+      expect(driverPrompts).toContain('Produce proposal A for:');
       expect(driverPrompts).toContain('Review proposals:');
-      expect(driverPrompts).toContain('Synthesize final candidate');
+      expect(driverPrompts).toContain('Synthesize the final candidate');
 
       writeFileSync(path.join(runnerDir, 'fail-reviewer'), '1');
       failedCouncilCreated = await service.createRun({
