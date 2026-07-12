@@ -15,7 +15,7 @@ import { InMemoryBufferRepository } from '../adapters/in-memory-buffer-repositor
 import { createAgentMemoryScope } from '../adapters/agent-memory-scope';
 import { extractBufferForAgent, promoteExperiencesForAgent } from '../services/memory-cycle';
 import { LiteLLMClientAdapter } from '../adapters/litellm-client-adapter';
-import { DeepSeekToolCallingClient } from '../adapters/deepseek-tool-calling-client';
+import { LiteLLMToolCallingClient } from '../adapters/litellm-tool-calling-client';
 import { InvokeDriverTool } from '../runtime/tools/invoke-driver-tool';
 import type { DriverReturn } from '../schemas';
 
@@ -24,7 +24,7 @@ import type { DriverReturn } from '../schemas';
 // ═══════════════════════════════════════
 
 const llmClient = new LiteLLMClientAdapter();
-const toolLlm = new DeepSeekToolCallingClient();
+const toolLlm = new LiteLLMToolCallingClient();
 
 const mockDriverReturn: DriverReturn = {
   summary: '成功修复登录页面 CSS 布局问题',

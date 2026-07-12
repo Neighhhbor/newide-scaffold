@@ -22,7 +22,7 @@ import type { AgentTaskRequest } from './agent-types';
  *
  * - participate  : Agent 认为自己适配并主动参选
  * - decline      : Agent 认为自己不适配，明确拒绝
- * - unavailable  : 状态不可用（running/draining/retired），不调用 LLM
+ * - unavailable  : 状态不可用（draining/retired/stopped），不调用 LLM
  * - timeout      : 在超时时间内未返回结果
  * - error        : 评估过程发生异常
  */
@@ -63,6 +63,8 @@ export interface AgentCompetitionClaim {
   availability: {
     agent_status: AgentStatus;
     loop_state: AgentLoopState;
+    /** 标记 Agent 正在执行任务中（仍参与自评但不接受新派发） */
+    busy?: boolean;
   };
   generated_at: string;
 }
@@ -79,6 +81,16 @@ export interface CompetitionClaimBatch {
   correlation_id: string;
   task_id: string;
   claims: AgentCompetitionClaim[];
+  /** 全景摘要，让上层快速判断"无人接 / 都在忙 / 有机会" */
+  summary: {
+    total: number;
+    participated: number;
+    busy_participated: number;
+    declined: number;
+    unavailable: number;
+    timed_out: number;
+    errored: number;
+  };
   started_at: string;
   completed_at: string;
 }

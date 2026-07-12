@@ -4,7 +4,7 @@
  * 验证端到端链路：
  *   AgentManager.submitTask
  *   → Agent 竞标 → assignTask
- *   → executeTask（内部 runLoopTick 循环）
+ *   → executeTask（内部自循环）
  *     → LLM 调用 invoke_driver
  *     → Mock DriverHandler 返回符合契约的 DriverReturn
  *     → LLM 判断完成 → writeToBuffer
@@ -20,7 +20,7 @@ import { resolve } from 'node:path';
 import { AgentManager } from '../../runtime/agent-manager';
 import { InMemoryRepository } from '../../adapters/in-memory-repository';
 import { InMemoryBufferRepository } from '../../adapters/in-memory-buffer-repository';
-import { DeepSeekToolCallingClient } from '../../adapters/deepseek-tool-calling-client';
+import { LiteLLMToolCallingClient } from '../../adapters/litellm-tool-calling-client';
 import { InvokeDriverTool } from '../../runtime/tools/invoke-driver-tool';
 import type { DriverReturn } from '../../schemas';
 import type { AgentTaskRequest } from '../../agent-types';
@@ -32,6 +32,7 @@ import type { AgentTaskRequest } from '../../agent-types';
 /**
  * 手动解析 .env 文件（不含 dotenv 依赖）。
  * 从 src/memory/.env 加载 DEEPSEEK_API_KEY。
+ * LiteLLMToolCallingClient 会自动加载 .env，但测试在此处提前加载以尽早判断 hasApiKey。
  */
 function loadEnv(): void {
   const envPath = resolve(__dirname, '../../.env');
@@ -127,9 +128,9 @@ describe('Agent loop integration (real DeepSeek API)', () => {
       const repository = new InMemoryRepository();
       const bufferRepository = new InMemoryBufferRepository();
 
-      // ── 2. 真实 LLM 客户端 ──
-      const llm = new DeepSeekToolCallingClient({
-        model: process.env.DEEPSEEK_MODEL ?? 'deepseek-chat',
+      // ── 2. 真实 LLM 客户端（使用 LiteLLM，通过 openai provider 调用 DeepSeek） ──
+      const llm = new LiteLLMToolCallingClient({
+        taskName: 'memory-query',
       });
 
       // ── 3. Mock Driver ──

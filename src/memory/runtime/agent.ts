@@ -6,7 +6,7 @@
  * ## 执行模式
  *
  * Tool-calling 模式 — Agent 的 LLM 自主调用工具（query_memory / invoke_driver 等），
- * 通过 `executeTask()` 或 `runOnce()` 触发内部逐 tick 循环。
+ * 通过 `executeTask()` 触发内部自循环，直至任务完成。
  *
  * ## 构造方式
  *
@@ -16,7 +16,7 @@
  */
 import type { AgentHandle, DriverReturn, AgentStatus } from '../schemas';
 import type { AgentMemoryScope } from '../ports/agent-memory-scope';
-import type { AgentLoopState, AgentLoopTickResult, AgentTaskRequest } from '../agent-types';
+import type { AgentLoopState, AgentTaskRequest } from '../agent-types';
 import type { MemoryCycleResult } from '../types';
 import type { CompetitionClaimEvaluator } from '../ports/competition-claim-evaluator';
 import type { AgentCompetitionClaim } from '../competition-types';
@@ -98,13 +98,14 @@ export class Agent {
    * 根据任务机会生成参选声明。
    *
    * 流程：
-   * 1. 检查 Agent 可用状态（running/draining/retired/stopped → unavailable）
+   * 1. 检查 Agent 可用状态（draining/retired/stopped → unavailable）
    * 2. 调用 CompetitionClaimEvaluator 做简单自评（participate/decline）
    * 3. 返回声明（不含详细竞标信息，待与 bid 模块对齐后补充）
    *
    * 约束：
    * - 不写 Buffer、不创建 Experience、不进入任务执行状态
-   * - 不改变 Agent 的 state（保持当前 idle/sleeping 状态）
+   * - 不改变 Agent 的 state（保持当前 idle/sleeping/running 状态）
+   * - running 的 Agent 仍会参与自评，但标记 busy: true
    */
   async createCompetitionClaim(task: AgentTaskRequest): Promise<AgentCompetitionClaim> {
     const role_id = this.memory.role_id;
@@ -114,12 +115,7 @@ export class Agent {
     const now = nowTimestamp();
 
     // 不可用状态 → 直接返回 unavailable
-    if (
-      agent_status === 'draining' ||
-      agent_status === 'retired' ||
-      loop_state === 'running' ||
-      loop_state === 'stopped'
-    ) {
+    if (agent_status === 'draining' || agent_status === 'retired' || loop_state === 'stopped') {
       return {
         role_id,
         decision: 'unavailable',
@@ -135,14 +131,22 @@ export class Agent {
       return {
         role_id,
         ...content,
-        availability: { agent_status, loop_state: this.state },
+        availability: {
+          agent_status,
+          loop_state: this.state,
+          busy: loop_state === 'running' ? true : undefined,
+        },
         generated_at: now,
       };
     } catch {
       return {
         role_id,
         decision: 'error',
-        availability: { agent_status, loop_state: this.state },
+        availability: {
+          agent_status,
+          loop_state: this.state,
+          busy: loop_state === 'running' ? true : undefined,
+        },
         generated_at: now,
       };
     }
@@ -157,39 +161,43 @@ export class Agent {
   }
 
   // ────────────────────────────────────────────
-  // 持久循环（逐 tick）
+  // 自驱循环（内部自循环，不可外部逐 tick 驱动）
   // ────────────────────────────────────────────
 
   /**
-   * 持久 run loop 的单步执行。
+   * Agent 自驱执行循环。
    *
-   * 只有 Tool-calling 模式支持逐 tick 循环；Pipeline 模式应使用 runOnce。
-   * 每次 tick 做一次 LLM 调用 → 解析回复 → 执行工具 → 积累 messages。
-   *
-   * 调用前必须先通过 assignTask 设置任务。
+   * 接任务后自主重复 LLM 调用 → 工具执行 → 完成判断，直至任务完成或达到上限。
+   * 外部只需 await executeTask() 等待结果，无需逐 tick 驱动。
    */
-  private async runLoopTick(): Promise<AgentLoopTickResult> {
-    // 没有任务 → idle
+  private async runLoop(): Promise<void> {
+    while (this.state === 'running') {
+      const shouldStop = await this.runOneRound();
+      if (shouldStop) break;
+    }
+  }
+
+  /**
+   * 单轮 LLM 交互：一次 LLM 调用 → 解析回复 → 执行工具 → 积累 messages。
+   *
+   * @returns true 表示循环应停止（完成任务/达到上限/无任务），false 表示继续下一轮
+   */
+  private async runOneRound(): Promise<boolean> {
+    // 没有任务 → stop
     if (!this.currentTask) {
-      return { status: 'idle', reason: 'No pending task.' };
+      return true;
     }
 
-    // 仅 tool-calling 模式支持逐 tick 循环
+    // 仅 tool-calling 模式支持循环
     if (!this.toolConfig || !this.toolRegistry || !this.loopMessages) {
-      return {
-        status: 'skipped',
-        reason: 'Pipeline mode does not support tick-by-tick loop; use runOnce instead.',
-      };
+      return true;
     }
 
     // 检查最大轮次
     const maxCalls = this.toolConfig.maxToolCalls ?? 20;
     if (this.loopRound >= maxCalls) {
       await this.finalizeLoop();
-      return {
-        status: 'completed',
-        reason: `Max tool calls (${maxCalls}) reached.`,
-      };
+      return true;
     }
 
     // 单步：一次 LLM 调用
@@ -256,20 +264,15 @@ export class Agent {
       // 检查 LLM 是否表示任务完成
       if (response.content && this.isTaskComplete(response.content)) {
         await this.finalizeLoop();
-        return {
-          status: 'completed',
-          reason: 'Agent reported task complete.',
-        };
+        return true;
       }
     }
 
-    return { status: 'running', reason: `Round ${this.loopRound} completed.` };
+    return false; // 继续循环
   }
 
   /**
-   * 将任务派发给 Agent，由 Agent 自行通过 runLoopTick 逐 tick 处理。
-   *
-   * 仅 Tool-calling 模式支持；Pipeline 模式仍使用 runOnce。
+   * 将任务派发给 Agent，由 Agent 自行通过自循环处理。
    *
    * @throws 如果 Agent 已有正在运行的任务
    */
@@ -304,50 +307,36 @@ export class Agent {
         },
       ];
     } else {
-      // Pipeline 模式不使用 loopMessages
+      // Pipeline 模式不使用 loopMessages（已废弃）
       this.loopMessages = null;
     }
   }
 
   /**
-   * 单轮任务同步执行入口。
+   * 单轮任务同步执行入口（向后兼容）。
    *
-   * - 配置了 toolConfig 时 → Tool-calling 模式（LLM 自主决策，内部逐 tick 循环）
-   * - 未配置时 → Pipeline 模式（固定流程，向后兼容）
+   * - 配置了 toolConfig 时 → Tool-calling 模式（LLM 自主决策，内部自循环直至完成）
    */
   async runOnce(task: AgentTaskRequest): Promise<MemoryCycleResult> {
-    this.state = 'running';
-    try {
-      return await this.runOnceWithTools(task);
-    } finally {
-      this.state = 'sleeping';
-    }
+    return this.executeTask(task);
   }
 
   /**
-   * Agent 自驱执行入口（区别于 runOnce —— runOnce 的 Pipeline 路径把提取/
-   * 晋升等不属于 Agent 职责的流程也集成了进来）。
+   * Agent 自驱执行入口。
    *
-   * - **Tool-calling 模式**：Agent 内部逐 tick 循环（LLM 自主决策 → 工具调用 →
-   *   buffer 写入），**不含经验提取和技能晋升**（由离线 Processor 处理）
-   * - **Pipeline 模式**：降级为 runTaskMemoryCycle（向后兼容）
+   * Agent 内部自循环（LLM 自主决策 → 工具调用 → buffer 写入），
+   * **不含经验提取和技能晋升**（由离线 Processor 处理）。
    *
-   * Tool-calling 路径的流程：
+   * 流程：
    * ```
-   * assignTask → [runLoopTick × N] → writeToBuffer → 完成
+   * assignTask → runLoop (LLM 交互 × N) → writeToBuffer → 完成
    * ```
    */
   async executeTask(task: AgentTaskRequest): Promise<MemoryCycleResult> {
     this.state = 'running';
     try {
       await this.assignTask(task);
-
-      while (this.state === 'running') {
-        const tick = await this.runLoopTick();
-        if (tick.status === 'completed' || tick.status === 'idle') {
-          break;
-        }
-      }
+      await this.runLoop();
 
       const result = this.lastCycleResult;
       if (!result) {
@@ -390,30 +379,6 @@ export class Agent {
     this.loopMessages = null;
     this.lastDriverReturn = undefined;
     this.loopRound = 0;
-  }
-
-  /**
-   * LLM tool-calling 同步执行包装。
-   *
-   * 通过 assignTask + runLoopTick 循环实现，与持久循环共享同一套逻辑。
-   */
-  private async runOnceWithTools(task: AgentTaskRequest): Promise<MemoryCycleResult> {
-    await this.assignTask(task);
-
-    while (this.state === 'running') {
-      const tick = await this.runLoopTick();
-      if (tick.status === 'completed' || tick.status === 'idle') {
-        break;
-      }
-    }
-
-    const result = this.lastCycleResult;
-    if (!result) {
-      // 兜底：正常情况下不应进入此分支
-      await this.finalizeLoop();
-      return this.lastCycleResult!;
-    }
-    return result;
   }
 
   /**
