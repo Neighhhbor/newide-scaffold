@@ -1,18 +1,17 @@
 /**
- * Agent 持久循环（runLoopTick）测试
+ * Agent 自驱循环（executeTask）测试
  *
  * 验证：
  *   1. assignTask 正确初始化状态
- *   2. runLoopTick idle（无任务）
- *   3. runLoopTick skipped（Pipeline 模式）
- *   4. runLoopTick running（单步执行）
- *   5. runLoopTick 多步积累 messages
- *   6. runLoopTick completed（LLM 报告完成）
- *   7. runLoopTick 最大轮次保护
+ *   2. executeTask 单步完成（LLM 直接报告完成）
+ *   3. executeTask 多步交互后完成
+ *   4. executeTask 工具调用后完成
+ *   5. executeTask 未知工具不中断
+ *   6. executeTask 最大轮次保护
+ *   7. executeTask 写入 buffer
  *   8. runOnce 向后兼容
  *   9. hasPendingTask 状态报告
- *   10. AgentManager.tickAll 驱动所有 running agent
- *   11. AgentManager.dispatchTask 异步派单
+ *   10. AgentManager.dispatchTask 异步派单
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect } from 'vitest';
@@ -83,7 +82,7 @@ function createToolConfig(mockLlm: ToolCallingClient, tools?: Tool[]): AgentTool
 // Agent 持久循环
 // ──────────────────────────────────────────────
 
-describe('Agent persistent loop (runLoopTick)', () => {
+describe('Agent self-loop (executeTask)', () => {
   describe('assignTask', () => {
     it('为 Tool-calling Agent 正确初始化状态', async () => {
       const { memory } = await createTestInfra('role_assign');
@@ -122,24 +121,20 @@ describe('Agent persistent loop (runLoopTick)', () => {
     });
   });
 
-  describe('runLoopTick running（单步执行）', () => {
-    it('LLM 回复文本后返回 running', async () => {
+  describe('executeTask 单步/多步执行', () => {
+    it('LLM 直接报告完成 → 返回完整结果', async () => {
       const { memory } = await createTestInfra('role_one_step');
-      const mockLlm = createMockToolClient([
-        textResponse('Let me think about this...'),
-        textResponse('Task completed. All done.'),
-      ]);
+      const mockLlm = createMockToolClient([textResponse('Task completed. All done.')]);
       const agent = new Agent(memory, createToolConfig(mockLlm));
 
-      await (agent as any).assignTask(createTestTask());
-
-      const result = await (agent as any).runLoopTick();
-      expect(result.status).toBe('running');
-      expect(result.reason).toContain('Round 1 completed');
-      expect(agent.getState()).toBe('running');
+      const result = await agent.executeTask(createTestTask());
+      expect(result.agent_id).toBe('role_one_step');
+      expect(result.buffer_snapshot.task_id).toBe('task_loop_001');
+      expect(agent.getState()).toBe('sleeping');
+      expect(agent.hasPendingTask()).toBe(false);
     });
 
-    it('多步积累 messages 保持 running', async () => {
+    it('多步交互后完成', async () => {
       const { memory } = await createTestInfra('role_multi_step');
       const mockLlm = createMockToolClient([
         textResponse('Step 1: analyzing...'),
@@ -149,29 +144,12 @@ describe('Agent persistent loop (runLoopTick)', () => {
       ]);
       const agent = new Agent(memory, createToolConfig(mockLlm));
 
-      await (agent as any).assignTask(createTestTask());
-
-      // Tick 1
-      const r1 = await (agent as any).runLoopTick();
-      expect(r1.status).toBe('running');
-      expect(agent.getState()).toBe('running');
-
-      // Tick 2
-      const r2 = await (agent as any).runLoopTick();
-      expect(r2.status).toBe('running');
-
-      // Tick 3
-      const r3 = await (agent as any).runLoopTick();
-      expect(r3.status).toBe('running');
-
-      // Tick 4 — 完成
-      const r4 = await (agent as any).runLoopTick();
-      expect(r4.status).toBe('completed');
+      const result = await agent.executeTask(createTestTask());
+      expect(result.agent_id).toBe('role_multi_step');
       expect(agent.getState()).toBe('sleeping');
-      expect(agent.hasPendingTask()).toBe(false);
     });
 
-    it('tool_call 执行后返回 running', async () => {
+    it('工具调用后完成', async () => {
       const { memory } = await createTestInfra('role_tool_step');
       let toolExecuted = false;
       const mockTool: Tool = {
@@ -198,16 +176,9 @@ describe('Agent persistent loop (runLoopTick)', () => {
       ]);
       const agent = new Agent(memory, createToolConfig(mockLlm, [mockTool]));
 
-      await (agent as any).assignTask(createTestTask());
-
-      // Tick 1: 调用工具
-      const r1 = await (agent as any).runLoopTick();
-      expect(r1.status).toBe('running');
+      await agent.executeTask(createTestTask());
       expect(toolExecuted).toBe(true);
-
-      // Tick 2: 完成
-      const r2 = await (agent as any).runLoopTick();
-      expect(r2.status).toBe('completed');
+      expect(agent.getState()).toBe('sleeping');
     });
 
     it('未知工具不中断循环', async () => {
@@ -227,30 +198,9 @@ describe('Agent persistent loop (runLoopTick)', () => {
       ]);
       const agent = new Agent(memory, createToolConfig(mockLlm));
 
-      await (agent as any).assignTask(createTestTask());
-
-      // Tick 1: 未知工具→报错但不抛异常
-      const r1 = await (agent as any).runLoopTick();
-      expect(r1.status).toBe('running');
-
-      // Tick 2: 完成
-      const r2 = await (agent as any).runLoopTick();
-      expect(r2.status).toBe('completed');
-    });
-  });
-
-  describe('runLoopTick completed', () => {
-    it('LLM 报告完成时状态变为 sleeping', async () => {
-      const { memory } = await createTestInfra('role_complete');
-      const mockLlm = createMockToolClient([textResponse('Task completed. All done.')]);
-      const agent = new Agent(memory, createToolConfig(mockLlm));
-
-      await (agent as any).assignTask(createTestTask());
-
-      const result = await (agent as any).runLoopTick();
-      expect(result.status).toBe('completed');
+      const result = await agent.executeTask(createTestTask());
+      expect(result.agent_id).toBe('role_unknown_tool');
       expect(agent.getState()).toBe('sleeping');
-      expect(agent.hasPendingTask()).toBe(false);
     });
 
     it('完成时写入 buffer', async () => {
@@ -262,16 +212,16 @@ describe('Agent persistent loop (runLoopTick)', () => {
       const metaBefore = await bufferRepository.getBufferMeta('role_buffer');
       expect(metaBefore.total_processed).toBe(0);
 
-      await (agent as any).assignTask(createTestTask());
-      await (agent as any).runLoopTick();
+      await agent.executeTask(createTestTask());
 
       // buffer 应有记录（pending 状态，提取已解耦不被同步标记为 processed）
       const metaAfter = await bufferRepository.getBufferMeta('role_buffer');
       expect(metaAfter.pending_count).toBe(1);
+      expect(agent.getState()).toBe('sleeping');
     });
   });
 
-  describe('runLoopTick 最大轮次保护', () => {
+  describe('executeTask 最大轮次保护', () => {
     it('达到 maxToolCalls 时强制完成', async () => {
       const { memory } = await createTestInfra('role_maxrounds');
       // 一直返回文本，不报告完成
@@ -285,18 +235,10 @@ describe('Agent persistent loop (runLoopTick)', () => {
       };
       const agent = new Agent(memory, config);
 
-      await (agent as any).assignTask(createTestTask());
-
-      // Round 1-3: running (loopRound: 0→1→2→3, each < maxToolCalls)
-      expect((await (agent as any).runLoopTick()).status).toBe('running');
-      expect((await (agent as any).runLoopTick()).status).toBe('running');
-      expect((await (agent as any).runLoopTick()).status).toBe('running');
-
-      // Round 4: loopRound (3) >= maxToolCalls (3) → completed
-      const r4 = await (agent as any).runLoopTick();
-      expect(r4.status).toBe('completed');
-      expect(r4.reason).toContain('Max tool calls');
+      const result = await agent.executeTask(createTestTask());
+      expect(result.agent_id).toBe('role_maxrounds');
       expect(agent.getState()).toBe('sleeping');
+      expect(agent.hasPendingTask()).toBe(false);
     });
   });
 });

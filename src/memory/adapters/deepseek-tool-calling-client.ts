@@ -5,6 +5,11 @@
  * 的 function/tool calling 能力。
  *
  * API Key 优先级：构造参数 > DEEPSEEK_API_KEY 环境变量
+ *
+ * @deprecated 建议迁移到 LiteLLMToolCallingClient。
+ * LiteLLMToolCallingClient 使用 Vercel AI SDK，支持多 provider（openai/anthropic），
+ * 配置驱动模型选择，且通过 config/memory-query.yaml 集中管理模型配置。
+ * DeepSeekToolCallingClient 将继续保留但不再积极维护。
  */
 import type { ToolCallingClient, ToolCallMessage, ToolCallResult, ToolCall } from '../runtime/tool';
 import type { ToolDefinition } from '../runtime/tool';
