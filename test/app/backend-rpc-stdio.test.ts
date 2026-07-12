@@ -7,6 +7,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createProductionBackendService, parseDriverEnv } from '../../src/app/backend-rpc-stdio';
 import type { AppRunEvent } from '../../src/app/run-registry';
+import type { ToolCallingClient } from '../../src/memory';
 
 describe('backend RPC stdio entrypoint', () => {
   it('fails fast when the configured ACP runner directory does not exist', () => {
@@ -73,7 +74,10 @@ process.stdin.on('end', () => {
 `,
       );
 
-      const service = createProductionBackendService({ ACP_DRIVER_RUNNER_DIR: runnerDir });
+      const service = createProductionBackendService(
+        { ACP_DRIVER_RUNNER_DIR: runnerDir },
+        { agentLlm: invokeDriverLlm() },
+      );
       created = await service.createRun({ prompt: 'Exercise production composition.' });
       const snapshot = await waitForTerminal(service, created.run_id);
 
@@ -260,4 +264,33 @@ async function waitForTerminal(
 ) {
   await service.waitForTerminal(runId);
   return service.getSnapshot(runId);
+}
+
+function invokeDriverLlm(): ToolCallingClient {
+  let sequence = 0;
+  return {
+    async completeWithTools(input) {
+      const lastMessage = input.messages.at(-1);
+      if (lastMessage?.role === 'tool') {
+        return { content: 'Task completed. [done]', tool_calls: undefined };
+      }
+      const userMessage = [...input.messages].reverse().find((message) => message.role === 'user');
+      sequence += 1;
+      return {
+        content: null,
+        tool_calls: [
+          {
+            id: `backend_tool_call_${String(sequence)}`,
+            type: 'function',
+            function: {
+              name: 'invoke_driver',
+              arguments: JSON.stringify({
+                instruction: userMessage?.content?.replace(/^Task:\s*/, '') ?? 'Execute task.',
+              }),
+            },
+          },
+        ],
+      };
+    },
+  };
 }

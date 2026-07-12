@@ -8,7 +8,11 @@ import {
   type DriverRunResult,
   type DriverRuntimeHandle,
 } from '../../src/driver';
-import { InMemoryBufferRepository, InMemoryRepository } from '../../src/memory';
+import {
+  InMemoryBufferRepository,
+  InMemoryRepository,
+  type ToolCallingClient,
+} from '../../src/memory';
 
 describe('DriverRuntimeAgentExecutionFacade', () => {
   it('runs the real driver through the public B runtime and preserves the execution result', async () => {
@@ -41,7 +45,32 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
       memory_buffer_ref: 'proposer_a:1',
       schema_version: SCHEMA_VERSION,
     });
-    expect((await buffer.getBufferMeta('proposer_a')).total_processed).toBe(1);
+    expect(await buffer.getBufferMeta('proposer_a')).toMatchObject({
+      pending_count: 1,
+      total_processed: 0,
+    });
+  });
+
+  it('preserves the original C instruction when B delegates a narrower subtask', async () => {
+    const driver = new CapturingDriver('succeeded');
+    const { facade } = createFacade(
+      driver,
+      new InMemoryBufferRepository(),
+      delegatedInstructionLlm('Only inspect the target.'),
+    );
+
+    await facade.runAgent(request('task_original_instruction', 'proposer_a'));
+
+    const prompt = JSON.parse(driver.prompts[0]!.prompt) as {
+      task_instruction: string;
+      experiences: Array<{ id: string; content: string }>;
+    };
+    expect(prompt.task_instruction).toBe('Execute through B runtime.');
+    expect(prompt.experiences).toContainEqual({
+      id: 'b_delegation',
+      description: 'B runtime delegation guidance',
+      content: 'Only inspect the target.',
+    });
   });
 
   it.each([
@@ -58,6 +87,29 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
     if (driverStatus === 'failed') {
       expect(result.diagnostics).toMatchObject({ driver_error_code: 'MOCK_FAILED' });
     }
+  });
+
+  it('retries one artifact-free retryable transport failure', async () => {
+    const driver = new RetryableOnceDriver();
+    const { facade } = createFacade(driver);
+
+    const result = await facade.runAgent(request('task_retry', 'proposer_a'));
+
+    expect(driver.prompts).toHaveLength(2);
+    expect(result).toMatchObject({
+      status: 'completed',
+      diagnostics: { driver_attempts: 2 },
+    });
+  });
+
+  it('does not retry an artifact-free retryable business failure', async () => {
+    const driver = new RetryableOnceDriver('RETRYABLE_VALIDATION');
+    const { facade } = createFacade(driver);
+
+    const result = await facade.runAgent(request('task_no_business_retry', 'proposer_a'));
+
+    expect(driver.prompts).toHaveLength(1);
+    expect(result).toMatchObject({ status: 'failed', diagnostics: { driver_attempts: 1 } });
   });
 
   it('keeps role memory isolated while reusing each role runtime', async () => {
@@ -85,6 +137,44 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
     expect(driver.maxActive).toBe(1);
   });
 
+  it('keeps concurrent role invocations associated with their own task and run', async () => {
+    const driver = new ConcurrentDriver();
+    const { facade } = createFacade(driver);
+
+    await Promise.all([
+      facade.runAgent(request('task_parallel_a', 'proposer_a')),
+      facade.runAgent(request('task_parallel_b', 'proposer_b')),
+    ]);
+
+    expect(driver.maxActive).toBe(2);
+    expect(
+      driver.prompts
+        .map((prompt) => ({ task_id: prompt.task_id, run_id: prompt.run_id }))
+        .sort((left, right) => left.task_id.localeCompare(right.task_id)),
+    ).toEqual([
+      { task_id: 'task_parallel_a', run_id: 'run_task_parallel_a' },
+      { task_id: 'task_parallel_b', run_id: 'run_task_parallel_b' },
+    ]);
+  });
+
+  it('returns a failed result when B completes without invoking the driver', async () => {
+    const driver = new CapturingDriver('succeeded');
+    const { facade } = createFacade(driver, new InMemoryBufferRepository(), noDriverLlm());
+
+    const result = await facade.runAgent(request('task_no_driver', 'reviewer'));
+
+    expect(driver.prompts).toHaveLength(0);
+    expect(result).toMatchObject({
+      role_id: 'reviewer',
+      status: 'failed',
+      artifact_refs: [],
+      diagnostics: {
+        dispatch_status: 'no_driver_invocation',
+        driver_error_code: 'B_NO_DRIVER_INVOCATION',
+      },
+    });
+  });
+
   it('rejects a pre-aborted execution without calling the driver or writing a buffer', async () => {
     const controller = new AbortController();
     controller.abort(new DOMException('already cancelled', 'AbortError'));
@@ -95,7 +185,7 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
       facade.runAgent(request('pre_abort', 'proposer_a'), { signal: controller.signal }),
     ).rejects.toThrow('already cancelled');
     expect(driver.prompts).toHaveLength(0);
-    expect((await buffer.getBufferMeta('proposer_a')).total_processed).toBe(0);
+    await expect(buffer.getBufferMeta('proposer_a')).rejects.toThrow('Buffer store not found');
   });
 
   it('interrupts the real driver when the execution signal is aborted', async () => {
@@ -116,6 +206,55 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
     expect((await buffer.getBufferMeta('proposer_a')).total_processed).toBe(0);
   });
 
+  it('stops while B waits for the post-driver LLM response', async () => {
+    const controller = new AbortController();
+    const llm = new BlockingPostDriverLlm();
+    const { facade } = createFacade(
+      new CapturingDriver('succeeded'),
+      new InMemoryBufferRepository(),
+      llm,
+    );
+
+    const running = facade.runAgent(request('cancel_post_driver_llm', 'proposer_a'), {
+      signal: controller.signal,
+    });
+    await llm.postDriverCallStarted;
+    controller.abort(new Error('Cancel post-driver LLM'));
+
+    await expect(running).rejects.toThrow('Cancel post-driver LLM');
+  });
+
+  it('invokes the driver only once when B requests duplicate calls', async () => {
+    const driver = new CapturingDriver('succeeded');
+    const { facade } = createFacade(driver, new InMemoryBufferRepository(), twoDriverCallsLlm());
+
+    const result = await facade.runAgent(request('duplicate_driver', 'proposer_a'));
+
+    expect(result.status).toBe('completed');
+    expect(driver.prompts).toHaveLength(1);
+  });
+
+  it('rejects an aborted queued execution without waiting for the active role execution', async () => {
+    const activeController = new AbortController();
+    const queuedController = new AbortController();
+    const driver = new MockDriver();
+    driver.sendPrompt = vi.fn(() => new Promise<DriverRunResult>(() => undefined));
+    const { facade } = createFacade(driver);
+
+    const active = facade.runAgent(request('active_role_task', 'proposer_a'), {
+      signal: activeController.signal,
+    });
+    await vi.waitFor(() => expect(driver.sendPrompt).toHaveBeenCalledTimes(1));
+    const queued = facade.runAgent(request('queued_role_task', 'proposer_a'), {
+      signal: queuedController.signal,
+    });
+    queuedController.abort(new Error('Cancel queued task'));
+
+    await expect(queued).rejects.toThrow('Cancel queued task');
+    activeController.abort(new Error('Clean up active task'));
+    await expect(active).rejects.toThrow('Clean up active task');
+  });
+
   it('does not retroactively cancel after the driver has completed', async () => {
     const controller = new AbortController();
     const buffer = new DelayedBufferRepository();
@@ -129,13 +268,17 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
     buffer.continueSave();
 
     await expect(running).resolves.toMatchObject({ status: 'completed' });
-    expect((await buffer.getBufferMeta('proposer_a')).total_processed).toBe(1);
+    expect(await buffer.getBufferMeta('proposer_a')).toMatchObject({
+      pending_count: 1,
+      total_processed: 0,
+    });
   });
 });
 
 function createFacade(
   driver: DriverRuntimeHandle,
   buffer: InMemoryBufferRepository = new InMemoryBufferRepository(),
+  llm: ToolCallingClient = invokeDriverLlm(),
 ) {
   const repository = new InMemoryRepository();
   return {
@@ -143,8 +286,111 @@ function createFacade(
       driver,
       repository,
       bufferRepository: buffer,
+      llm,
     }),
     buffer,
+  };
+}
+
+function invokeDriverLlm(): ToolCallingClient {
+  let toolCallSequence = 0;
+  return {
+    async completeWithTools(input) {
+      const lastMessage = input.messages.at(-1);
+      if (lastMessage?.role === 'tool') {
+        return { content: 'Task completed. [done]', tool_calls: undefined };
+      }
+      const userMessage = [...input.messages].reverse().find((message) => message.role === 'user');
+      toolCallSequence += 1;
+      return {
+        content: null,
+        tool_calls: [
+          {
+            id: `tool_call_${String(toolCallSequence)}`,
+            type: 'function',
+            function: {
+              name: 'invoke_driver',
+              arguments: JSON.stringify({
+                instruction: userMessage?.content?.replace(/^Task:\s*/, '') ?? 'Execute task.',
+              }),
+            },
+          },
+        ],
+      };
+    },
+  };
+}
+
+function noDriverLlm(): ToolCallingClient {
+  return {
+    async completeWithTools() {
+      return { content: 'Task completed without delegation. [done]', tool_calls: undefined };
+    },
+  };
+}
+
+function delegatedInstructionLlm(instruction: string): ToolCallingClient {
+  let calls = 0;
+  return {
+    async completeWithTools() {
+      calls += 1;
+      if (calls > 1) return { content: 'Task completed. [done]', tool_calls: undefined };
+      return {
+        content: null,
+        tool_calls: [
+          {
+            id: 'delegated_instruction',
+            type: 'function',
+            function: {
+              name: 'invoke_driver',
+              arguments: JSON.stringify({ instruction }),
+            },
+          },
+        ],
+      };
+    },
+  };
+}
+
+class BlockingPostDriverLlm implements ToolCallingClient {
+  private calls = 0;
+  private postDriverCallStartedResolve!: () => void;
+  readonly postDriverCallStarted = new Promise<void>((resolve) => {
+    this.postDriverCallStartedResolve = resolve;
+  });
+
+  async completeWithTools() {
+    this.calls += 1;
+    if (this.calls === 1) {
+      return driverToolCalls('post_driver_call');
+    }
+    this.postDriverCallStartedResolve();
+    return new Promise<never>(() => undefined);
+  }
+}
+
+function twoDriverCallsLlm(): ToolCallingClient {
+  let calls = 0;
+  return {
+    async completeWithTools() {
+      calls += 1;
+      if (calls > 1) return { content: 'Task completed. [done]', tool_calls: undefined };
+      return driverToolCalls('first_driver_call', 'second_driver_call');
+    },
+  };
+}
+
+function driverToolCalls(...ids: string[]) {
+  return {
+    content: null,
+    tool_calls: ids.map((id) => ({
+      id,
+      type: 'function' as const,
+      function: {
+        name: 'invoke_driver',
+        arguments: JSON.stringify({ instruction: `Execute ${id}.` }),
+      },
+    })),
   };
 }
 
@@ -224,6 +470,25 @@ class ConcurrentDriver extends CapturingDriver {
     await new Promise((resolve) => setTimeout(resolve, 10));
     this.active -= 1;
     return driverResult(this, 'succeeded');
+  }
+}
+
+class RetryableOnceDriver extends CapturingDriver {
+  constructor(private readonly errorCode = 'EXTERNAL_DRIVER_TRANSPORT_ERROR') {
+    super('succeeded');
+  }
+
+  override async sendPrompt(input: DriverPrompt): Promise<DriverRunResult> {
+    this.prompts.push(input);
+    if (this.prompts.length > 1) return driverResult(this, 'succeeded');
+    return {
+      ...driverResult(this, 'failed'),
+      error: {
+        code: this.errorCode,
+        message: 'Transient transport failure.',
+        retryable: true,
+      },
+    };
   }
 }
 
