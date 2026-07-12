@@ -40,15 +40,10 @@ import {
 } from '../coordinator/integration-v0-flow';
 import { ExternalDriverRuntime } from '../driver/external-driver-runtime';
 import { CommandDriverTransport } from '../driver/command-driver-transport';
-import { MockDriver, createDriverRuntimeInvoker, type DriverRuntimeHandle } from '../driver';
+import { MockDriver, type DriverRuntimeHandle } from '../driver';
+import { DriverRuntimeAgentExecutionFacade } from '../app/driver-runtime-agent-execution-facade';
 import { SynthesisAgentCouncilProvider } from '../council';
-import {
-  AgentManager,
-  DriverRuntimeAgentExecutionFacade,
-  InMemoryBufferRepository,
-  InMemoryRepository,
-  defaultMvpAgentRunDeps,
-} from '../memory';
+import { InMemoryBufferRepository, InMemoryRepository } from '../memory';
 import { parseIntegrationV0CliArgs } from './integration-v0-options';
 
 const CLAUDE_MODEL_OVERRIDE_ENV = [
@@ -134,15 +129,12 @@ try {
 
   if (cliOptions.enableCouncil && cliOptions.councilProviderMode === 'synthesis-agent') {
     const councilDriver = driver ?? new MockDriver();
-    const manager = AgentManager.create(new InMemoryRepository(), new InMemoryBufferRepository(), {
-      ...defaultMvpAgentRunDeps,
-      invokeDriver: createDriverRuntimeInvoker(councilDriver),
-    });
     flowOptions.driver = councilDriver;
     flowOptions.councilProvider = new SynthesisAgentCouncilProvider({
       agentExecutionFacade: new DriverRuntimeAgentExecutionFacade({
-        manager,
-        source_driver: councilDriver.driver_id,
+        driver: councilDriver,
+        repository: new InMemoryRepository(),
+        bufferRepository: new InMemoryBufferRepository(),
       }),
     });
   }

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { SCHEMA_VERSION, type ArtifactRef } from '../../src/core';
-import type { AgentExecutionFacade, AgentExecutionRequest } from '../../src/memory';
+import type {
+  AgentExecutionFacade,
+  AgentExecutionRequest,
+} from '../../src/protocol/agent-execution';
 import { SynthesisAgentCouncilProvider } from '../../src/council/providers/synthesis-agent-provider';
 import type { CouncilRoleExecutionError } from '../../src/council/providers/synthesis-agent-provider';
 
