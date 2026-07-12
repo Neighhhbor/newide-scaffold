@@ -56,6 +56,35 @@ describe('ExternalDriverRuntime', () => {
     );
   });
 
+  it('returns a failed DriverRunResult when the transport throws', async () => {
+    const runtime = new ExternalDriverRuntime({
+      driver_id: 'external-acp-driver',
+      session_id: 'external-session',
+      transport: {
+        invoke: async () => {
+          throw new Error('Command driver timed out after 1000ms');
+        },
+      },
+    });
+
+    const result = await runtime.sendPrompt(PROMPT);
+
+    expect(result).toMatchObject({
+      session_id: 'external-session',
+      status: 'failed',
+      artifacts: [],
+      error: {
+        code: 'EXTERNAL_DRIVER_TRANSPORT_ERROR',
+        message: 'Command driver timed out after 1000ms',
+        retryable: true,
+      },
+    });
+    expect(result.transcript_ref.type).toBe('transcript');
+    expect(result.diagnostics.notes).toContain(
+      'transport_error=Command driver timed out after 1000ms',
+    );
+  });
+
   it('delegates interrupt and shutdown to the transport when supported', async () => {
     const interrupt = vi.fn(async (_reason: string) => undefined);
     const shutdown = vi.fn(async () => undefined);

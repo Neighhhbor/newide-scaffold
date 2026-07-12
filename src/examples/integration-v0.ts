@@ -13,11 +13,17 @@
  *   # With council mode
  *   pnpm example:integration-v0 --enable-council
  *
+ *   # With synthesis-agent council provider
+ *   pnpm example:integration-v0 --enable-council --council-provider synthesis-agent
+ *
  *   # With external driver (requires ACP_DRIVER_RUNNER_DIR)
  *   ACP_DRIVER_RUNNER_DIR=/path/to/acp-client-prototype pnpm example:integration-v0 --external-driver "Add user authentication"
  *
  *   # External driver + council + custom prompt
  *   ACP_DRIVER_RUNNER_DIR=/path/to/acp-client-prototype pnpm example:integration-v0 --external-driver --enable-council "Optimize database queries"
+ *
+ *   # External driver + council + per-call timeout
+ *   ACP_DRIVER_RUNNER_DIR=/path/to/acp-client-prototype pnpm example:integration-v0 --external-driver --enable-council --council-provider synthesis-agent --external-driver-timeout-ms 60000 "Optimize database queries"
  *
  * Environment variables:
  *   - ACP_DRIVER_RUNNER_DIR: Path to acp-client-prototype (required for --external-driver)
@@ -28,10 +34,17 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { runIntegrationV0Flow } from '../coordinator/integration-v0-flow';
+import {
+  runIntegrationV0Flow,
+  type IntegrationV0Options,
+} from '../coordinator/integration-v0-flow';
 import { ExternalDriverRuntime } from '../driver/external-driver-runtime';
 import { CommandDriverTransport } from '../driver/command-driver-transport';
-import type { DriverRuntimeHandle } from '../driver';
+import { MockDriver, type DriverRuntimeHandle } from '../driver';
+import { DriverRuntimeAgentExecutionFacade } from '../app/driver-runtime-agent-execution-facade';
+import { SynthesisAgentCouncilProvider } from '../council';
+import { InMemoryBufferRepository, InMemoryRepository } from '../memory';
+import { parseIntegrationV0CliArgs } from './integration-v0-options';
 
 const CLAUDE_MODEL_OVERRIDE_ENV = [
   'ANTHROPIC_MODEL',
@@ -42,23 +55,18 @@ const CLAUDE_MODEL_OVERRIDE_ENV = [
 ] as const;
 
 // Parse command line arguments
-const args = process.argv.slice(2);
-const enableCouncil = args.includes('--enable-council');
-const useExternalDriver = args.includes('--external-driver');
-
-// Extract custom prompt (first non-flag argument)
-const customPrompt = args.find((arg) => !arg.startsWith('--'));
-const driverPrompt = customPrompt || 'Produce a mock patch artifact for integration v0 test';
+const cliOptions = parseIntegrationV0CliArgs(process.argv.slice(2));
 
 console.log('🚀 Integration v0 Flow\n');
-console.log(`Mode: ${enableCouncil ? 'council' : 'single_agent'}`);
-console.log(`Driver: ${useExternalDriver ? 'external (ACP)' : 'mock'}`);
-console.log(`Prompt: "${driverPrompt}"\n`);
+console.log(`Mode: ${cliOptions.enableCouncil ? 'council' : 'single_agent'}`);
+console.log(`Driver: ${cliOptions.useExternalDriver ? 'external (ACP)' : 'mock'}`);
+console.log(`Council provider: ${cliOptions.councilProviderMode}`);
+console.log(`Prompt: "${cliOptions.driverPrompt}"\n`);
 
 // Setup driver
 let driver: DriverRuntimeHandle | undefined;
 
-if (useExternalDriver) {
+if (cliOptions.useExternalDriver) {
   const driverRunnerDir = process.env.ACP_DRIVER_RUNNER_DIR;
 
   if (!driverRunnerDir) {
@@ -75,6 +83,9 @@ if (useExternalDriver) {
   console.log(`Using external driver from: ${driverRunnerDir}`);
   console.log(`ACP_AGENT_ID: ${process.env.ACP_AGENT_ID || 'mock-driver'}`);
   console.log(`ACP_WORKSPACE: ${process.env.ACP_WORKSPACE || process.cwd()}`);
+  if (cliOptions.externalDriverTimeoutMs !== undefined) {
+    console.log(`External driver timeout: ${String(cliOptions.externalDriverTimeoutMs)}ms`);
+  }
 
   const driverEnvFile = process.env.ACP_DRIVER_ENV_FILE || path.join(driverRunnerDir, '.env');
   const driverEnv = loadEnvFile(driverEnvFile);
@@ -98,23 +109,34 @@ if (useExternalDriver) {
         ACP_WORKSPACE: process.env.ACP_WORKSPACE || process.cwd(),
       },
       unsetEnv,
+      ...(cliOptions.externalDriverTimeoutMs !== undefined
+        ? { timeoutMs: cliOptions.externalDriverTimeoutMs }
+        : {}),
     }),
   });
 }
 
 // Run integration flow
 try {
-  const flowOptions: {
-    driver?: DriverRuntimeHandle;
-    enableCouncil: boolean;
-    driverPrompt: string;
-  } = {
-    enableCouncil,
-    driverPrompt,
+  const flowOptions: IntegrationV0Options = {
+    enableCouncil: cliOptions.enableCouncil,
+    driverPrompt: cliOptions.driverPrompt,
   };
 
   if (driver) {
     flowOptions.driver = driver;
+  }
+
+  if (cliOptions.enableCouncil && cliOptions.councilProviderMode === 'synthesis-agent') {
+    const councilDriver = driver ?? new MockDriver();
+    flowOptions.driver = councilDriver;
+    flowOptions.councilProvider = new SynthesisAgentCouncilProvider({
+      agentExecutionFacade: new DriverRuntimeAgentExecutionFacade({
+        driver: councilDriver,
+        repository: new InMemoryRepository(),
+        bufferRepository: new InMemoryBufferRepository(),
+      }),
+    });
   }
 
   const result = await runIntegrationV0Flow(flowOptions);

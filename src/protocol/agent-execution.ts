@@ -1,0 +1,57 @@
+import type {
+  ArtifactId,
+  ArtifactRef,
+  ContextPackId,
+  DriverRunResultId,
+  RoleId,
+  RunId,
+  SchemaVersion,
+  TaskId,
+  Timestamp,
+} from '../core';
+
+export const AGENT_EXECUTION_STATUSES = [
+  'completed',
+  'failed',
+  'cancelled',
+  'interrupted',
+] as const;
+
+export type AgentExecutionStatus = (typeof AGENT_EXECUTION_STATUSES)[number];
+export type AgentRunId = string;
+export type AgentExecutionDiagnostics = Record<string, unknown>;
+
+export interface AgentExecutionRequest {
+  task_id: TaskId;
+  run_id: RunId;
+  role_id: RoleId;
+  instruction: string;
+  input_artifact_refs: ArtifactId[];
+  context_policy: string;
+  schema_version: SchemaVersion;
+}
+
+export interface AgentExecutionResult {
+  agent_run_id: AgentRunId;
+  role_id: RoleId;
+  context_pack_ref: ContextPackId;
+  driver_run_result_id: DriverRunResultId;
+  artifact_refs: ArtifactRef[];
+  transcript_ref: ArtifactRef;
+  diagnostics: AgentExecutionDiagnostics;
+  status: AgentExecutionStatus;
+  memory_buffer_ref?: string;
+  created_at: Timestamp;
+  schema_version: SchemaVersion;
+}
+
+export interface AgentExecutionOptions {
+  signal?: AbortSignal;
+}
+
+export interface AgentExecutionFacade {
+  runAgent(
+    input: AgentExecutionRequest,
+    options?: AgentExecutionOptions,
+  ): Promise<AgentExecutionResult>;
+}

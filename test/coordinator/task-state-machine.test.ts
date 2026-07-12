@@ -13,7 +13,8 @@ describe('coordinator task state machine', () => {
     });
     expect(transitionTaskStatus('claimed', 'running').next_status).toBe('running');
     expect(transitionTaskStatus('running', 'reviewing').next_status).toBe('reviewing');
-    expect(transitionTaskStatus('reviewing', 'completed').next_status).toBe('completed');
+    expect(transitionTaskStatus('reviewing', 'merging').next_status).toBe('merging');
+    expect(transitionTaskStatus('merging', 'completed').next_status).toBe('completed');
   });
 
   it('allows the v0 waiting and blocked paths', () => {
@@ -41,6 +42,7 @@ describe('coordinator task state machine', () => {
       'pending_gate',
       'pending_council',
       'reviewing',
+      'merging',
       'blocked',
     ] as const;
 
@@ -67,5 +69,10 @@ describe('coordinator task state machine', () => {
     expect(() => assertTaskStatusTransition('pending_gate', 'completed')).toThrow(
       'Invalid task status transition: pending_gate -> completed',
     );
+  });
+
+  it('allows an active run to fail during review or merge', () => {
+    expect(transitionTaskStatus('reviewing', 'failed').next_status).toBe('failed');
+    expect(transitionTaskStatus('merging', 'failed').next_status).toBe('failed');
   });
 });
