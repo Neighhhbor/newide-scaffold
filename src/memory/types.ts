@@ -12,7 +12,6 @@ import type {
   PersonaDef,
   SkillRecord,
 } from './schemas';
-import type { DriverRunResult } from '../driver';
 import type { MemoryRetrievalResult } from './services/memory-query';
 
 /**
@@ -99,8 +98,27 @@ export interface MemoryCycleResult {
   extraction: ExtractionOutput;
   /** 技能晋升检查结果 */
   promotion: PromotionOutcome;
-  /** A runtime 的原始执行回执；旧 mock 依赖可缺省。 */
-  driver_execution?: DriverRunResult;
 }
 
 export type { MemoryRetrievalResult } from './services/memory-query';
+
+// ──────────────────────────────────────────────────────────
+// LiteLLM Memory Tool contracts
+// ──────────────────────────────────────────────────────────
+
+/** Interface for memory storage (injected by scaffold) */
+export interface MemoryStore {
+  search(query: string, limit?: number): Promise<MemoryEntry[]>;
+  save(entry: MemoryEntry): Promise<void>;
+  get(id: string): Promise<MemoryEntry | null>;
+}
+
+export interface MemoryEntry {
+  id: string;
+  type: 'experience' | 'skill' | 'fact' | 'context';
+  content: string;
+  tags?: string[];
+  importance?: number;
+  timestamp?: string;
+  source?: string;
+}

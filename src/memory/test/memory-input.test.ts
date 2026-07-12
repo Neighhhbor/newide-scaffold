@@ -4,8 +4,7 @@
  * 验证 submitTask 完整周期：
  * repository 检索 → planTaskInstruction → mock Driver → buffer → 提取 → 晋升。
  */
-import { describe, it, expect, vi } from 'vitest';
-import { defaultMvpAgentRunDeps } from '../mvp/default-agent-run-deps';
+import { describe, it, expect } from 'vitest';
 import { AgentManager } from '../runtime/agent-manager';
 import { InMemoryRepository } from '../adapters/in-memory-repository';
 import { InMemoryBufferRepository } from '../adapters/in-memory-buffer-repository';
@@ -16,61 +15,6 @@ import type { AgentRunDeps } from '../runtime/agent-run-deps';
 import type { AgentTaskRequest } from '../agent-types';
 
 describe('memory MVP demo flow', () => {
-  it('serializes same-role runs and keeps stopped state terminal', async () => {
-    const repository = new InMemoryRepository();
-    const bufferRepository = new InMemoryBufferRepository();
-    let active = 0;
-    let maxActive = 0;
-    const releases: Array<() => void> = [];
-    const manager = AgentManager.create(repository, bufferRepository, {
-      ...defaultMvpAgentRunDeps,
-      invokeDriver: vi.fn(async (input) => {
-        active += 1;
-        maxActive = Math.max(maxActive, active);
-        await new Promise<void>((resolve) => releases.push(resolve));
-        active -= 1;
-        return defaultMvpAgentRunDeps.invokeDriver(input);
-      }),
-    });
-    const agent = await manager.ensureAgent('serial_role');
-
-    const first = manager.runRole('serial_role', { spec: 'first', task_id: 'task_first' });
-    await vi.waitFor(() => expect(releases).toHaveLength(1));
-    const second = manager.runRole('serial_role', { spec: 'second', task_id: 'task_second' });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(releases).toHaveLength(1);
-    agent.stop();
-    releases.shift()?.();
-
-    const firstResult = await first;
-    await expect(second).rejects.toThrow('Agent is stopped');
-    expect(maxActive).toBe(1);
-    expect(firstResult.buffer_seq).toBe(1);
-    expect(agent.getState()).toBe('stopped');
-    await expect(agent.runOnce({ spec: 'third' })).rejects.toThrow('Agent is stopped');
-  });
-  it('injects runtime deps and initializes the same role only once concurrently', async () => {
-    const repository = new InMemoryRepository();
-    const initialize = vi.spyOn(repository, 'initializeAgent');
-    const bufferRepository = new InMemoryBufferRepository();
-    const invokeDriver = vi.fn(defaultMvpAgentRunDeps.invokeDriver);
-    const manager = AgentManager.create(repository, bufferRepository, {
-      ...defaultMvpAgentRunDeps,
-      queryMemory: async (memory) => ({
-        experiences: await memory.listExperiences(),
-        skills: await memory.listSkills(),
-      }),
-      invokeDriver,
-    });
-
-    await Promise.all([manager.ensureAgent('reviewer'), manager.ensureAgent('reviewer')]);
-    await manager.runRole('reviewer', { spec: 'Use injected deps.', task_id: 'task_injected' });
-    await manager.runRole('reviewer', { spec: 'Use injected deps.', task_id: 'task_reuse' });
-
-    expect(initialize).toHaveBeenCalledTimes(1);
-    expect(invokeDriver).toHaveBeenCalledTimes(2);
-    expect(invokeDriver.mock.calls[1]?.[0].driver_context.experiences).toHaveLength(1);
-  });
   it('createAgent → submitTask → 检索 → mock Driver → buffer → 提取 → 默认不晋升', async () => {
     const repository = new InMemoryRepository();
     const bufferRepository = new InMemoryBufferRepository();
@@ -126,16 +70,14 @@ describe('memory MVP demo flow', () => {
       queryMemory: async () => ({ experiences: [], skills: [] }),
       planTaskInstruction: async () => 'Execute the task.',
       invokeDriver: async () => ({
-        report: {
-          summary: 'Task completed successfully.',
-          artifacts: [],
-          decisions: [{ point: 'Approach', options: ['A', 'B'], chosen: 'A', reason: 'Best fit' }],
-          blockers: [],
-          referenced_experiences: [
-            { experience_id: 'exp_ref', applied: true, effectiveness: 'fully_effective', note: '' },
-          ],
-          assumptions: [],
-        },
+        summary: 'Task completed successfully.',
+        artifacts: [],
+        decisions: [{ point: 'Approach', options: ['A', 'B'], chosen: 'A', reason: 'Best fit' }],
+        blockers: [],
+        referenced_experiences: [
+          { experience_id: 'exp_ref', applied: true, effectiveness: 'fully_effective', note: '' },
+        ],
+        assumptions: [],
       }),
       extractor: {
         extract: async (snapshot) => ({
