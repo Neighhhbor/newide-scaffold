@@ -789,6 +789,8 @@ describe('runIntegrationV0Flow', () => {
         thread_id: result.summary.mailbox_thread_id,
       },
     });
+    expect(result.frontend_snapshot.task.status).toBe('completed');
+    expect(result.frontend_snapshot.current.task_status).toBe('completed');
 
     expect(result.summary.driver_diagnostics).toHaveProperty('driver_id');
     expect(result.summary.driver_diagnostics).toHaveProperty('duration_ms');
@@ -965,6 +967,8 @@ describe('runIntegrationV0Flow', () => {
 
     // Verify run failed
     expect(result.summary.status).toBe('failed');
+    expect(result.frontend_snapshot.task.status).toBe('failed');
+    expect(result.frontend_snapshot.current.task_status).toBe('failed');
 
     // Verify timeline has RunFailed instead of RunCompleted
     const timelineNames = result.timeline.map((t) => t.name);

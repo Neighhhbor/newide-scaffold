@@ -183,7 +183,7 @@ export async function runIntegrationV0Flow(
     affected_paths: ['src/**'],
     completion_criteria: ['integration v0 flow completes successfully'],
   };
-  const task = orchestrator.createTask(taskRequest);
+  let task = orchestrator.createTask(taskRequest);
   timeline.push({ name: 'TaskCreated', id: task.task_id });
 
   // 2. Create run
@@ -192,8 +192,8 @@ export async function runIntegrationV0Flow(
   const threadId = run.run_id; // Use run_id as thread_id for v0
   timeline.push({ name: 'RunCreated', id: run.run_id });
   orchestrator.updateRunStatus(run.run_id, 'running');
-  orchestrator.updateTaskStatus(task.task_id, 'claimed');
-  orchestrator.updateTaskStatus(task.task_id, 'running');
+  task = orchestrator.updateTaskStatus(task.task_id, 'claimed');
+  task = orchestrator.updateTaskStatus(task.task_id, 'running');
 
   // 3. Select driver (injected or default MockDriver)
   const driver = options?.driver ?? new MockDriver();
@@ -449,7 +449,7 @@ export async function runIntegrationV0Flow(
   }
 
   // 11. Run gates (D: Gate)
-  orchestrator.updateTaskStatus(task.task_id, 'reviewing');
+  task = orchestrator.updateTaskStatus(task.task_id, 'reviewing');
   const taskCompletedEvent = orchestrator.appendEvent({
     event_type: 'task.completed',
     subject_id: task.task_id,
@@ -866,7 +866,7 @@ export async function runIntegrationV0Flow(
   // 16. Mark run as completed or failed
   const finalTaskStatus = flowCompleted ? 'completed' : 'failed';
   const finalRunStatus = flowCompleted ? 'completed' : 'failed';
-  orchestrator.updateTaskStatus(task.task_id, finalTaskStatus);
+  task = orchestrator.updateTaskStatus(task.task_id, finalTaskStatus);
   orchestrator.updateRunStatus(run.run_id, finalRunStatus);
   const runCompletedEvent = orchestrator.appendEvent({
     event_type: flowCompleted ? 'run.completed' : 'run.failed',
