@@ -16,6 +16,7 @@ import { nowTimestamp } from '../../core';
 import type { LlmClient } from '../ports/llm-client';
 import type { AgentContextCleaner, AgentContextCleanInput } from '../ports/agent-context-cleaner';
 import type { AgentContextSnapshot } from '../schemas';
+import { CONTEXT_CLEANER_SYSTEM_PROMPT } from '../prompts/context-cleaner';
 
 // ═══════════════════════════════════════════
 //  Response schema
@@ -67,19 +68,7 @@ function buildCleanPrompt(input: AgentContextCleanInput): string {
   return sections.join('\n\n');
 }
 
-const SYSTEM_PROMPT = `You are a context cleaner for an AI agent system. Your job is to compress raw agent execution context into a structured summary.
-
-Extract two things from the raw context:
-
-1. thinking_trace — the agent's reasoning process: what it considered, why it made choices, any chain-of-thought or analysis. This captures the "why" behind decisions.
-
-2. planning_trace — the agent's plan or task decomposition: what steps it identified, in what order, any sub-tasks. This captures the "how" — the execution structure.
-
-Output JSON only with this exact format:
-{
-  "thinking_trace": "concise reasoning summary",
-  "planning_trace": "concise plan summary"
-}`;
+// Prompt 已移至 prompts/context-cleaner.ts
 
 // ═══════════════════════════════════════════
 //  Token estimation helpers
@@ -103,7 +92,7 @@ export class LlmContextCleaner implements AgentContextCleaner {
 
       const raw = await this.llm.complete({
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: CONTEXT_CLEANER_SYSTEM_PROMPT },
           { role: 'user', content: userPrompt },
         ],
         responseFormat: { type: 'json_object' },

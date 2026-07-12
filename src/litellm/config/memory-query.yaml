@@ -1,6 +1,11 @@
 tasks:
   memory-query:
-    profile: cheap
+    models:
+      - provider: openai
+        model: deepseek-chat
+        order: 1
+    strategy: order
     timeoutMs: 60000
     maxRetries: 2
     temperature: 0.1
+    maxTokens: 4000

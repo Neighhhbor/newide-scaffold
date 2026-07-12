@@ -1,8 +1,7 @@
 /**
  * Agent 运行时 DTO 类型
  *
- * 定义任务派发请求（AgentTaskRequest）、执行循环状态机（AgentLoopState），
- * 以及目标态持久 run loop 的占位结果（AgentLoopTickResult）。
+ * 定义任务派发请求（AgentTaskRequest）和执行循环状态机（AgentLoopState）。
  * 仅在内存中流转，不持久化；与 schemas.ts 中的 AgentHandle 等互补。
  *
  * ## 任务文本的两个层次
@@ -45,14 +44,3 @@ export interface AgentTaskRequest {
  * 转换：idle ↔ sleeping ↔ running；任意活跃态 → stopped。
  */
 export type AgentLoopState = 'idle' | 'sleeping' | 'running' | 'stopped';
-
-/**
- * 目标态持久 Agent run loop 的单步执行结果。
- *
- * 当前实现只用于占位，声明 runOnce 仍是 MVP 同步单轮路径；后续接入任务队列、
- * 异步 buffer processor 或事件调度时，可扩展这个结果结构。
- */
-export interface AgentLoopTickResult {
-  status: 'idle' | 'skipped';
-  reason: string;
-}
