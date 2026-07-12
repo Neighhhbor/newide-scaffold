@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SCHEMA_VERSION, type ArtifactRef } from '../../src/core';
 import type { AgentExecutionFacade, AgentExecutionRequest } from '../../src/memory';
 import { SynthesisAgentCouncilProvider } from '../../src/council/providers/synthesis-agent-provider';
+import type { CouncilRoleExecutionError } from '../../src/council/providers/synthesis-agent-provider';
 
 describe('SynthesisAgentCouncilProvider', () => {
   it('runs proposer, reviewer, and synthesizer roles through AgentExecutionFacade', async () => {
@@ -33,6 +34,7 @@ describe('SynthesisAgentCouncilProvider', () => {
     };
     const provider = new SynthesisAgentCouncilProvider({ agentExecutionFacade });
     const controller = new AbortController();
+    const lifecycleEvents: string[] = [];
 
     const result = await provider.runCouncilRound(
       {
@@ -53,7 +55,10 @@ describe('SynthesisAgentCouncilProvider', () => {
         },
         schema_version: SCHEMA_VERSION,
       },
-      { signal: controller.signal },
+      {
+        signal: controller.signal,
+        onLifecycleEvent: (event) => lifecycleEvents.push(event.type),
+      },
     );
 
     expect(requests.map((request) => request.role_id)).toEqual([
@@ -82,13 +87,27 @@ describe('SynthesisAgentCouncilProvider', () => {
       selected_artifact_refs: ['artifact_synthesizer'],
       can_create_merge_authorization: false,
     });
+    expect(lifecycleEvents).toEqual([
+      'council.proposal.completed',
+      'council.proposal.completed',
+      'council.review.completed',
+      'council.synthesis.completed',
+    ]);
   });
 
-  it.each(['proposer_a', 'proposer_b', 'reviewer', 'synthesizer'])(
-    'fails the council round when %s fails',
-    async (failedRole) => {
+  it.each([
+    ['proposer_a', 'COUNCIL_PROPOSAL_FAILED'],
+    ['proposer_b', 'COUNCIL_PROPOSAL_FAILED'],
+    ['reviewer', 'COUNCIL_REVIEW_FAILED'],
+    ['synthesizer', 'COUNCIL_SYNTHESIS_FAILED'],
+  ] as const)(
+    'fails the council round with a stable error when %s fails',
+    async (failedRole, expectedCode) => {
+      const requests: string[] = [];
+      const lifecycleEvents: Array<{ type: string; payload: Record<string, unknown> }> = [];
       const agentExecutionFacade: AgentExecutionFacade = {
         async runAgent(input) {
+          requests.push(input.role_id);
           return {
             agent_run_id: `agent_run_${input.role_id}`,
             role_id: input.role_id,
@@ -112,8 +131,8 @@ describe('SynthesisAgentCouncilProvider', () => {
       };
       const provider = new SynthesisAgentCouncilProvider({ agentExecutionFacade });
 
-      await expect(
-        provider.runCouncilRound({
+      const failure = provider.runCouncilRound(
+        {
           run_id: 'run_failed_role',
           task_id: 'task_failed_role',
           trigger: 'manual',
@@ -121,11 +140,121 @@ describe('SynthesisAgentCouncilProvider', () => {
           question: 'Fail one Council role.',
           proposals: [],
           schema_version: SCHEMA_VERSION,
-        }),
-      ).rejects.toThrow(`Council role ${failedRole} failed with status failed`);
+        },
+        { onLifecycleEvent: (event) => lifecycleEvents.push(event) },
+      );
+      await expect(failure).rejects.toMatchObject<Partial<CouncilRoleExecutionError>>({
+        code: expectedCode,
+        role_id: failedRole,
+        agent_status: 'failed',
+      });
+      expect(requests).toEqual(
+        ['proposer_a', 'proposer_b', 'reviewer', 'synthesizer'].slice(
+          0,
+          ['proposer_a', 'proposer_b', 'reviewer', 'synthesizer'].indexOf(failedRole) + 1,
+        ),
+      );
+      expect(lifecycleEvents.at(-1)).toMatchObject({
+        type: 'council.failed',
+        payload: { code: expectedCode, role_id: failedRole, agent_status: 'failed' },
+      });
     },
   );
+
+  it('preserves cancellation without publishing council.failed', async () => {
+    const controller = new AbortController();
+    const lifecycleEvents: string[] = [];
+    const agentExecutionFacade: AgentExecutionFacade = {
+      async runAgent(input) {
+        controller.abort(new Error('cancelled by user'));
+        return {
+          agent_run_id: `agent_run_${input.role_id}`,
+          role_id: input.role_id,
+          context_pack_ref: `context_${input.role_id}`,
+          driver_run_result_id: `driver_result_${input.role_id}`,
+          artifact_refs: [],
+          transcript_ref: createArtifact(
+            `transcript_${input.role_id}`,
+            input.role_id,
+            'transcript',
+          ),
+          diagnostics: { driver_id: `driver_${input.role_id}` },
+          status: 'cancelled',
+          created_at: '2026-07-07T00:00:00.000Z',
+          schema_version: SCHEMA_VERSION,
+        };
+      },
+    };
+    const provider = new SynthesisAgentCouncilProvider({ agentExecutionFacade });
+
+    await expect(
+      provider.runCouncilRound(
+        {
+          run_id: 'run_cancelled',
+          task_id: 'task_cancelled',
+          trigger: 'manual',
+          decision_mode: 'advisory',
+          question: 'Cancel Council.',
+          proposals: [],
+          schema_version: SCHEMA_VERSION,
+        },
+        {
+          signal: controller.signal,
+          onLifecycleEvent: (event) => lifecycleEvents.push(event.type),
+        },
+      ),
+    ).rejects.toThrow('cancelled by user');
+    expect(lifecycleEvents).not.toContain('council.failed');
+  });
+
+  it('preserves the typed role error when council.failed publication fails', async () => {
+    const failedProvider = new SynthesisAgentCouncilProvider({
+      agentExecutionFacade: createFacade('proposer_a'),
+    });
+    await expect(
+      failedProvider.runCouncilRound(baseInput(), {
+        onLifecycleEvent: () => {
+          throw new Error('observer unavailable');
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 'COUNCIL_PROPOSAL_FAILED',
+      role_id: 'proposer_a',
+    });
+  });
 });
+
+function baseInput() {
+  return {
+    run_id: 'run_observer',
+    task_id: 'task_observer',
+    trigger: 'manual' as const,
+    decision_mode: 'advisory' as const,
+    question: 'Observe Council.',
+    proposals: [],
+    schema_version: SCHEMA_VERSION,
+  };
+}
+
+function createFacade(failedRole?: string): AgentExecutionFacade {
+  return {
+    async runAgent(input) {
+      const failed = input.role_id === failedRole;
+      return {
+        agent_run_id: `agent_run_${input.role_id}`,
+        role_id: input.role_id,
+        context_pack_ref: `context_${input.role_id}`,
+        driver_run_result_id: `driver_result_${input.role_id}`,
+        artifact_refs: failed ? [] : [createArtifact(`artifact_${input.role_id}`, input.role_id)],
+        transcript_ref: createArtifact(`transcript_${input.role_id}`, input.role_id, 'transcript'),
+        diagnostics: { driver_id: `driver_${input.role_id}` },
+        status: failed ? ('failed' as const) : ('completed' as const),
+        created_at: '2026-07-07T00:00:00.000Z',
+        schema_version: SCHEMA_VERSION,
+      };
+    },
+  };
+}
 
 function createArtifact(
   artifactId: string,

@@ -4,6 +4,7 @@
  * 这个文件负责异步启动 integration runner 并维护查询状态，不处理 JSON-RPC framing 或进程 I/O。
  */
 import type { IntegrationV0Result } from '../coordinator/integration-v0-flow';
+import { CouncilRoleExecutionError } from '../council';
 import type { Event } from '../core';
 import {
   IntegrationV0CoordinatorRunner,
@@ -135,8 +136,9 @@ export class NewideBackendService {
           }
           const staged = this.registry.stageTerminal(identity.run_id, {
             status: 'failed',
-            code: 'RUNNER_FAILED',
+            code: error instanceof CouncilRoleExecutionError ? error.code : 'RUNNER_FAILED',
             message: normalized.message,
+            ...(error instanceof CouncilRoleExecutionError ? { details: error.details } : {}),
           });
           if (staged) await this.persistTerminal(identity.run_id, staged);
         })

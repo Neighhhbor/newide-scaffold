@@ -578,7 +578,26 @@ export async function runIntegrationV0Flow(
       gate_results: preGateResults,
       evidence_pack: evidencePack,
     },
-    { ...(options?.signal ? { signal: options.signal } : {}) },
+    {
+      ...(options?.signal ? { signal: options.signal } : {}),
+      ...(options?.enableCouncil
+        ? {
+            onCouncilLifecycleEvent: (event) => {
+              const domainEvent = orchestrator.appendEvent({
+                event_type: event.type,
+                subject_id:
+                  typeof event.payload.agent_run_id === 'string'
+                    ? event.payload.agent_run_id
+                    : run.run_id,
+                run_id: run.run_id,
+                task_id: task.task_id,
+                payload: event.payload,
+              });
+              timeline.push({ name: event.type, id: domainEvent.event_id });
+            },
+          }
+        : {}),
+    },
   );
   options?.signal?.throwIfAborted();
 
