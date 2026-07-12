@@ -9,6 +9,12 @@ export interface CommandDriverTransportOptions {
   env?: NodeJS.ProcessEnv;
   unsetEnv?: readonly string[];
   timeoutMs?: number;
+  /**
+   * 是否通过 shell 执行命令。
+   * 默认：Windows 上为 true（需要 shell 才能找到 pnpm.cmd / npx.cmd），
+   * 其他平台为 false。
+   */
+  shell?: boolean;
 }
 
 export class CommandDriverTransport implements ExternalDriverTransport {
@@ -18,6 +24,7 @@ export class CommandDriverTransport implements ExternalDriverTransport {
   private readonly env: NodeJS.ProcessEnv | undefined;
   private readonly unsetEnv: readonly string[];
   private readonly timeoutMs: number | undefined;
+  private readonly shell: boolean;
   private stderr = '';
 
   constructor(options: CommandDriverTransportOptions) {
@@ -34,6 +41,7 @@ export class CommandDriverTransport implements ExternalDriverTransport {
     this.env = options.env;
     this.unsetEnv = options.unsetEnv ?? [];
     this.timeoutMs = options.timeoutMs;
+    this.shell = options.shell ?? process.platform === 'win32';
   }
 
   get lastStderr(): string {
@@ -176,6 +184,7 @@ export class CommandDriverTransport implements ExternalDriverTransport {
   private spawnOptions(): SpawnOptionsWithoutStdio {
     const options: SpawnOptionsWithoutStdio = {
       stdio: ['pipe', 'pipe', 'pipe'],
+      shell: this.shell,
     };
 
     if (this.cwd !== undefined) {
