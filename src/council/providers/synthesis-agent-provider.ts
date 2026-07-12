@@ -5,7 +5,7 @@
  * 不直接调用 A 方向 DriverRuntimeHandle。
  */
 import { SCHEMA_VERSION, createId, nowTimestamp, type ArtifactRef } from '../../core';
-import type { AgentExecutionFacade, AgentExecutionResult } from '../../memory';
+import type { AgentExecutionFacade, AgentExecutionResult } from '../../protocol/agent-execution';
 import type {
   CouncilDecision,
   CouncilExecutionOptions,

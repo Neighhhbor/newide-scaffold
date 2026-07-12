@@ -14,7 +14,10 @@ import {
 } from '../../src/driver';
 import { SCHEMA_VERSION, createId, type ArtifactRef } from '../../src/core';
 import type { CouncilProvider, CouncilRoundInput } from '../../src/council';
-import type { AgentExecutionFacade, AgentExecutionRequest } from '../../src/memory';
+import type {
+  AgentExecutionFacade,
+  AgentExecutionRequest,
+} from '../../src/protocol/agent-execution';
 import type { HookResult } from '../../src/hook';
 import type {
   MaterializationInput,

@@ -18,13 +18,10 @@ import {
   type DriverRunResult,
   type DriverRuntimeHandle,
 } from '../driver';
+import type { AgentExecutionFacade, AgentExecutionResult } from '../protocol/agent-execution';
 import { HookEngine, type HookEvent, type HookResult } from '../hook';
 import { DecisionAggregator, type GateResult } from '../gate';
-import {
-  MockMemoryProvider,
-  type AgentExecutionFacade,
-  type AgentExecutionResult,
-} from '../memory';
+import { MockMemoryProvider } from '../memory';
 import { RuntimeOrchestrator } from './orchestrator';
 import type { TelemetrySink } from '../telemetry/telemetry-sink';
 import {

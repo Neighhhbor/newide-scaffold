@@ -10,20 +10,11 @@ import type { Readable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
 import { IntegrationV0CoordinatorRunner } from '../coordinator/coordinator-runner';
 import { SynthesisAgentCouncilProvider } from '../council';
-import {
-  CommandDriverTransport,
-  ExternalDriverRuntime,
-  createDriverRuntimeInvoker,
-} from '../driver';
-import {
-  AgentManager,
-  DriverRuntimeAgentExecutionFacade,
-  InMemoryBufferRepository,
-  InMemoryRepository,
-  defaultMvpAgentRunDeps,
-} from '../memory';
+import { CommandDriverTransport, ExternalDriverRuntime } from '../driver';
+import { InMemoryBufferRepository, InMemoryRepository } from '../memory';
 import { JsonRpcDispatcher, JsonRpcLineSession } from '../rpc/json-rpc-dispatcher';
 import { RunRpcMethods } from '../rpc/run-methods';
+import { DriverRuntimeAgentExecutionFacade } from './driver-runtime-agent-execution-facade';
 import { NewideBackendService } from './newide-backend-service';
 
 export interface BackendRpcServerOptions {
@@ -73,14 +64,10 @@ export function createProductionBackendService(
       unsetEnv: MODEL_OVERRIDE_ENV.filter((key) => driverEnv[key] === undefined),
     }),
   });
-  const manager = AgentManager.create(new InMemoryRepository(), new InMemoryBufferRepository(), {
-    ...defaultMvpAgentRunDeps,
-    planTaskInstruction: async (task) => task.spec,
-    invokeDriver: createDriverRuntimeInvoker(driver),
-  });
   const agentExecutionFacade = new DriverRuntimeAgentExecutionFacade({
-    manager,
-    source_driver: driver.driver_id,
+    driver,
+    repository: new InMemoryRepository(),
+    bufferRepository: new InMemoryBufferRepository(),
   });
   const runner = new IntegrationV0CoordinatorRunner({
     driver,

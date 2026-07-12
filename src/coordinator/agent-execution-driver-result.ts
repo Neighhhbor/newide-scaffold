@@ -6,7 +6,7 @@
  */
 import { nowTimestamp, type SchemaVersion } from '../core';
 import type { DriverRunResult, DriverRunStatus } from '../driver';
-import type { AgentExecutionResult, AgentExecutionStatus } from '../memory';
+import type { AgentExecutionResult, AgentExecutionStatus } from '../protocol/agent-execution';
 
 export interface BuildDriverRunResultFromAgentExecutionInput {
   result: AgentExecutionResult;
