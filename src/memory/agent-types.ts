@@ -1,7 +1,7 @@
 /**
  * Agent 运行时 DTO 类型
  *
- * 定义任务派发请求（AgentTaskRequest）与执行循环状态机（AgentLoopState）。
+ * 定义任务派发请求（AgentTaskRequest）和执行循环状态机（AgentLoopState）。
  * 仅在内存中流转，不持久化；与 schemas.ts 中的 AgentHandle 等互补。
  *
  * ## 任务文本的两个层次

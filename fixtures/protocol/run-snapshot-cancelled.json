@@ -1,0 +1,35 @@
+{
+  "schema_version": "v0",
+  "run_id": "run_cancelled_001",
+  "task_id": "task_cancelled_001",
+  "mode": "single_agent",
+  "status": "cancelled",
+  "current": {
+    "stage": "intervention",
+    "active_node_code": "N18"
+  },
+  "timeline": [
+    {
+      "event_id": "run_event_cancelled_001",
+      "sequence": 1,
+      "run_id": "run_cancelled_001",
+      "task_id": "task_cancelled_001",
+      "type": "run.cancelled",
+      "source": "coordinator",
+      "created_at": "2026-07-11T11:00:00.000Z",
+      "payload": {
+        "status": "cancelled"
+      },
+      "schema_version": "v0"
+    }
+  ],
+  "agent_runs": [],
+  "artifacts": [],
+  "gates": [],
+  "errors": [],
+  "final_output": {
+    "status": "cancelled",
+    "artifact_refs": [],
+    "files_written": []
+  }
+}

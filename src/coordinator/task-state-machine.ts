@@ -10,13 +10,18 @@
  */
 export type CoordinatorTaskStatus =
   | 'created'
+  | 'triaged'
+  | 'ready'
   | 'claimed'
   | 'running'
+  | 'waiting_help'
   | 'waiting_input'
   | 'pending_gate'
   | 'pending_council'
   | 'reviewing'
   | 'blocked'
+  | 'escalated'
+  | 'merging'
   | 'completed'
   | 'failed'
   | 'cancelled';
@@ -30,26 +35,46 @@ const TERMINAL_TASK_STATUSES = new Set<CoordinatorTaskStatus>(['completed', 'fai
 
 const NON_TERMINAL_TASK_STATUSES: readonly CoordinatorTaskStatus[] = [
   'created',
+  'triaged',
+  'ready',
   'claimed',
   'running',
+  'waiting_help',
   'waiting_input',
   'pending_gate',
   'pending_council',
   'reviewing',
   'blocked',
+  'escalated',
+  'merging',
 ];
 
 const ALLOWED_TRANSITIONS: Readonly<
   Record<CoordinatorTaskStatus, readonly CoordinatorTaskStatus[]>
 > = {
-  created: ['claimed', 'cancelled'],
+  created: ['triaged', 'claimed', 'cancelled'],
+  triaged: ['ready', 'claimed', 'blocked', 'cancelled'],
+  ready: ['claimed', 'blocked', 'cancelled'],
   claimed: ['running', 'cancelled'],
-  running: ['reviewing', 'waiting_input', 'pending_gate', 'pending_council', 'failed', 'cancelled'],
+  running: [
+    'reviewing',
+    'waiting_help',
+    'waiting_input',
+    'pending_gate',
+    'pending_council',
+    'blocked',
+    'escalated',
+    'failed',
+    'cancelled',
+  ],
+  waiting_help: ['running', 'blocked', 'escalated', 'failed', 'cancelled'],
   waiting_input: ['running', 'cancelled'],
-  pending_gate: ['running', 'blocked', 'cancelled'],
-  pending_council: ['reviewing', 'waiting_input', 'blocked', 'cancelled'],
-  reviewing: ['completed', 'blocked', 'cancelled'],
-  blocked: ['running', 'cancelled'],
+  pending_gate: ['running', 'blocked', 'failed', 'cancelled'],
+  pending_council: ['reviewing', 'waiting_input', 'blocked', 'failed', 'cancelled'],
+  reviewing: ['merging', 'completed', 'blocked', 'escalated', 'failed', 'cancelled'],
+  blocked: ['running', 'escalated', 'failed', 'cancelled'],
+  escalated: ['reviewing', 'merging', 'blocked', 'failed', 'cancelled'],
+  merging: ['completed', 'blocked', 'failed', 'cancelled'],
   completed: [],
   failed: [],
   cancelled: [],
