@@ -9,12 +9,6 @@ export interface CommandDriverTransportOptions {
   env?: NodeJS.ProcessEnv;
   unsetEnv?: readonly string[];
   timeoutMs?: number;
-  /**
-   * 是否通过 shell 执行命令。
-   * 默认：Windows 上为 true（需要 shell 才能找到 pnpm.cmd / npx.cmd），
-   * 其他平台为 false。
-   */
-  shell?: boolean;
 }
 
 export class CommandDriverTransport implements ExternalDriverTransport {
@@ -24,7 +18,6 @@ export class CommandDriverTransport implements ExternalDriverTransport {
   private readonly env: NodeJS.ProcessEnv | undefined;
   private readonly unsetEnv: readonly string[];
   private readonly timeoutMs: number | undefined;
-  private readonly shell: boolean;
   private stderr = '';
 
   constructor(options: CommandDriverTransportOptions) {
@@ -40,9 +33,7 @@ export class CommandDriverTransport implements ExternalDriverTransport {
     this.cwd = options.cwd;
     this.env = options.env;
     this.unsetEnv = options.unsetEnv ?? [];
-    // 默认 120 秒超时，避免外部 Driver 无限期挂起
-    this.timeoutMs = options.timeoutMs ?? 120_000;
-    this.shell = options.shell ?? process.platform === 'win32';
+    this.timeoutMs = options.timeoutMs;
   }
 
   get lastStderr(): string {
@@ -55,32 +46,7 @@ export class CommandDriverTransport implements ExternalDriverTransport {
 
   async run(input: DriverPrompt): Promise<DriverRunResult> {
     const stdout = await this.execute(input);
-    let parsed: unknown;
-
-    try {
-      parsed = JSON.parse(stdout);
-    } catch {
-      // 容错：stdout 可能被非 JSON 文本污染（例如 auth 模块的 console.log 输出），
-      // 尝试从混合输出中提取最后一个合法 JSON 对象（contract-runner 总是在最后写入 JSON）。
-      const extracted = extractLastJsonObject(stdout);
-      if (extracted !== null) {
-        try {
-          parsed = JSON.parse(extracted);
-        } catch (innerError: unknown) {
-          const reason = innerError instanceof Error ? innerError.message : String(innerError);
-          throw new Error(
-            `Command driver stdout was not valid JSON (extraction also failed): ${reason}. stdout: ${summarizeText(stdout)}`,
-          );
-        }
-      } else {
-        throw new Error(
-          `Command driver stdout was not valid JSON and no JSON object could be extracted. stdout: ${summarizeText(stdout)}`,
-        );
-      }
-    }
-
-    assertDriverRunResult(parsed, 'Command driver');
-    return parsed;
+    return parseDriverRunResult(stdout);
   }
 
   private execute(input: DriverPrompt): Promise<string> {
@@ -196,15 +162,13 @@ export class CommandDriverTransport implements ExternalDriverTransport {
         resolve(stdout);
       });
 
-      const stdinPayload = JSON.stringify(input);
-      child.stdin.end(stdinPayload);
+      child.stdin.end(JSON.stringify(input));
     });
   }
 
   private spawnOptions(): SpawnOptionsWithoutStdio {
     const options: SpawnOptionsWithoutStdio = {
       stdio: ['pipe', 'pipe', 'pipe'],
-      shell: this.shell,
     };
 
     if (this.timeoutMs !== undefined && process.platform !== 'win32') {
@@ -237,65 +201,6 @@ export class CommandDriverTransport implements ExternalDriverTransport {
   }
 }
 
-/**
- * 从混合 stdout 中提取最后一个合法的 JSON 对象。
- *
- * 当子进程通过 console.log() 在 stdout 上输出非 JSON 文本时
- * （例如 auth 模块打印的登录横幅），stdout 会变成"文本前缀 + JSON"的混合体。
- * 此函数从 stdout 末尾向前搜索 `{`，用花括号深度计数的方式提取完整 JSON。
- */
-function extractLastJsonObject(text: string): string | null {
-  // 策略：从最后一个 `{` 开始尝试提取 JSON 对象。
-  // contract-runner 总是在 stdout 最后一行写入 DriverRunResult JSON，
-  // 所以在混合输出的场景下，最后一个 `{` 就是 JSON 的起点。
-  const lastBrace = text.lastIndexOf('{');
-  if (lastBrace === -1) return null;
-
-  return extractJsonFrom(text, lastBrace);
-}
-
-/**
- * 从指定位置开始，用花括号深度计数提取一个完整的 JSON 值（对象或数组）。
- * 支持字符串内的转义和嵌套。
- */
-function extractJsonFrom(text: string, startIndex: number): string | null {
-  let depth = 0;
-  let inString = false;
-  let escapeNext = false;
-
-  for (let i = startIndex; i < text.length; i++) {
-    const ch = text[i];
-
-    if (escapeNext) {
-      escapeNext = false;
-      continue;
-    }
-
-    if (ch === '\\' && inString) {
-      escapeNext = true;
-      continue;
-    }
-
-    if (ch === '"') {
-      inString = !inString;
-      continue;
-    }
-
-    if (inString) continue;
-
-    if (ch === '{' || ch === '[') {
-      depth++;
-    } else if (ch === '}' || ch === ']') {
-      depth--;
-      if (depth === 0) {
-        return text.slice(startIndex, i + 1);
-      }
-    }
-  }
-
-  return null; // 未闭合
-}
-
 function summarizeText(input: string, maxLength = 500): string {
   const text = input.trim();
   if (!text) {
@@ -314,11 +219,28 @@ function stdoutIsDriverRunResult(stdout: string): boolean {
   }
 
   try {
-    assertDriverRunResult(JSON.parse(stdout), 'Command driver');
+    parseDriverRunResult(stdout);
     return true;
   } catch {
     return false;
   }
+}
+
+function parseDriverRunResult(stdout: string): DriverRunResult {
+  const json = stdout.trim().split(/\r?\n/).at(-1) ?? '';
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(json);
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Command driver stdout was not valid JSON: ${reason}. stdout: ${summarizeText(stdout)}`,
+    );
+  }
+
+  assertDriverRunResult(parsed, 'Command driver');
+  return parsed;
 }
 
 function terminateChild(pid: number | undefined, signal: NodeJS.Signals): void {

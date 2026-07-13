@@ -8,7 +8,7 @@ import {
   ALL_HOOK_POINTS,
   DEFAULT_HOOK_VERSION,
   DEFAULT_HOOK_SETTINGS,
-  //  DEFAULT_PRIORITY,
+//  DEFAULT_PRIORITY,
 } from './constants';
 import type { GateDecision, SubGateRef } from '../gate';
 
@@ -21,9 +21,7 @@ export class HookConfigValidationError extends Error {
   public readonly errors: string[];
 
   constructor(errors: string[]) {
-    super(
-      `Hook config validation failed with ${errors.length} error(s):\n${errors.map((e) => `  - ${e}`).join('\n')}`,
-    );
+    super(`Hook config validation failed with ${errors.length} error(s):\n${errors.map((e) => `  - ${e}`).join('\n')}`);
     this.name = 'HookConfigValidationError';
     this.errors = errors;
   }
@@ -181,9 +179,7 @@ export function validateHookConfig(raw: unknown, _sourcePath?: string): HookConf
   const prefix = _sourcePath ? `[${_sourcePath}] ` : '';
 
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new HookConfigValidationError([
-      `${prefix}Config must be a YAML object, got ${Array.isArray(raw) ? 'array' : typeof raw}`,
-    ]);
+    throw new HookConfigValidationError([`${prefix}Config must be a YAML object, got ${Array.isArray(raw) ? 'array' : typeof raw}`]);
   }
 
   const obj = raw as Record<string, unknown>;
@@ -211,7 +207,11 @@ export function validateHookConfig(raw: unknown, _sourcePath?: string): HookConf
 // Internal parsing helpers
 // ──────────────────────────────────────────────
 
-function parseSettings(raw: unknown, errors: string[], prefix: string): HookSettings {
+function parseSettings(
+  raw: unknown,
+  errors: string[],
+  prefix: string,
+): HookSettings {
   if (raw === undefined || raw === null) {
     return { ...DEFAULT_HOOK_SETTINGS };
   }
@@ -233,7 +233,11 @@ function parseSettings(raw: unknown, errors: string[], prefix: string): HookSett
   return result;
 }
 
-function parseGates(raw: unknown, errors: string[], prefix: string): Record<string, GateConfig> {
+function parseGates(
+  raw: unknown,
+  errors: string[],
+  prefix: string,
+): Record<string, GateConfig> {
   if (raw === undefined || raw === null) {
     return {};
   }
@@ -253,7 +257,12 @@ function parseGates(raw: unknown, errors: string[], prefix: string): Record<stri
   return gates;
 }
 
-function parseGateConfig(name: string, raw: unknown, errors: string[], prefix: string): GateConfig {
+function parseGateConfig(
+  name: string,
+  raw: unknown,
+  errors: string[],
+  prefix: string,
+): GateConfig {
   if (typeof raw !== 'object' || raw === null) {
     errors.push(`${prefix}gates.${name} must be an object, got ${typeof raw}`);
     return { type: 'command' } as GateConfig;
@@ -281,9 +290,7 @@ function parseGateConfig(name: string, raw: unknown, errors: string[], prefix: s
   // gates — sub-gate references for composite type
   // YAML uses `gate` field name; SubGateRef uses `gate_id`
   if (Array.isArray(g['gates'])) {
-    gate.gates = g['gates'].map((item: unknown, idx: number) =>
-      parseSubGateRef(item, name, idx, errors, prefix),
-    );
+    gate.gates = g['gates'].map((item: unknown, idx: number) => parseSubGateRef(item, name, idx, errors, prefix));
   }
 
   // output
@@ -431,9 +438,7 @@ function parseBindingEntry(
   if (typeof b['priority'] === 'number') {
     if (b['priority'] < PRIORITY_MIN || b['priority'] > PRIORITY_MAX) {
       const clamped = Math.max(PRIORITY_MIN, Math.min(PRIORITY_MAX, b['priority']));
-      errors.push(
-        `${loc}: priority ${b['priority']} out of range [${PRIORITY_MIN}, ${PRIORITY_MAX}], clamped to ${clamped}`,
-      );
+      errors.push(`${loc}: priority ${b['priority']} out of range [${PRIORITY_MIN}, ${PRIORITY_MAX}], clamped to ${clamped}`);
       entry.priority = clamped;
     } else {
       entry.priority = b['priority'];

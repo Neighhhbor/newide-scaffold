@@ -18,6 +18,7 @@ describe('CommandDriverTransport', () => {
         readInput((raw) => {
           const prompt = JSON.parse(raw);
           process.stderr.write('runner diagnostic only');
+          process.stdout.write('authentication completed\\n');
           process.stdout.write(JSON.stringify(driverRunResult(prompt.task_id)));
         });
       `),
@@ -88,6 +89,7 @@ describe('CommandDriverTransport', () => {
             message: 'ACP socket closed unexpectedly',
             retryable: true,
           };
+          process.stdout.write('authentication completed\\n');
           process.stdout.write(JSON.stringify(result));
           process.exit(1);
         });
