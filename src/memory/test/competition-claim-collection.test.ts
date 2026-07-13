@@ -69,7 +69,7 @@ describe('AgentManager.collectCompetitionClaims', () => {
   });
 
   describe('unavailable agents', () => {
-    it('运行中 Agent 不被收集（只返回可参选 Agent）', async () => {
+    it('运行中 Agent 仍参选但标记 busy: true', async () => {
       const repository = new InMemoryRepository();
       const bufferRepository = new InMemoryBufferRepository();
       const manager = await AgentManager.create(repository, bufferRepository, { tools: mockTools });
@@ -81,14 +81,29 @@ describe('AgentManager.collectCompetitionClaims', () => {
       const busyAgent = manager.getAgent('role_busy')!;
       (busyAgent as any).assignTask(createTask('busy task', 'task_busy'));
 
-      // collectCompetitionClaims 只返回 participate 的 Agent
+      // collectCompetitionClaims 返回所有 participate 的 Agent
       const batch = await manager.collectCompetitionClaims(createTask('relevant task'));
 
-      // role_busy 是 running 状态 → unavailable → 不返回
-      // role_idle2 是 idle 状态 → participate → 返回
-      expect(batch.claims).toHaveLength(1);
-      expect(batch.claims[0]!.role_id).toBe('role_idle2');
+      // role_busy 是 running 状态 → participate + busy:true
+      // role_idle2 是 idle 状态 → participate
+      expect(batch.claims).toHaveLength(2);
+      expect(batch.claims[0]!.role_id).toBe('role_busy');
       expect(batch.claims[0]!.decision).toBe('participate');
+      expect(batch.claims[0]!.availability.busy).toBe(true);
+      expect(batch.claims[1]!.role_id).toBe('role_idle2');
+      expect(batch.claims[1]!.decision).toBe('participate');
+      expect(batch.claims[1]!.availability.busy).toBeUndefined();
+
+      // 验证 summary
+      expect(batch.summary).toEqual({
+        total: 2,
+        participated: 2,
+        busy_participated: 1,
+        declined: 0,
+        unavailable: 0,
+        timed_out: 0,
+        errored: 0,
+      });
     });
   });
 

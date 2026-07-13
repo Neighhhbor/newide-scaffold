@@ -156,6 +156,8 @@ export { InvokeDriverTool } from './runtime/tools/invoke-driver-tool';
 export type { DriverTask, DriverHandler } from './runtime/tools/invoke-driver-tool';
 export { DeepSeekToolCallingClient } from './adapters/deepseek-tool-calling-client';
 export type { DeepSeekToolCallingClientOptions } from './adapters/deepseek-tool-calling-client';
+export { LiteLLMToolCallingClient } from './adapters/litellm-tool-calling-client';
+export type { LiteLLMToolCallingClientOptions } from './adapters/litellm-tool-calling-client';
 
 // ════════════════════════════════════════════════════════
 //  14. Litellm 集成工具（memory 侧实现的 litellm tool）

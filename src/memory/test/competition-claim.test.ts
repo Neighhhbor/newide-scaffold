@@ -121,15 +121,16 @@ describe('Agent.createCompetitionClaim', () => {
   });
 
   describe('unavailable', () => {
-    it('running 状态 Agent 返回 unavailable', async () => {
-      const { memory } = await createTestAgent('role_unavail_run');
+    it('running 状态 Agent 仍参与自评，标记 busy: true', async () => {
+      const { memory } = await createTestAgent('role_busy_run');
       const agent = new Agent(memory, mockToolConfig);
       // 模拟 running 状态
       (agent as any).assignTask(createTask('test', 'task_occupied'));
 
       const claim = await agent.createCompetitionClaim(createTask('Any task'));
-      expect(claim.decision).toBe('unavailable');
+      expect(claim.decision).toBe('participate');
       expect(claim.availability.loop_state).toBe('running');
+      expect(claim.availability.busy).toBe(true);
     });
 
     it('stopped 状态 Agent 返回 unavailable', async () => {

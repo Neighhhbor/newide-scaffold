@@ -142,13 +142,14 @@ if (selected) {
 
 ### 工具
 
-| API                                                        | 作用                                                                       |
-| ---------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `AgentQueryMemoryTool`                                     | 运行时的 `query_memory` 工具；Manager 会自动为每个 Agent 注入              |
-| `InvokeDriverTool`                                         | 把外部 `DriverHandler` 包装成 `invoke_driver` 工具                         |
-| `ToolRegistry`                                             | 注册工具并转换为 OpenAI function-calling 定义                              |
-| `DeepSeekToolCallingClient`                                | 内置的 DeepSeek/OpenAI 兼容 tool-calling 客户端                            |
-| `QueryMemoryTool` / `SaveMemoryTool` / `createMemoryTools` | 另一套基于 `MemoryStore` 的 LiteLLM 工具，不参与 `AgentManager` 的自动注入 |
+| API                                                        | 作用                                                                                             |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `AgentQueryMemoryTool`                                     | 运行时的 `query_memory` 工具；Manager 会自动为每个 Agent 注入                                    |
+| `InvokeDriverTool`                                         | 把外部 `DriverHandler` 包装成 `invoke_driver` 工具                                               |
+| `ToolRegistry`                                             | 注册工具并转换为 OpenAI function-calling 定义                                                    |
+| `DeepSeekToolCallingClient`                                | （已废弃）内置的 DeepSeek/OpenAI 兼容 tool-calling 客户端，推荐迁移到 `LiteLLMToolCallingClient` |
+| `LiteLLMToolCallingClient`                                 | 基于 LiteLLM + Vercel AI SDK 的 tool-calling 客户端，支持多 Provider 和 YAML 模型路由            |
+| `QueryMemoryTool` / `SaveMemoryTool` / `createMemoryTools` | 另一套基于 `MemoryStore` 的 LiteLLM 工具，不参与 `AgentManager` 的自动注入                       |
 
 `LiteLLMClientAdapter` 实现普通文本补全接口 `LlmClient`，用于上下文清理、经验提取和技能晋升等 LLM 适配器；它不实现 `ToolCallingClient`，不能直接作为顶层 Agent LLM。
 
@@ -247,22 +248,26 @@ pnpm lint
 pnpm exec tsx src/memory/test/integration/api-smoke.ts
 ```
 
+`src/memory/test/integration/agent-loop-with-real-driver.test.ts` 使用本地 `claude` CLI 作为真实 Driver，与 `LiteLLMToolCallingClient`（Agent LLM）组合运行完整的 tool-calling 循环，验证 `invoke_driver` 调用能返回结构化 `DriverReturn`。需要本地安装 `claude` 命令和有效的 `DEEPSEEK_API_KEY`，不满足条件时自动跳过。
+
 其余测试使用内存仓库和 Mock 客户端，不需要外部服务。
 
 ## 目录结构
 
 ```text
-memory/
-  adapters/   Repository、LLM、检索、策略等端口实现
-  ports/      存储、LLM、提取、查询等接口
-  prompts/    Agent、上下文清理、经验提取和技能晋升 Prompt
-  runtime/    Agent、Manager、Tool 和离线 Processor
-  services/   Buffer 写入、记忆检索和后处理服务
-  mvp/        早期演示与 Mock 实现，不能代表当前运行时入口
-  test/       单元测试和真实服务集成测试
-  contract.ts 跨模块契约
-  schemas.ts  Zod 持久化数据结构
-  index.ts    统一公开导出
+	memory/
+	  adapters/   Repository、LLM、检索、策略等端口实现
+	  ports/      存储、LLM、提取、查询等接口
+	  prompts/    Agent、上下文清理、经验提取和技能晋升 Prompt
+	  runtime/    Agent、Manager、Tool 和离线 Processor
+	  services/   Buffer 写入、记忆检索和后处理服务
+	  mvp/        早期演示与 Mock 实现，不能代表当前运行时入口
+	  test/       单元测试、集成测试和测试工具
+	    drivers/          真实 LLM Driver 实现（供集成测试使用）
+	    integration/      端到端集成测试（需 API key）
+	  contract.ts 跨模块契约
+	  schemas.ts  Zod 持久化数据结构
+	  index.ts    统一公开导出
 ```
 
 判断当前可用能力时，以 `index.ts` 的导出、`ports/` 的接口、运行时实现和测试为准；`docs/` 与 `mvp/` 中的设计稿或早期示例可能尚未同步。
@@ -294,6 +299,8 @@ memory/
 ### 3. Driver 未真实接入
 
 `InvokeDriverTool` 是对外部 `DriverHandler` 函数（`(task) => DriverReturn`）的简单包装，**没有真正的 Driver 运行时**。接入方需要自行实现 Driver 适配器，处理实际的 ACP/PTY 集成、Driver 会话管理、流式结果等。当前 `invoke_driver` 工具的回调由 `createAgentRuntime()` 的 `tools.driver` 或 `AgentManager.create()` 的 `tools.tools` 注入，本质上仍是 mock 行为。
+
+> **测试用临时方案**：`src/memory/test/drivers/llm-driver.ts` 提供了一个基于本地 `claude` CLI 的简单 `DriverHandler` 实现，用于集成测试。它不适用于生产环境，仅用于在缺少真实 Driver 时验证 Agent → Driver 的完整调用链路。
 
 ### 4. Agent 生命周期管理不完整
 
@@ -328,6 +335,10 @@ memory/
 
 `extractBuffer()` 使用 LLM 提取经验并保存，但**不会**把 Buffer 从 `pending` 标记为 `processed`。这与 `processPendingBuffer()` 的行为不一致——后者在保存经验后会更新 Buffer 状态。调用方如果不了解这一区别，反复调用 `extractBuffer()` 会导致同一条 Buffer 被重复提取。
 
-### 10. PG Repository 测试未纳入 CI
+### 10. PG + File 组合的集成测试缺失
+
+当前 `PgMemoryRepository` 和 `FileBufferRepository` 各有独立的单元测试，但**没有**同时使用 PG + File 的组合集成测试（即 `createAgentRuntime({ storage: { pg: {...}, agentStateRoot: '...' } })` 跑完整 Agent loop 的测试）。生产环境使用 PG + File 时，Agent 从 dispatchTask 到写 Buffer 的完整链路没有自动化回归覆盖。
+
+### 11. PG Repository 测试未纳入 CI
 
 `pg-memory-repository.test.ts` 整个测试套件在缺少 `MEMORY_PG_TEST_URL` 环境变量时**完全跳过**（使用 `describe.skip`）。由于 CI 环境通常不提供 PostgreSQL 实例，这些测试从未在 CI 中运行，`PgMemoryRepository` 的回归无法被自动化捕获。

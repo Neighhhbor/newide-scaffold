@@ -88,6 +88,58 @@ export const PHASE_1_HOOK_POINTS: HookPoint[] = [
   'lifecycle.human_gate',
 ];
 
+/** Complete set of all RFC-defined hook points for runtime validation */
+export const ALL_HOOK_POINTS: HookPoint[] = [
+  // agent.* (RFC §4.2)
+  'agent.pre_tool_use',
+  'agent.post_tool_use',
+  'agent.post_tool_use_fail',
+  'agent.message_send',
+  'agent.message_recv',
+  'agent.checkpoint',
+  'agent.session_start',
+  'agent.session_end',
+  'agent.experience_extracted',
+  'agent.skill_promoted',
+  'agent.respawn',
+  'agent.respawned',
+  // task.* (RFC §4.3)
+  'task.created',
+  'task.claimed',
+  'task.checkpoint_resume',
+  'task.started',
+  'task.progress',
+  'task.completed',
+  'task.failed',
+  'task.escalated',
+  'task.delegated',
+  'task.before_merge',
+  // council.* (RFC §4.4)
+  'council.started',
+  'council.context_packaged',
+  'council.profile_snapshot_saved',
+  'council.extraction_completed',
+  'council.proposal',
+  'council.proposal_deadline',
+  'council.review',
+  'council.diff_ready',
+  'council.review_round_end',
+  'council.decision',
+  'council.completed',
+  // lifecycle.* (RFC §4.5)
+  'lifecycle.project_open',
+  'lifecycle.build_start',
+  'lifecycle.build_end',
+  'lifecycle.human_gate',
+  // system.* (RFC §4.6)
+  'system.heartbeat',
+  'system.budget_exceeded',
+  'system.timeout',
+  'system.agent_crash',
+  'system.config_change',
+  'system.worktree_create',
+];
+
 // ──────────────────────────────────────────────
 // Default values
 // ──────────────────────────────────────────────

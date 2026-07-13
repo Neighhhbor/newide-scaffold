@@ -203,6 +203,37 @@ export class AgentManager {
 
     const allClaims = await Promise.all(claimPromises);
 
+    // 统计全景摘要
+    const summary = {
+      total: allClaims.length,
+      participated: 0,
+      busy_participated: 0,
+      declined: 0,
+      unavailable: 0,
+      timed_out: 0,
+      errored: 0,
+    };
+    for (const c of allClaims) {
+      switch (c.decision) {
+        case 'participate':
+          summary.participated++;
+          if (c.availability.busy) summary.busy_participated++;
+          break;
+        case 'decline':
+          summary.declined++;
+          break;
+        case 'unavailable':
+          summary.unavailable++;
+          break;
+        case 'timeout':
+          summary.timed_out++;
+          break;
+        case 'error':
+          summary.errored++;
+          break;
+      }
+    }
+
     // 只保留 participate 的 Agent（上层所需能力信息待后续补充）
     const participating = allClaims
       .filter((c) => c.decision === 'participate')
@@ -212,6 +243,7 @@ export class AgentManager {
       correlation_id,
       task_id: task.task_id ?? createId('task'),
       claims: participating,
+      summary,
       started_at,
       completed_at: nowTimestamp(),
     };
