@@ -1,0 +1,13 @@
+{
+  "event_id": "run_event_example_001",
+  "sequence": 7,
+  "run_id": "run_example_001",
+  "task_id": "task_example_001",
+  "type": "gate.completed",
+  "source": "gate",
+  "created_at": "2026-07-11T10:00:00.000Z",
+  "payload": {
+    "decision": "allow"
+  },
+  "schema_version": "v0"
+}
