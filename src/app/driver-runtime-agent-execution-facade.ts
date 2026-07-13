@@ -46,13 +46,18 @@ const AGENT_SYSTEM_PROMPT = [
 export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
   private readonly manager: Promise<AgentManager>;
   private readonly roleReady = new Map<string, Promise<AgentManager>>();
+  private readonly invalidatedRoles = new Set<string>();
   private readonly roleQueues = new Map<string, Promise<void>>();
   private readonly invocationContext = new AsyncLocalStorage<InvocationContext>();
   private readonly invokeDriverRuntime: ReturnType<typeof createDriverRuntimeInvoker>;
 
   constructor(private readonly options: DriverRuntimeAgentExecutionFacadeOptions) {
     this.invokeDriverRuntime = createDriverRuntimeInvoker(options.driver);
-    this.manager = AgentManager.create(options.repository, options.bufferRepository, {
+    this.manager = this.createManager();
+  }
+
+  private createManager(): Promise<AgentManager> {
+    return AgentManager.create(this.options.repository, this.options.bufferRepository, {
       tools: {
         llm: {
           completeWithTools: (input) => this.completeWithTools(input),
@@ -69,11 +74,11 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
     options?: AgentExecutionOptions,
   ): Promise<AgentExecutionResult> {
     throwIfAborted(options?.signal);
-    const manager = await this.ensureRole(input.role_id);
     return this.enqueue(
       input.role_id,
       async () => {
         throwIfAborted(options?.signal);
+        const manager = await this.ensureRole(input.role_id);
         return this.execute(manager, input, options);
       },
       options?.signal,
@@ -103,6 +108,7 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
     );
 
     if (invocation.abortObserved || (invocation.signal?.aborted && !invocation.execution)) {
+      await this.recoverRole(input.role_id);
       throwIfAborted(invocation.signal);
     }
     return this.buildResult(input, dispatched, invocation.execution, invocation.driver_attempts);
@@ -112,11 +118,13 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
     const existing = this.roleReady.get(role_id);
     if (existing) return existing;
 
-    const creating = this.manager
+    const manager = this.invalidatedRoles.has(role_id) ? this.createManager() : this.manager;
+    const creating = manager
       .then(async (manager) => {
         if (!manager.getAgent(role_id)) {
           await manager.createAgent({ role_id, name: role_id, tags: [] });
         }
+        this.invalidatedRoles.delete(role_id);
         return manager;
       })
       .catch((error: unknown) => {
@@ -125,6 +133,12 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
       });
     this.roleReady.set(role_id, creating);
     return creating;
+  }
+
+  private async recoverRole(role_id: string): Promise<void> {
+    this.roleReady.delete(role_id);
+    this.invalidatedRoles.add(role_id);
+    await this.ensureRole(role_id).catch(() => undefined);
   }
 
   private async completeWithTools(

@@ -206,6 +206,30 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
     expect((await buffer.getBufferMeta('proposer_a')).total_processed).toBe(0);
   });
 
+  it('continues a queued role execution after the active execution is aborted', async () => {
+    const controller = new AbortController();
+    const driver = new AbortOnceDriver();
+    const { facade } = createFacade(
+      driver,
+      new InMemoryBufferRepository(),
+      invokeDriverLlm(),
+      new FailOnceOnReloadRepository(),
+    );
+
+    const cancelled = facade.runAgent(request('task_cancel_once', 'proposer_a'), {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(driver.prompts).toHaveLength(1));
+    const queued = facade.runAgent(request('task_after_cancel', 'proposer_a'));
+    controller.abort(new Error('Cancel first role execution'));
+
+    await expect(cancelled).rejects.toThrow('Cancel first role execution');
+    await expect(queued).resolves.toMatchObject({
+      status: 'completed',
+    });
+    expect(driver.prompts).toHaveLength(2);
+  });
+
   it('stops while B waits for the post-driver LLM response', async () => {
     const controller = new AbortController();
     const llm = new BlockingPostDriverLlm();
@@ -279,8 +303,8 @@ function createFacade(
   driver: DriverRuntimeHandle,
   buffer: InMemoryBufferRepository = new InMemoryBufferRepository(),
   llm: ToolCallingClient = invokeDriverLlm(),
+  repository: InMemoryRepository = new InMemoryRepository(),
 ) {
-  const repository = new InMemoryRepository();
   return {
     facade: new DriverRuntimeAgentExecutionFacade({
       driver,
@@ -290,6 +314,16 @@ function createFacade(
     }),
     buffer,
   };
+}
+
+class FailOnceOnReloadRepository extends InMemoryRepository {
+  private listCalls = 0;
+
+  override async listAgentIds(): Promise<string[]> {
+    this.listCalls += 1;
+    if (this.listCalls === 2) throw new Error('Transient repository reload failure');
+    return super.listAgentIds();
+  }
 }
 
 function invokeDriverLlm(): ToolCallingClient {
@@ -452,6 +486,20 @@ class CapturingDriver implements DriverRuntimeHandle {
 
   async collectTranscript(): Promise<ArtifactRef> {
     return createArtifact('artifact_transcript_001', 'transcript');
+  }
+}
+
+class AbortOnceDriver extends CapturingDriver {
+  constructor() {
+    super('succeeded');
+  }
+
+  override async sendPrompt(input: DriverPrompt): Promise<DriverRunResult> {
+    this.prompts.push(input);
+    if (this.prompts.length === 1) {
+      return new Promise<DriverRunResult>(() => undefined);
+    }
+    return driverResult(this, 'succeeded');
   }
 }
 
