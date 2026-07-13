@@ -6,14 +6,17 @@
  * - 方向 B 需要 DriverReturn（artifacts + summary + decisions + blockers +
  *   referenced_experiences + assumptions）
  *
- * 提供两种转换策略，按优先级：
+ * 提供三种转换策略，按优先级：
  * 1. parseDriverReturnFromTranscript — 从 transcript 中解析结构化 JSON 块
  *    （Driver 被 prompt 指示产出 <<<DRIVER_RETURN>>> 标记块）
- * 2. constructDriverReturnFromResult — 从 DriverRunResult 元数据构造
- *    （降级路径：无 transcript 或解析失败时的基本报告）
+ * 2. createLlmDriverReturnConverter — 调用 LLM 根据 DriverRunResult 生成六字段报告
+ *    （智能路径：transcript 无结构化块时，由 LLM 推理生成完整报告）
+ * 3. constructDriverReturnFromResult — 从 DriverRunResult 元数据构造
+ *    （降级路径：无 transcript 或 LLM 失败时的基本报告）
  */
 
-import type { DriverReturn } from '../memory/schemas';
+import { DriverReturnSchema, type DriverReturn } from '../memory/schemas';
+import type { LlmClient } from '../memory/ports/llm-client';
 import type { DriverRunResult } from './contract';
 import type { ArtifactRef } from '../core';
 
@@ -166,6 +169,157 @@ export function constructDriverReturnFromResult(
 }
 
 // ──────────────────────────────────────────────
+// 策略3：调用 LLM 生成六字段报告
+// ──────────────────────────────────────────────
+
+const LLM_DRIVER_RETURN_SYSTEM_PROMPT = [
+  'You are a DriverReturn report generator.',
+  'Given a DriverRunResult, produce a structured six-field DriverReturn report in JSON.',
+  '',
+  'The six fields are:',
+  '1. artifacts: produced artifacts with type, path, summary',
+  '2. summary: natural language summary of task execution',
+  '3. decisions: key decision points with options, chosen choice, and reason',
+  '4. blockers: blockers encountered with attempts, resolution, and resolved status',
+  '5. referenced_experiences: referenced experiences (empty array if none)',
+  '6. assumptions: assumptions made and their risks if wrong',
+  '',
+  'Output JSON only with this exact format:',
+  '{',
+  '  "artifacts": [',
+  '    { "type": "...", "path": "...", "summary": "..." }',
+  '  ],',
+  '  "summary": "...",',
+  '  "decisions": [',
+  '    { "point": "...", "options": ["..."], "chosen": "...", "reason": "..." }',
+  '  ],',
+  '  "blockers": [',
+  '    { "blocker": "...", "attempts": ["..."], "resolution": "...", "resolved": true }',
+  '  ],',
+  '  "referenced_experiences": [],',
+  '  "assumptions": [',
+  '    { "assumption": "...", "risk_if_wrong": "..." }',
+  '  ]',
+  '}',
+].join('\n');
+
+function buildLlmPrompt(result: DriverRunResult, options?: DriverReturnConverterOptions): string {
+  const sections: string[] = [];
+
+  sections.push(`## Task Instruction\n${options?.instruction ?? '(not provided)'}`);
+
+  sections.push(
+    `## Driver Execution Result\n` +
+      `- driver_id: ${result.diagnostics.driver_id}\n` +
+      `- status: ${result.status}\n` +
+      `- duration_ms: ${result.diagnostics.duration_ms}\n` +
+      `- driver_run_result_id: ${result.driver_run_result_id}\n` +
+      `- session_id: ${result.session_id}`,
+  );
+
+  if (result.artifacts.length > 0) {
+    sections.push(
+      `## Artifacts\n${result.artifacts
+        .map(
+          (a) => `- type: ${a.type}, uri: ${a.uri}, producer: ${a.producer_id}, task: ${a.task_id}`,
+        )
+        .join('\n')}`,
+    );
+  } else {
+    sections.push('## Artifacts\n(none)');
+  }
+
+  if (result.tool_events.length > 0) {
+    sections.push(
+      `## Tool Events\n${result.tool_events
+        .map((t) => `- ${t.tool_name}: ${t.status} (${t.summary})`)
+        .join('\n')}`,
+    );
+  } else {
+    sections.push('## Tool Events\n(none)');
+  }
+
+  if (result.diagnostics.notes.length > 0) {
+    sections.push(
+      `## Diagnostics Notes\n${result.diagnostics.notes.map((n) => `- ${n}`).join('\n')}`,
+    );
+  }
+
+  if (result.error) {
+    sections.push(
+      `## Error\n` +
+        `- code: ${result.error.code}\n` +
+        `- message: ${result.error.message}\n` +
+        `- retryable: ${result.error.retryable}`,
+    );
+  }
+
+  return sections.join('\n\n');
+}
+
+function parseLlmDriverReturn(raw: string): DriverReturn {
+  const parsed = JSON.parse(raw) as unknown;
+  return DriverReturnSchema.parse(parsed);
+}
+
+/**
+ * 创建基于 LLM 的 DriverReturnConverter。
+ *
+ * 转换优先级：
+ * 1. 如果提供了 transcriptText，先尝试 parseDriverReturnFromTranscript
+ * 2. 否则调用 LLM 根据 DriverRunResult 生成六字段报告
+ * 3. LLM 调用或解析失败时，降级到 constructDriverReturnFromResult
+ *
+ * 使用示例：
+ * ```ts
+ * const llm = new LiteLLMClientAdapter('driver-return-generation');
+ * const converter = createLlmDriverReturnConverter(llm);
+ * const driverReturn = await converter(driverRunResult, { transcriptText, instruction });
+ * ```
+ */
+export function createLlmDriverReturnConverter(llm: LlmClient): DriverReturnConverter {
+  return async (
+    result: DriverRunResult,
+    options?: DriverReturnConverterOptions,
+  ): Promise<DriverReturn> => {
+    // 优先尝试从 transcript 解析
+    if (options?.transcriptText) {
+      const parsed = parseDriverReturnFromTranscript(options.transcriptText);
+      if (parsed) {
+        console.error(
+          `[DriverReturnConverter] six-field report generated via JSON parsing (source: ${options?.sourceDriver ?? result.diagnostics.driver_id})`,
+        );
+        return parsed;
+      }
+    }
+
+    // 调用 LLM 生成
+    try {
+      const userPrompt = buildLlmPrompt(result, options);
+      const raw = await llm.complete({
+        messages: [
+          { role: 'system', content: LLM_DRIVER_RETURN_SYSTEM_PROMPT },
+          { role: 'user', content: userPrompt },
+        ],
+        responseFormat: { type: 'json_object' },
+      });
+
+      const driverReturn = parseLlmDriverReturn(raw);
+
+      console.error(
+        `[DriverReturnConverter] six-field report generated via LLM (source: ${options?.sourceDriver ?? result.diagnostics.driver_id})`,
+      );
+      return driverReturn;
+    } catch (error) {
+      console.error(
+        `[DriverReturnConverter] LLM generation failed, falling back to construction: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return constructDriverReturnFromResult(result, options);
+    }
+  };
+}
+
+// ──────────────────────────────────────────────
 // 默认转换器（策略组合）
 // ──────────────────────────────────────────────
 
@@ -186,11 +340,17 @@ export function createDefaultDriverReturnConverter(): DriverReturnConverter {
     if (options?.transcriptText) {
       const parsed = parseDriverReturnFromTranscript(options.transcriptText);
       if (parsed) {
+        console.error(
+          `[DriverReturnConverter] six-field report generated via JSON parsing (source: ${options?.sourceDriver ?? result.diagnostics.driver_id})`,
+        );
         return parsed;
       }
     }
 
     // 降级：元数据构造
+    console.error(
+      `[DriverReturnConverter] six-field report generated via construction (source: ${options?.sourceDriver ?? result.diagnostics.driver_id})`,
+    );
     return constructDriverReturnFromResult(result, options);
   };
 }

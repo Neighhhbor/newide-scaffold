@@ -100,7 +100,7 @@ export class DriverBridge {
   private readonly driver: DriverRuntimeHandle;
   private readonly converter: DriverReturnConverter;
   private readonly loadTranscript: boolean;
-  private readonly transcriptLoader?: (transcriptRef: string) => Promise<string>;
+  private readonly transcriptLoader: ((transcriptRef: string) => Promise<string>) | undefined;
 
   constructor(options: DriverBridgeOptions) {
     this.driver = options.driver;
@@ -161,7 +161,10 @@ export class DriverBridge {
 
     if (this.loadTranscript) {
       try {
-        converterOptions.transcriptText = await this.loadTranscriptText(driverResult);
+        const transcriptText = await this.loadTranscriptText(driverResult);
+        if (transcriptText !== undefined) {
+          converterOptions.transcriptText = transcriptText;
+        }
       } catch {
         // transcript 加载失败不是致命错误，降级处理
       }
@@ -268,16 +271,14 @@ export class DriverBridge {
    * 不直接返回文本内容。实际部署时 transcript 文本由外部加载器提供。
    */
   private async loadTranscriptText(result: DriverRunResult): Promise<string | undefined> {
-    if (this.transcriptLoader) {
-      return this.transcriptLoader(result.transcript_ref.uri);
+    const loader = this.transcriptLoader;
+    if (loader) {
+      return loader(result.transcript_ref.uri);
     }
 
     // 默认行为：尝试 collectTranscript 获取引用，但不保证能加载内容
     try {
-      const transcriptRef = await this.driver.collectTranscript();
-      if (this.transcriptLoader) {
-        return this.transcriptLoader(transcriptRef.uri);
-      }
+      await this.driver.collectTranscript();
     } catch {
       // 忽略加载失败
     }

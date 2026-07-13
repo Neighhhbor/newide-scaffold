@@ -40,7 +40,8 @@ export class CommandDriverTransport implements ExternalDriverTransport {
     this.cwd = options.cwd;
     this.env = options.env;
     this.unsetEnv = options.unsetEnv ?? [];
-    this.timeoutMs = options.timeoutMs;
+    // 默认 120 秒超时，避免外部 Driver 无限期挂起
+    this.timeoutMs = options.timeoutMs ?? 120_000;
     this.shell = options.shell ?? process.platform === 'win32';
   }
 
@@ -177,7 +178,8 @@ export class CommandDriverTransport implements ExternalDriverTransport {
         resolve(stdout);
       });
 
-      child.stdin.end(JSON.stringify(input));
+      const stdinPayload = JSON.stringify(input);
+      child.stdin.end(stdinPayload);
     });
   }
 

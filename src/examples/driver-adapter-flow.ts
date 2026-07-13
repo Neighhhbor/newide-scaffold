@@ -18,7 +18,7 @@
  *   # 自定义 prompt
  *   pnpm example:driver-adapter "Fix the TypeScript build errors in the project"
  *
- *   # 使用外部 ACP Driver
+ *   # 使用外部 ACP Driver（需先进入 ACP_DRIVER_RUNNER_DIR 执行 build）
  *   ACP_DRIVER_RUNNER_DIR=/path/to/acp-client-prototype pnpm example:driver-adapter --external-driver
  *
  *   # 外部 Driver + 自定义 prompt
@@ -71,6 +71,14 @@ if (useExternalDriver) {
     process.exit(1);
   }
 
+  const driverEntrypoint = path.join(driverRunnerDir, 'dist/src/driver/contract-runner.js');
+  if (!existsSync(driverEntrypoint)) {
+    console.error(`❌ Error: Driver entrypoint not found: ${driverEntrypoint}\n`);
+    console.error('Please build the ACP driver first:');
+    console.error(`  cd ${driverRunnerDir} && pnpm run build\n`);
+    process.exit(1);
+  }
+
   console.log(`Using external driver from: ${driverRunnerDir}`);
   console.log(`ACP_AGENT_ID: ${process.env.ACP_AGENT_ID || 'mock-driver'}`);
   console.log(`ACP_WORKSPACE: ${process.env.ACP_WORKSPACE || process.cwd()}`);
@@ -83,20 +91,23 @@ if (useExternalDriver) {
   }
   console.log('');
 
+  const driverTimeoutMs = process.env.ACP_DRIVER_TIMEOUT_MS
+    ? parseInt(process.env.ACP_DRIVER_TIMEOUT_MS, 10)
+    : 120_000;
+
   driver = new ExternalDriverRuntime({
     driver_id: 'acp-external',
     transport: new CommandDriverTransport({
-      command: 'pnpm',
-      args: ['--dir', driverRunnerDir, 'driver:run'],
-      cwd: process.cwd(),
+      command: 'node',
+      args: [driverEntrypoint],
+      cwd: driverRunnerDir,
       env: {
         ...driverEnv,
-        COREPACK_ENABLE_PROJECT_SPEC: process.env.COREPACK_ENABLE_PROJECT_SPEC || '0',
-        PNPM_CONFIG_PM_ON_FAIL: process.env.PNPM_CONFIG_PM_ON_FAIL || 'ignore',
         ACP_AGENT_ID: process.env.ACP_AGENT_ID || 'mock-driver',
         ACP_WORKSPACE: process.env.ACP_WORKSPACE || process.cwd(),
       },
       unsetEnv,
+      timeoutMs: driverTimeoutMs,
     }),
   });
 } else {
@@ -124,6 +135,9 @@ async function main(): Promise<void> {
   console.log('📤 Sending task to Driver...\n');
 
   try {
+    console.log('[driver-adapter-flow] calling driverTool.execute...');
+    const executeStart = Date.now();
+
     const driverReturn: DriverReturn = await driverTool.execute({
       instruction: driverPrompt,
       context: {
@@ -134,6 +148,9 @@ async function main(): Promise<void> {
         experiences: ['Previous MockDriver invocations produced patch artifacts successfully'],
       },
     });
+
+    const executeElapsed = Date.now() - executeStart;
+    console.log(`[driver-adapter-flow] driverTool.execute resolved after ${executeElapsed}ms`);
 
     // ── 5. 输出六字段报告 ──
     console.log('✅ Driver task completed!\n');
