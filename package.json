@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "pg": "^8.22.0",
+    "yaml": "^2.9.0",
     "zod": "^4.0.5"
   },
   "devDependencies": {
