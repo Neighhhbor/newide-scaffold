@@ -304,15 +304,24 @@ export function createLlmDriverReturnConverter(llm: LlmClient): DriverReturnConv
         responseFormat: { type: 'json_object' },
       });
 
-      const driverReturn = parseLlmDriverReturn(raw);
+      try {
+        const driverReturn = parseLlmDriverReturn(raw);
 
-      console.error(
-        `[DriverReturnConverter] six-field report generated via LLM (source: ${options?.sourceDriver ?? result.diagnostics.driver_id})`,
-      );
-      return driverReturn;
+        console.error(
+          `[DriverReturnConverter] six-field report generated via LLM (source: ${options?.sourceDriver ?? result.diagnostics.driver_id})`,
+        );
+        return driverReturn;
+      } catch (parseError) {
+        const reason = parseError instanceof Error ? parseError.message : String(parseError);
+        console.error(
+          `[DriverReturnConverter] LLM extraction failed: LLM output was malformed or failed schema validation (${reason}); falling back to construction (source: ${options?.sourceDriver ?? result.diagnostics.driver_id})`,
+        );
+        return constructDriverReturnFromResult(result, options);
+      }
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
       console.error(
-        `[DriverReturnConverter] LLM generation failed, falling back to construction: ${error instanceof Error ? error.message : String(error)}`,
+        `[DriverReturnConverter] LLM extraction failed: LLM call error (${reason}); falling back to construction (source: ${options?.sourceDriver ?? result.diagnostics.driver_id})`,
       );
       return constructDriverReturnFromResult(result, options);
     }
@@ -345,6 +354,13 @@ export function createDefaultDriverReturnConverter(): DriverReturnConverter {
         );
         return parsed;
       }
+      console.error(
+        `[DriverReturnConverter] transcript extraction failed: no valid six-field report found in transcript; falling back to construction (source: ${options?.sourceDriver ?? result.diagnostics.driver_id})`,
+      );
+    } else {
+      console.error(
+        `[DriverReturnConverter] transcript extraction skipped: transcriptText not provided; falling back to construction (source: ${options?.sourceDriver ?? result.diagnostics.driver_id})`,
+      );
     }
 
     // 降级：元数据构造
