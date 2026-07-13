@@ -3,6 +3,13 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
+import { PassThrough, type Readable, type Writable } from 'node:stream';
+import {
+  createProductionBackendService,
+  startBackendRpcServer,
+  type BackendRpcServer,
+} from '../src/app/backend-rpc-stdio';
+import type { ToolCallingClient } from '../src/memory';
 import type { RunSnapshot } from '../src/protocol/run-snapshot';
 
 interface JsonRpcMessage {
@@ -25,30 +32,54 @@ const runnerDir = configuredRunnerDir
   : await createFakeAcpRunner();
 const invocationLog = path.join(runnerDir, 'invocations.log');
 const runtime = usesTemporaryRunner
-  ? 'production-composition-fake-acp'
+  ? 'production-composition-deterministic-b-llm-fake-acp'
   : 'production-composition-external-acp';
-const child = spawn('pnpm', ['backend:rpc'], {
-  cwd: process.cwd(),
-  env: { ...process.env, ACP_DRIVER_RUNNER_DIR: runnerDir },
-  stdio: ['pipe', 'pipe', 'pipe'],
-});
 const stderr: string[] = [];
 let spawnError: Error | undefined;
-const childClosed = new Promise<number | null>((resolve) => {
-  child.once('error', (error) => {
-    spawnError = error;
-    resolve(null);
+let localServer: BackendRpcServer | undefined;
+let localOutput: PassThrough | undefined;
+let child: ReturnType<typeof spawn> | undefined;
+let childClosed: Promise<number | null> | undefined;
+let backendInput: Writable;
+let backendOutput: Readable;
+
+if (usesTemporaryRunner) {
+  const input = new PassThrough();
+  localOutput = new PassThrough();
+  localServer = startBackendRpcServer({
+    input,
+    writeLine: (line) => localOutput!.write(`${line}\n`),
+    service: createProductionBackendService(
+      { ...process.env, ACP_DRIVER_RUNNER_DIR: runnerDir },
+      { agentLlm: invokeDriverLlm() },
+    ),
   });
-  child.once('close', resolve);
-});
-child.stderr.on('data', (chunk) => stderr.push(String(chunk)));
+  backendInput = input;
+  backendOutput = localOutput;
+} else {
+  child = spawn('pnpm', ['backend:rpc'], {
+    cwd: process.cwd(),
+    env: { ...process.env, ACP_DRIVER_RUNNER_DIR: runnerDir },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  backendInput = child.stdin;
+  backendOutput = child.stdout;
+  childClosed = new Promise<number | null>((resolve) => {
+    child!.once('error', (error) => {
+      spawnError = error;
+      resolve(null);
+    });
+    child!.once('close', resolve);
+  });
+  child.stderr.on('data', (chunk) => stderr.push(String(chunk)));
+}
 
 const messages: JsonRpcMessage[] = [];
 const waiters = new Set<{
   predicate: (message: JsonRpcMessage) => boolean;
   resolve: (message: JsonRpcMessage) => void;
 }>();
-createInterface({ input: child.stdout }).on('line', (line) => {
+createInterface({ input: backendOutput }).on('line', (line) => {
   const message = JSON.parse(line) as JsonRpcMessage;
   messages.push(message);
   for (const waiter of waiters) {
@@ -66,6 +97,8 @@ let backendExitError: Error | undefined;
 try {
   const single = smokeMode === 'council' ? undefined : await runAndVerify('single_agent');
   const council = smokeMode === 'single_agent' ? undefined : await runAndVerify('council');
+  const cancelled = smokeMode === 'all' ? await createAndCancel() : undefined;
+  if (cancelled) await waitForCancellationEffects();
   const driverInvocations = usesTemporaryRunner ? await countDriverInvocations() : undefined;
   if (driverInvocations !== undefined) {
     const expectedInvocations = smokeMode === 'all' ? 6 : smokeMode === 'single_agent' ? 1 : 5;
@@ -74,7 +107,6 @@ try {
       `Expected ${expectedInvocations} driver invocations, received ${driverInvocations}`,
     );
   }
-  const cancelled = smokeMode === 'all' ? await createAndCancel() : undefined;
   const parseError =
     smokeMode === 'all' ? await sendRaw('not-json\n', (message) => message.id === null) : undefined;
   if (parseError) {
@@ -97,7 +129,7 @@ try {
     })}\n`,
   );
 } finally {
-  child.stdin.end();
+  backendInput.end();
   const exitCode = await waitForBackendClose();
   if (spawnError) {
     backendExitError = new Error(`backend:rpc failed to start: ${spawnError.message}`);
@@ -286,7 +318,7 @@ async function request<T = unknown>(method: string, params: unknown): Promise<T>
 async function requestRaw(method: string, params: unknown): Promise<JsonRpcMessage> {
   const id = nextId++;
   const waiting = waitForMessage((message) => message.id === id);
-  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+  backendInput.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
   return waiting;
 }
 
@@ -295,7 +327,7 @@ async function sendRaw(
   predicate: (message: JsonRpcMessage) => boolean,
 ): Promise<JsonRpcMessage> {
   const waiting = waitForMessage(predicate);
-  child.stdin.write(line);
+  backendInput.write(line);
   return waiting;
 }
 
@@ -321,7 +353,16 @@ async function countDriverInvocations(): Promise<number> {
   return contents.trim().split('\n').filter(Boolean).length;
 }
 
+async function waitForCancellationEffects(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 100));
+}
+
 async function waitForBackendClose(): Promise<number | null> {
+  if (!child || !childClosed) {
+    localServer?.close();
+    localOutput?.end();
+    return 0;
+  }
   const timeout = new Promise<'timeout'>((resolve) =>
     setTimeout(() => resolve('timeout'), 5_000).unref(),
   );
@@ -335,6 +376,35 @@ async function waitForBackendClose(): Promise<number | null> {
   if (terminated !== 'timeout') return terminated;
   child.kill('SIGKILL');
   return childClosed;
+}
+
+function invokeDriverLlm(): ToolCallingClient {
+  let sequence = 0;
+  return {
+    async completeWithTools(input) {
+      const lastMessage = input.messages.at(-1);
+      if (lastMessage?.role === 'tool') {
+        return { content: 'Task completed. [done]', tool_calls: undefined };
+      }
+      const userMessage = [...input.messages].reverse().find((message) => message.role === 'user');
+      sequence += 1;
+      return {
+        content: null,
+        tool_calls: [
+          {
+            id: `rpc_smoke_tool_call_${String(sequence)}`,
+            type: 'function',
+            function: {
+              name: 'invoke_driver',
+              arguments: JSON.stringify({
+                instruction: userMessage?.content?.replace(/^Task:\s*/, '') ?? 'Execute task.',
+              }),
+            },
+          },
+        ],
+      };
+    },
+  };
 }
 
 async function createFakeAcpRunner(): Promise<string> {

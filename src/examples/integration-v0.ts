@@ -43,7 +43,7 @@ import { CommandDriverTransport } from '../driver/command-driver-transport';
 import { MockDriver, type DriverRuntimeHandle } from '../driver';
 import { DriverRuntimeAgentExecutionFacade } from '../app/driver-runtime-agent-execution-facade';
 import { SynthesisAgentCouncilProvider } from '../council';
-import { InMemoryBufferRepository, InMemoryRepository } from '../memory';
+import { InMemoryBufferRepository, InMemoryRepository, LiteLLMToolCallingClient } from '../memory';
 import { parseIntegrationV0CliArgs } from './integration-v0-options';
 
 const CLAUDE_MODEL_OVERRIDE_ENV = [
@@ -135,6 +135,7 @@ try {
         driver: councilDriver,
         repository: new InMemoryRepository(),
         bufferRepository: new InMemoryBufferRepository(),
+        llm: new LiteLLMToolCallingClient(),
       }),
     });
   }
