@@ -59,11 +59,24 @@ export class CommandDriverTransport implements ExternalDriverTransport {
 
     try {
       parsed = JSON.parse(stdout);
-    } catch (error: unknown) {
-      const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Command driver stdout was not valid JSON: ${reason}. stdout: ${summarizeText(stdout)}`,
-      );
+    } catch {
+      // 容错：stdout 可能被非 JSON 文本污染（例如 auth 模块的 console.log 输出），
+      // 尝试从混合输出中提取最后一个合法 JSON 对象（contract-runner 总是在最后写入 JSON）。
+      const extracted = extractLastJsonObject(stdout);
+      if (extracted !== null) {
+        try {
+          parsed = JSON.parse(extracted);
+        } catch (innerError: unknown) {
+          const reason = innerError instanceof Error ? innerError.message : String(innerError);
+          throw new Error(
+            `Command driver stdout was not valid JSON (extraction also failed): ${reason}. stdout: ${summarizeText(stdout)}`,
+          );
+        }
+      } else {
+        throw new Error(
+          `Command driver stdout was not valid JSON and no JSON object could be extracted. stdout: ${summarizeText(stdout)}`,
+        );
+      }
     }
 
     assertDriverRunResult(parsed, 'Command driver');
@@ -213,6 +226,65 @@ export class CommandDriverTransport implements ExternalDriverTransport {
       ...this.args.map((arg) => summarizeText(arg.replace(/\s+/g, ' '), 80)),
     ].join(' ');
   }
+}
+
+/**
+ * 从混合 stdout 中提取最后一个合法的 JSON 对象。
+ *
+ * 当子进程通过 console.log() 在 stdout 上输出非 JSON 文本时
+ * （例如 auth 模块打印的登录横幅），stdout 会变成"文本前缀 + JSON"的混合体。
+ * 此函数从 stdout 末尾向前搜索 `{`，用花括号深度计数的方式提取完整 JSON。
+ */
+function extractLastJsonObject(text: string): string | null {
+  // 策略：从最后一个 `{` 开始尝试提取 JSON 对象。
+  // contract-runner 总是在 stdout 最后一行写入 DriverRunResult JSON，
+  // 所以在混合输出的场景下，最后一个 `{` 就是 JSON 的起点。
+  const lastBrace = text.lastIndexOf('{');
+  if (lastBrace === -1) return null;
+
+  return extractJsonFrom(text, lastBrace);
+}
+
+/**
+ * 从指定位置开始，用花括号深度计数提取一个完整的 JSON 值（对象或数组）。
+ * 支持字符串内的转义和嵌套。
+ */
+function extractJsonFrom(text: string, startIndex: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+
+  for (let i = startIndex; i < text.length; i++) {
+    const ch = text[i];
+
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+
+    if (ch === '\\' && inString) {
+      escapeNext = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (ch === '{' || ch === '[') {
+      depth++;
+    } else if (ch === '}' || ch === ']') {
+      depth--;
+      if (depth === 0) {
+        return text.slice(startIndex, i + 1);
+      }
+    }
+  }
+
+  return null; // 未闭合
 }
 
 function summarizeText(input: string, maxLength = 500): string {
