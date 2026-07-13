@@ -46,19 +46,7 @@ export class CommandDriverTransport implements ExternalDriverTransport {
 
   async run(input: DriverPrompt): Promise<DriverRunResult> {
     const stdout = await this.execute(input);
-    let parsed: unknown;
-
-    try {
-      parsed = JSON.parse(stdout);
-    } catch (error: unknown) {
-      const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Command driver stdout was not valid JSON: ${reason}. stdout: ${summarizeText(stdout)}`,
-      );
-    }
-
-    assertDriverRunResult(parsed, 'Command driver');
-    return parsed;
+    return parseDriverRunResult(stdout);
   }
 
   private execute(input: DriverPrompt): Promise<string> {
@@ -231,11 +219,28 @@ function stdoutIsDriverRunResult(stdout: string): boolean {
   }
 
   try {
-    assertDriverRunResult(JSON.parse(stdout), 'Command driver');
+    parseDriverRunResult(stdout);
     return true;
   } catch {
     return false;
   }
+}
+
+function parseDriverRunResult(stdout: string): DriverRunResult {
+  const json = stdout.trim().split(/\r?\n/).at(-1) ?? '';
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(json);
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Command driver stdout was not valid JSON: ${reason}. stdout: ${summarizeText(stdout)}`,
+    );
+  }
+
+  assertDriverRunResult(parsed, 'Command driver');
+  return parsed;
 }
 
 function terminateChild(pid: number | undefined, signal: NodeJS.Signals): void {
