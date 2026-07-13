@@ -5,6 +5,18 @@ import { buildFrontendRunSnapshot } from '../../src/coordinator/frontend-run-sna
 describe('buildFrontendRunSnapshot', () => {
   it('should build a frontend-readable run snapshot from integration outputs', () => {
     const snapshot = buildFrontendRunSnapshot({
+      task: {
+        task_id: 'task_001',
+        status: 'completed',
+        role_id: 'role_ts_engineer',
+        risk_level: 'low',
+        spec: 'Build a result',
+        completion_criteria: ['Result exists'],
+        affected_paths: ['src/**'],
+        created_at: '2026-07-07T00:00:00.000Z',
+        updated_at: '2026-07-07T00:00:01.000Z',
+        schema_version: SCHEMA_VERSION,
+      },
       summary: {
         run_id: 'run_001',
         task_id: 'task_001',
@@ -79,6 +91,7 @@ describe('buildFrontendRunSnapshot', () => {
         timeline_path: '.newide/runs/run_001/timeline.json',
         checkpoint_path: '.newide/runs/run_001/checkpoint.json',
         message_thread_path: '.newide/runs/run_001/message-thread.json',
+        event_log_path: '.newide/runs/run_001/event-log.json',
         frontend_snapshot_path: '.newide/runs/run_001/frontend-snapshot.json',
       },
     });
@@ -88,6 +101,11 @@ describe('buildFrontendRunSnapshot', () => {
       schema_version: SCHEMA_VERSION,
       run_id: 'run_001',
       task_id: 'task_001',
+      task: {
+        status: 'completed',
+        spec: 'Build a result',
+        completion_criteria: ['Result exists'],
+      },
       current: {
         stage: 'delivery',
         task_status: 'completed',
@@ -119,6 +137,7 @@ describe('buildFrontendRunSnapshot', () => {
         message_refs: ['message_001', 'message_002'],
       },
       links: {
+        event_log_path: '.newide/runs/run_001/event-log.json',
         frontend_snapshot_path: '.newide/runs/run_001/frontend-snapshot.json',
       },
     });
@@ -138,5 +157,23 @@ describe('buildFrontendRunSnapshot', () => {
         text: 'RunCompleted',
       },
     ]);
+    expect(snapshot.flow.active_node_code).toBe('N18');
+    expect(snapshot.flow.node_statuses).toHaveLength(19);
+    expect(snapshot.flow.node_statuses.slice(0, 3)).toEqual([
+      { code: 'N0', status: 'pending' },
+      { code: 'N1', status: 'pending' },
+      {
+        code: 'N2',
+        status: 'done',
+        event_type: 'TaskCreated',
+        event_id: 'task_001',
+      },
+    ]);
+    expect(snapshot.flow.node_statuses.at(-1)).toEqual({
+      code: 'N18',
+      status: 'done',
+      event_type: 'RunCompleted',
+      event_id: 'event_001',
+    });
   });
 });

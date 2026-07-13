@@ -1,4 +1,4 @@
-import type { ArtifactRef } from '../core';
+import { SCHEMA_VERSION, createId, nowTimestamp, type ArtifactRef } from '../core';
 import type {
   DriverCapabilities,
   DriverPrompt,
@@ -45,10 +45,23 @@ export class ExternalDriverRuntime implements DriverRuntimeHandle {
   }
 
   async sendPrompt(input: DriverPrompt): Promise<DriverRunResult> {
-    const result = await this.transport.invoke(input);
+    const result = await this.invokeTransport(input);
     assertDriverRunResult(result);
     this.latestTranscriptRef = result.transcript_ref;
     return result;
+  }
+
+  private async invokeTransport(input: DriverPrompt): Promise<DriverRunResult> {
+    try {
+      return await this.transport.invoke(input);
+    } catch (error) {
+      return buildTransportFailureResult({
+        driver_id: this.driver_id,
+        session_id: this.session_id,
+        input,
+        error,
+      });
+    }
   }
 
   async interrupt(reason: string): Promise<void> {
@@ -105,4 +118,53 @@ export function assertDriverRunResult(
 
 function malformedResult(source: string, reason: string): Error {
   return new Error(`${source} returned malformed DriverRunResult: ${reason}`);
+}
+
+function buildTransportFailureResult(input: {
+  driver_id: string;
+  session_id: string;
+  input: DriverPrompt;
+  error: unknown;
+}): DriverRunResult {
+  const created_at = nowTimestamp();
+  const message = errorMessage(input.error);
+  const schema_version = input.input.schema_version || SCHEMA_VERSION;
+  const transcript_ref: ArtifactRef = {
+    artifact_id: createId('artifact'),
+    type: 'transcript',
+    uri: `artifact://transcript/${encodeURIComponent(input.input.task_id)}/${encodeURIComponent(input.session_id)}`,
+    producer_id: input.driver_id,
+    task_id: input.input.task_id,
+    metadata: {
+      run_id: input.input.run_id,
+      transport_error: message,
+    },
+    created_at,
+    schema_version,
+  };
+
+  return {
+    driver_run_result_id: createId('driver_result'),
+    session_id: input.session_id,
+    status: 'failed',
+    artifacts: [],
+    transcript_ref,
+    tool_events: [],
+    diagnostics: {
+      driver_id: input.driver_id,
+      duration_ms: 0,
+      notes: [`transport_error=${message}`],
+    },
+    error: {
+      code: 'EXTERNAL_DRIVER_TRANSPORT_ERROR',
+      message,
+      retryable: true,
+    },
+    created_at,
+    schema_version,
+  };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

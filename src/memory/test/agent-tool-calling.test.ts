@@ -2,10 +2,9 @@
  * Agent tool-calling 模式测试
  *
  * 验证：
- *   1. Agent 不传 toolConfig → 走 pipeline 模式（向后兼容）
- *   2. Agent 传 toolConfig → 走 tool-calling 模式
- *   3. Tool-calling 循环正确处理 tool_call 和文本回复
- *   4. 后处理流程（buffer → extract → promote）正常
+ *   1. Agent 传 toolConfig → 走 tool-calling 模式
+ *   2. Tool-calling 循环正确处理 tool_call 和文本回复
+ *   3. 后处理流程（buffer → extract → promote）正常
  */
 import { describe, it, expect } from 'vitest';
 import { Agent } from '../runtime/agent';
@@ -69,7 +68,7 @@ describe('Agent tool-calling mode', () => {
       tools: [],
     });
 
-    const result = await agent.runOnce({
+    const result = await agent.executeTask({
       spec: 'A simple task.',
       task_id: 'task_tc_text_001',
       call_id: 'call_tc_text_001',
@@ -124,7 +123,7 @@ describe('Agent tool-calling mode', () => {
       tools: [driverTool],
     });
 
-    const result = await agent.runOnce({
+    const result = await agent.executeTask({
       spec: 'Implement feature X.',
       task_id: 'task_tc_driver_001',
       call_id: 'call_tc_driver_001',
@@ -166,7 +165,7 @@ describe('Agent tool-calling mode', () => {
     });
 
     // 不应抛异常
-    const result = await agent.runOnce({
+    const result = await agent.executeTask({
       spec: 'Test unknown tool handling.',
       task_id: 'task_tc_unknown_001',
       call_id: 'call_tc_unknown_001',
@@ -219,7 +218,7 @@ describe('Agent tool-calling mode', () => {
       tools: [driverTool],
     });
 
-    const result = await agent.runOnce({
+    const result = await agent.executeTask({
       spec: 'Execute multiple sub-tasks.',
       task_id: 'task_tc_multi_001',
       call_id: 'call_tc_multi_001',
