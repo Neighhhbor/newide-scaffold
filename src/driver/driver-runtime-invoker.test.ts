@@ -129,7 +129,7 @@ describe('createDriverRuntimeInvoker', () => {
     controller.abort(new DOMException('cancelled by caller', 'AbortError'));
 
     await expect(running).rejects.toMatchObject({ name: 'AbortError' });
-    expect(driver.interrupt).toHaveBeenCalledWith('cancelled by caller');
+    expect(driver.interrupt).toHaveBeenCalledWith('cancelled by caller', 'run_1');
   });
 
   it('is structurally assignable to the expected B-facing shape', () => {
