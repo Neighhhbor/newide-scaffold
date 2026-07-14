@@ -53,6 +53,13 @@ export interface RunListResult {
   runs: RunHistoryEntry[];
 }
 
+export interface RunRestartResult {
+  run_id: string;
+  task_id: string;
+  restarted_from_run_id: string;
+  status: 'running';
+}
+
 export class NewideBackendService {
   private readonly terminalRuns = new Map<string, Promise<void>>();
 
@@ -75,6 +82,31 @@ export class NewideBackendService {
       // 历史列表只回放已经落盘的 run，绝不把遗留目录伪装成 running。
       runs: history.filter((entry) => !this.isLiveRun(entry.run_id)),
     };
+  }
+
+  async restartRun(runId: string): Promise<RunRestartResult> {
+    // restart 是"从持久化边界重新执行"：只恢复 request.json 里的输入，
+    // 创建全新 run_id，不复活旧进程，也不声称恢复 Agent 内部状态。
+    const request = await this.requestStore.load(runId);
+    // 终态快照里的 session_id 是 Driver 真实会话；存在则复用，
+    // 否则退回创建时显式携带的 session。
+    const terminalSessionId = await this.requestStore
+      .readTerminalSessionId(runId)
+      .catch(() => undefined);
+    const sessionId = terminalSessionId ?? request.session_id;
+    const created = await this.startRun(
+      {
+        prompt: request.prompt,
+        workspace_path: request.workspace_path,
+        mode: request.mode,
+        ...(sessionId ? { session_id: sessionId } : {}),
+        ...(request.project_id ? { project_id: request.project_id } : {}),
+        ...(request.client_task_id ? { client_task_id: request.client_task_id } : {}),
+        ...(request.title ? { title: request.title } : {}),
+      },
+      { restarted_from_run_id: runId },
+    );
+    return { ...created, restarted_from_run_id: runId };
   }
 
   private startRun(

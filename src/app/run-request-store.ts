@@ -78,13 +78,12 @@ export class FileRunRequestStore implements RunRequestStore {
 
   async load(runId: string): Promise<PersistedRunRequest> {
     const filePath = path.join(this.runsRoot, runId, 'request.json');
-    let raw: string;
+    let parsed: unknown;
     try {
-      raw = await fs.readFile(filePath, 'utf-8');
+      parsed = JSON.parse(await fs.readFile(filePath, 'utf-8'));
     } catch {
       throw new RunRequestNotFoundError(runId);
     }
-    const parsed: unknown = JSON.parse(raw);
     if (!isPersistedRunRequest(parsed)) {
       throw new RunRequestNotFoundError(runId);
     }

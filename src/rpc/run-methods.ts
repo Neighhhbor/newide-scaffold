@@ -9,8 +9,10 @@ import type {
   RunCreateParams,
   RunCreateResult,
   RunListResult,
+  RunRestartResult,
 } from '../app/newide-backend-service';
 import { RunNotFoundError, type AppRunEvent } from '../app/run-registry';
+import { RunRequestNotFoundError } from '../app/run-request-store';
 import type { RunSnapshot } from '../protocol/run-snapshot';
 import { JSON_RPC_ERROR_CODES } from './json-rpc-line-protocol';
 import { JsonRpcMethodError } from './json-rpc-dispatcher';
@@ -22,6 +24,7 @@ export interface RunMethodsService {
   subscribe(runId: string, listener: (event: AppRunEvent) => void): () => void;
   cancelRun(runId: string): Promise<{ cancelled: true }>;
   listRuns(): Promise<RunListResult>;
+  restartRun(runId: string): Promise<RunRestartResult>;
 }
 
 const createParamsSchema = z
@@ -79,6 +82,21 @@ export class RunRpcMethods {
     dispatcher.register('run.list', (params) => {
       parseParams(emptyParamsSchema, params ?? {});
       return this.service.listRuns();
+    });
+    dispatcher.register('run.restart', async (params) => {
+      const { run_id } = parseParams(runIdParamsSchema, params);
+      try {
+        return await this.service.restartRun(run_id);
+      } catch (error) {
+        if (error instanceof RunRequestNotFoundError) {
+          throw new JsonRpcMethodError(
+            JSON_RPC_ERROR_CODES.RUN_REQUEST_NOT_FOUND,
+            'Run request not found',
+            { run_id: error.runId },
+          );
+        }
+        throw error;
+      }
     });
   }
 

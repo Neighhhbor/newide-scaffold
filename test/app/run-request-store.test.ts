@@ -111,6 +111,80 @@ describe('NewideBackendService run history', () => {
   });
 });
 
+describe('NewideBackendService run restart', () => {
+  it('restarts a persisted run as a new execution reusing the terminal session', async () => {
+    const runsRoot = await mkdtemp(path.join(os.tmpdir(), 'run-restart-service-'));
+    const requestStore = new FileRunRequestStore(runsRoot);
+    const received: { prompt: string; mode: string; session_id?: string }[] = [];
+    let nextRun = 1;
+    const service = new NewideBackendService(
+      {
+        run: async (request) => {
+          received.push({
+            prompt: request.prompt,
+            mode: request.mode,
+            ...(request.session_id ? { session_id: request.session_id } : {}),
+          });
+          const sequence = nextRun;
+          nextRun += 1;
+          request.onRunCreated?.({
+            run_id: `run_${String(sequence)}`,
+            task_id: `task_${String(sequence)}`,
+          });
+          return new Promise<IntegrationV0Result>(() => undefined);
+        },
+      },
+      new InMemoryRunRegistry(),
+      {
+        initialize: async () => undefined,
+        append: async () => undefined,
+        flush: async () => undefined,
+      },
+      { finalize: async () => undefined },
+      requestStore,
+    );
+
+    try {
+      await service.createRun({ prompt: 'Original task', workspace_path: process.cwd() });
+      await requestPersisted(runsRoot, 'run_1');
+      // 模拟上个进程留下的终态快照：restart 必须复用其中的 session_id。
+      await writeFile(
+        path.join(runsRoot, 'run_1', 'frontend-snapshot.json'),
+        JSON.stringify({
+          status: 'completed',
+          final_output: { status: 'completed', session_id: 'session_from_terminal' },
+        }),
+        'utf-8',
+      );
+
+      const restarted = await service.restartRun('run_1');
+      expect(restarted).toEqual({
+        run_id: 'run_2',
+        task_id: 'task_2',
+        restarted_from_run_id: 'run_1',
+        status: 'running',
+      });
+      expect(received[1]).toEqual({
+        prompt: 'Original task',
+        mode: 'single_agent',
+        session_id: 'session_from_terminal',
+      });
+      // 新 run 的 request.json 记录血缘；原 run 的 request.json 保持不变。
+      await requestPersisted(runsRoot, 'run_2');
+      await expect(requestStore.load('run_2')).resolves.toMatchObject({
+        restarted_from_run_id: 'run_1',
+        session_id: 'session_from_terminal',
+      });
+      await expect(requestStore.load('run_1')).resolves.not.toHaveProperty('restarted_from_run_id');
+      await expect(service.restartRun('run_missing')).rejects.toBeInstanceOf(
+        RunRequestNotFoundError,
+      );
+    } finally {
+      await rm(runsRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 async function requestPersisted(runsRoot: string, runId: string): Promise<void> {
   const requestPath = path.join(runsRoot, runId, 'request.json');
   for (let attempt = 0; attempt < 100; attempt += 1) {

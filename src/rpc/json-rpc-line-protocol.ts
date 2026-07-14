@@ -41,6 +41,7 @@ export const JSON_RPC_ERROR_CODES = {
   INVALID_PARAMS: -32602,
   INTERNAL_ERROR: -32603,
   RUN_NOT_FOUND: -32004,
+  RUN_REQUEST_NOT_FOUND: -32005,
 } as const;
 
 const requestSchema = z
