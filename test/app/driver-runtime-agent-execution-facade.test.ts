@@ -25,6 +25,8 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
     expect(driver.prompts[0]).toMatchObject({
       task_id: 'task_001',
       run_id: 'run_task_001',
+      workspace_path: process.cwd(),
+      session_id: 'session_existing',
       schema_version: SCHEMA_VERSION,
     });
     expect(result).toMatchObject({
@@ -34,6 +36,9 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
       driver_run_result_id: 'driver_result_001',
       artifact_refs: [createArtifact('artifact_output_001')],
       transcript_ref: createArtifact('artifact_transcript_001', 'transcript'),
+      session_id: 'session_existing',
+      response: 'Agent completed the requested change.',
+      tool_events: [expect.objectContaining({ tool_event_id: 'tool_event_001' })],
       diagnostics: {
         driver_id: 'driver_001',
         driver_status: 'succeeded',
@@ -459,6 +464,8 @@ function request(taskId: string, roleId: string) {
     instruction: 'Execute through B runtime.',
     input_artifact_refs: [],
     context_policy: 'default',
+    workspace_path: process.cwd(),
+    session_id: 'session_existing',
     schema_version: SCHEMA_VERSION,
   };
 }
@@ -479,7 +486,7 @@ class CapturingDriver implements DriverRuntimeHandle {
 
   async sendPrompt(input: DriverPrompt): Promise<DriverRunResult> {
     this.prompts.push(input);
-    return driverResult(this, this.status);
+    return driverResult(this, this.status, input.session_id);
   }
 
   async interrupt(_reason: string): Promise<void> {}
@@ -499,7 +506,7 @@ class AbortOnceDriver extends CapturingDriver {
     if (this.prompts.length === 1) {
       return new Promise<DriverRunResult>(() => undefined);
     }
-    return driverResult(this, 'succeeded');
+    return driverResult(this, 'succeeded', input.session_id);
   }
 }
 
@@ -517,7 +524,7 @@ class ConcurrentDriver extends CapturingDriver {
     this.maxActive = Math.max(this.maxActive, this.active);
     await new Promise((resolve) => setTimeout(resolve, 10));
     this.active -= 1;
-    return driverResult(this, 'succeeded');
+    return driverResult(this, 'succeeded', input.session_id);
   }
 }
 
@@ -528,9 +535,9 @@ class RetryableOnceDriver extends CapturingDriver {
 
   override async sendPrompt(input: DriverPrompt): Promise<DriverRunResult> {
     this.prompts.push(input);
-    if (this.prompts.length > 1) return driverResult(this, 'succeeded');
+    if (this.prompts.length > 1) return driverResult(this, 'succeeded', input.session_id);
     return {
-      ...driverResult(this, 'failed'),
+      ...driverResult(this, 'failed', input.session_id),
       error: {
         code: this.errorCode,
         message: 'Transient transport failure.',
@@ -543,14 +550,25 @@ class RetryableOnceDriver extends CapturingDriver {
 function driverResult(
   driver: DriverRuntimeHandle,
   status: DriverRunResult['status'],
+  sessionId?: string,
 ): DriverRunResult {
   return {
     driver_run_result_id: 'driver_result_001',
-    session_id: driver.session_id,
+    session_id: sessionId ?? driver.session_id,
     status,
+    response: status === 'succeeded' ? 'Agent completed the requested change.' : '',
     artifacts: status === 'succeeded' ? [createArtifact('artifact_output_001')] : [],
     transcript_ref: createArtifact('artifact_transcript_001', 'transcript'),
-    tool_events: [],
+    tool_events: [
+      {
+        tool_event_id: 'tool_event_001',
+        tool_name: 'edit',
+        status: 'completed',
+        summary: 'Updated the requested file.',
+        created_at: '2026-07-07T00:00:00.000Z',
+        schema_version: SCHEMA_VERSION,
+      },
+    ],
     diagnostics: {
       driver_id: driver.driver_id,
       duration_ms: 25,

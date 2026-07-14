@@ -11,6 +11,8 @@ export interface DriverRuntimeInvokerMemoryItem {
 export interface DriverRuntimeInvokerInput {
   task_id: string;
   run_id?: string;
+  workspace_path?: string;
+  session_id?: string;
   call_id: string;
   source_driver: string;
   driver_context: {
@@ -66,6 +68,8 @@ export function createDriverRuntimeInvoker(driver: DriverRuntimeHandle) {
         {
           task_id: input.task_id,
           run_id: input.run_id ?? input.call_id,
+          ...(input.workspace_path ? { workspace_path: input.workspace_path } : {}),
+          ...(input.session_id ? { session_id: input.session_id } : {}),
           prompt: deterministicJson({
             task_instruction: input.driver_context.task_instruction,
             skills: input.driver_context.skills,
@@ -137,6 +141,7 @@ function failedExecution(
     driver_run_result_id: createId('driver_result'),
     session_id: driver.session_id,
     status: 'failed',
+    response: '',
     artifacts: [],
     transcript_ref: syntheticTranscript(driver, input, message, created_at),
     tool_events: [],

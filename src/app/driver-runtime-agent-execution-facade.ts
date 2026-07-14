@@ -30,6 +30,8 @@ interface InvocationContext {
   task_id: string;
   run_id: string;
   instruction: string;
+  workspace_path?: string;
+  session_id?: string;
   signal?: AbortSignal;
   execution?: DriverRunResult;
   driver_attempts: number;
@@ -94,6 +96,8 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
       task_id: input.task_id,
       run_id: input.run_id,
       instruction: input.instruction,
+      ...(input.workspace_path ? { workspace_path: input.workspace_path } : {}),
+      ...(input.session_id ? { session_id: input.session_id } : {}),
       driver_attempts: 0,
       abortObserved: false,
       ...(options?.signal ? { signal: options.signal } : {}),
@@ -173,6 +177,8 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
           {
             task_id: invocation.task_id,
             run_id: invocation.run_id,
+            ...(invocation.workspace_path ? { workspace_path: invocation.workspace_path } : {}),
+            ...(invocation.session_id ? { session_id: invocation.session_id } : {}),
             call_id: createId('call'),
             source_driver: this.options.driver.driver_id,
             driver_context: {
@@ -226,6 +232,9 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
       driver_run_result_id: execution.driver_run_result_id,
       artifact_refs: [...execution.artifacts],
       transcript_ref: execution.transcript_ref,
+      session_id: execution.session_id,
+      response: execution.response ?? '',
+      tool_events: [...execution.tool_events],
       diagnostics: {
         ...execution.diagnostics,
         driver_status: execution.status,
@@ -278,6 +287,9 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
       driver_run_result_id: createId('driver_result'),
       artifact_refs: [],
       transcript_ref: transcript,
+      session_id: this.options.driver.session_id,
+      response: '',
+      tool_events: [],
       diagnostics: {
         driver_id: this.options.driver.driver_id,
         driver_status: 'failed',

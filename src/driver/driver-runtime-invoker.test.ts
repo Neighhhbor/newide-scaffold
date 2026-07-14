@@ -14,6 +14,8 @@ describe('createDriverRuntimeInvoker', () => {
     expect(driver.prompts[0]).toMatchObject({
       task_id: 'task_1',
       run_id: 'run_1',
+      workspace_path: '/tmp/newide-project',
+      session_id: 'session_existing',
       schema_version: SCHEMA_VERSION,
     });
     expect(driver.prompts[0]?.prompt).toBe(
@@ -200,6 +202,8 @@ function invocationInput() {
   return {
     task_id: 'task_1',
     run_id: 'run_1',
+    workspace_path: '/tmp/newide-project',
+    session_id: 'session_existing',
     call_id: 'call_1',
     source_driver: 'driver_1',
     driver_context: {

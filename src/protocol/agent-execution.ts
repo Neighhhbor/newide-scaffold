@@ -9,6 +9,7 @@ import type {
   TaskId,
   Timestamp,
 } from '../core';
+import type { DriverToolEvent } from '../driver/contract';
 
 export const AGENT_EXECUTION_STATUSES = [
   'completed',
@@ -26,6 +27,8 @@ export interface AgentExecutionRequest {
   run_id: RunId;
   role_id: RoleId;
   instruction: string;
+  workspace_path?: string;
+  session_id?: string;
   input_artifact_refs: ArtifactId[];
   context_policy: string;
   schema_version: SchemaVersion;
@@ -38,6 +41,9 @@ export interface AgentExecutionResult {
   driver_run_result_id: DriverRunResultId;
   artifact_refs: ArtifactRef[];
   transcript_ref: ArtifactRef;
+  session_id: string;
+  response: string;
+  tool_events: DriverToolEvent[];
   diagnostics: AgentExecutionDiagnostics;
   status: AgentExecutionStatus;
   memory_buffer_ref?: string;

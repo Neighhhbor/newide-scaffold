@@ -341,6 +341,8 @@ export async function runIntegrationV0Flow(
       run_id: run.run_id,
       role_id: task.role_id ?? 'role_ts_engineer',
       instruction: prompt,
+      ...(options.workspacePath ? { workspace_path: options.workspacePath } : {}),
+      ...(options.sessionId ? { session_id: options.sessionId } : {}),
       input_artifact_refs: contextPack.artifact_refs,
       context_policy: 'integration_v0_default',
       schema_version: SCHEMA_VERSION,
@@ -365,7 +367,7 @@ export async function runIntegrationV0Flow(
     });
     driverResult = buildDriverRunResultFromAgentExecution({
       result: agentExecutionResult,
-      session_id: driver.session_id,
+      session_id: options.sessionId ?? driver.session_id,
       schema_version: SCHEMA_VERSION,
     });
   } else {
@@ -375,6 +377,8 @@ export async function runIntegrationV0Flow(
         task_id: task.task_id,
         run_id: run.run_id,
         prompt,
+        ...(options?.workspacePath ? { workspace_path: options.workspacePath } : {}),
+        ...(options?.sessionId ? { session_id: options.sessionId } : {}),
         context_pack_ref: contextPackRef,
         created_at: nowTimestamp(),
         schema_version: SCHEMA_VERSION,

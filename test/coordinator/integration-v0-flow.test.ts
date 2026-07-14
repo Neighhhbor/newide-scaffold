@@ -672,6 +672,18 @@ describe('runIntegrationV0Flow', () => {
           driver_run_result_id: 'driver_result_from_agent_001',
           artifact_refs: [createArtifact('artifact_from_agent_001')],
           transcript_ref: createArtifact('artifact_transcript_from_agent_001', 'transcript'),
+          session_id: 'session_existing',
+          response: 'Implemented through the real Agent session.',
+          tool_events: [
+            {
+              tool_event_id: 'tool_event_from_agent_001',
+              tool_name: 'edit',
+              status: 'completed',
+              summary: 'Edited the target file.',
+              created_at: new Date().toISOString(),
+              schema_version: SCHEMA_VERSION,
+            },
+          ],
           diagnostics: {
             driver_id: 'agent-driver',
             duration_ms: 42,
@@ -683,7 +695,11 @@ describe('runIntegrationV0Flow', () => {
       },
     };
 
-    const result = await runFlow({ agentExecutionFacade });
+    const result = await runFlow({
+      agentExecutionFacade,
+      workspacePath: process.cwd(),
+      sessionId: 'session_existing',
+    });
 
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({
@@ -692,6 +708,8 @@ describe('runIntegrationV0Flow', () => {
       role_id: 'role_ts_engineer',
       instruction: 'Run the integration v0 flow',
       context_policy: 'integration_v0_default',
+      workspace_path: process.cwd(),
+      session_id: 'session_existing',
     });
     expect(result.agent_execution_result).toMatchObject({
       agent_run_id: 'agent_run_001',
@@ -699,6 +717,9 @@ describe('runIntegrationV0Flow', () => {
     });
     expect(result.driver_result).toMatchObject({
       driver_run_result_id: 'driver_result_from_agent_001',
+      session_id: 'session_existing',
+      response: 'Implemented through the real Agent session.',
+      tool_events: [expect.objectContaining({ tool_event_id: 'tool_event_from_agent_001' })],
       status: 'succeeded',
       artifacts: [expect.objectContaining({ artifact_id: 'artifact_from_agent_001' })],
       transcript_ref: expect.objectContaining({
