@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {
   runIntegrationV0Flow,
@@ -27,15 +28,17 @@ import type {
 describe('runIntegrationV0Flow', () => {
   const createdRunDirs = new Set<string>();
   const createdWorktreeDirs = new Set<string>();
+  const createdWorkspaceDirs = new Set<string>();
 
   afterEach(async () => {
     await Promise.all(
-      [...createdRunDirs, ...createdWorktreeDirs].map((dir) =>
+      [...createdRunDirs, ...createdWorktreeDirs, ...createdWorkspaceDirs].map((dir) =>
         fs.rm(dir, { recursive: true, force: true }),
       ),
     );
     createdRunDirs.clear();
     createdWorktreeDirs.clear();
+    createdWorkspaceDirs.clear();
   });
 
   it('reports real task and run ids before driver completion', async () => {
@@ -1067,6 +1070,51 @@ describe('runIntegrationV0Flow', () => {
     const manifest = JSON.parse(await fs.readFile(resultPath, 'utf-8'));
     expect(manifest.status).toBe('failed');
     expect(result.result_manifest.status).toBe('failed');
+  });
+
+  it('preserves real workspace changes when Agent execution fails after writing files', async () => {
+    const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), 'newide-workspace-'));
+    createdWorkspaceDirs.add(workspacePath);
+    const agentExecutionFacade: AgentExecutionFacade = {
+      async runAgent(input) {
+        await fs.writeFile(path.join(workspacePath, 'index.html'), '<main>Tetris</main>');
+        await fs.writeFile(path.join(workspacePath, 'style.css'), 'main { display: grid; }');
+        return {
+          agent_run_id: 'agent_run_transport_failed_after_write',
+          role_id: input.role_id,
+          context_pack_ref: 'context_pack_transport_failed_after_write',
+          driver_run_result_id: 'driver_result_transport_failed_after_write',
+          artifact_refs: [],
+          transcript_ref: createArtifact('transcript_transport_failed_after_write', 'transcript'),
+          session_id: 'session_transport_failed_after_write',
+          response: '',
+          tool_events: [],
+          diagnostics: {
+            driver_id: 'external-driver',
+            duration_ms: 222_000,
+            driver_error_code: 'EXTERNAL_DRIVER_TRANSPORT_ERROR',
+          },
+          status: 'failed',
+          created_at: new Date().toISOString(),
+          schema_version: SCHEMA_VERSION,
+        };
+      },
+    };
+
+    const result = await runFlow({ agentExecutionFacade, workspacePath });
+
+    expect(result.summary).toMatchObject({
+      status: 'failed',
+      outcome: 'failed',
+      changed_files: ['index.html', 'style.css'],
+      failure: { code: 'DRIVER_FAILED' },
+    });
+    expect(result.materialization_result.changed_files).toEqual([]);
+    expect(result.frontend_snapshot.delivery_report.changed_files).toEqual([
+      'index.html',
+      'style.css',
+    ]);
+    expect(result.result_manifest.changed_files).toEqual(['index.html', 'style.css']);
   });
 
   it('should use real mailbox send/ack mechanism', async () => {
