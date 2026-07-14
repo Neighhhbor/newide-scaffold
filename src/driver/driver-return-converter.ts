@@ -17,7 +17,7 @@
  *    （最终降级：无 transcript 或前述策略全部失败时的基本报告）
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { DriverReturnSchema, type DriverReturn } from '../memory/schemas';
 import type { LlmClient } from '../memory/ports/llm-client';
@@ -120,7 +120,26 @@ function tryReadReportFile(taskId: string, workspace: string): DriverReturn | nu
   }
 
   try {
-    return DriverReturnSchema.parse(parsed);
+    const report = DriverReturnSchema.parse(parsed) as DriverReturn;
+
+    // 解析成功后，默认清理 report 文件（可通过 ACP_KEEP_REPORT_FILE=1 保留）
+    const keepFile =
+      process.env.ACP_KEEP_REPORT_FILE === '1' || process.env.ACP_KEEP_REPORT_FILE === 'true';
+    if (!keepFile) {
+      try {
+        unlinkSync(filePath);
+        console.error(
+          `[DriverReturnConverter] report file deleted after successful parse: ${filePath}`,
+        );
+      } catch (deleteError) {
+        const reason = deleteError instanceof Error ? deleteError.message : String(deleteError);
+        console.error(
+          `[DriverReturnConverter] failed to delete report file ${filePath}: ${reason}`,
+        );
+      }
+    }
+
+    return report;
   } catch (schemaError) {
     const reason = schemaError instanceof Error ? schemaError.message : String(schemaError);
     console.error(
