@@ -157,6 +157,8 @@ export class DriverBridge {
     const converterOptions: DriverReturnConverterOptions = {
       instruction: task.instruction,
       sourceDriver: this.driver.driver_id,
+      taskId: prompt.task_id,
+      workspace: process.env.ACP_WORKSPACE || process.cwd(),
     };
 
     if (this.loadTranscript) {
@@ -258,13 +260,15 @@ export class DriverBridge {
     // 可选的报告文件写入指令（通过 ACP_WRITE_REPORT_FILE=1 启用）
     if (process.env.ACP_WRITE_REPORT_FILE === '1' || process.env.ACP_WRITE_REPORT_FILE === 'true') {
       promptText += '\n\n---\n';
+      promptText += 'FINAL STEP — After completing the task, you MUST write a report file:\n';
+      promptText += `- File name: exactly \`${taskId}_report.txt\` in the workspace root directory.\n`;
       promptText +=
-        'IMPORTANT: After completing the task, you MUST also write the full six-field report ';
-      promptText += `to a file named \`${taskId}_report.txt\` in the workspace root directory.\n`;
+        '- File content: a JSON object containing the six-field report. ' +
+        'The JSON MUST be the object inside the <<<DRIVER_RETURN>>> block above — ' +
+        'DO NOT include the <<<DRIVER_RETURN>>> or <<<END_DRIVER_RETURN>>> markers themselves. ' +
+        'The file MUST start with `{` and end with `}` and be valid JSON.\n';
       promptText +=
-        'The file content should be the JSON object between the <<<DRIVER_RETURN>>> and <<<END_DRIVER_RETURN>>> markers above.\n';
-      promptText +=
-        'The report MUST contain all six fields: summary, artifacts, decisions, blockers, referenced_experiences, and assumptions.';
+        '- Required fields: summary, artifacts, decisions, blockers, referenced_experiences, assumptions.';
     }
 
     return {
