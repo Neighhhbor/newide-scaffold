@@ -5,7 +5,11 @@
  */
 import { z } from 'zod';
 import path from 'node:path';
-import type { RunCreateParams, RunCreateResult } from '../app/newide-backend-service';
+import type {
+  RunCreateParams,
+  RunCreateResult,
+  RunListResult,
+} from '../app/newide-backend-service';
 import { RunNotFoundError, type AppRunEvent } from '../app/run-registry';
 import type { RunSnapshot } from '../protocol/run-snapshot';
 import { JSON_RPC_ERROR_CODES } from './json-rpc-line-protocol';
@@ -17,6 +21,7 @@ export interface RunMethodsService {
   getRunSnapshot(runId: string): RunSnapshot;
   subscribe(runId: string, listener: (event: AppRunEvent) => void): () => void;
   cancelRun(runId: string): Promise<{ cancelled: true }>;
+  listRuns(): Promise<RunListResult>;
 }
 
 const createParamsSchema = z
@@ -31,6 +36,7 @@ const createParamsSchema = z
   })
   .strict();
 const runIdParamsSchema = z.object({ run_id: z.string().min(1) }).strict();
+const emptyParamsSchema = z.object({}).strict();
 
 export class RunRpcMethods {
   private readonly subscriptions = new Map<string, () => void>();
@@ -69,6 +75,10 @@ export class RunRpcMethods {
     dispatcher.register('run.cancel', (params) => {
       const { run_id } = parseParams(runIdParamsSchema, params);
       return this.callWithRunError(() => this.service.cancelRun(run_id));
+    });
+    dispatcher.register('run.list', (params) => {
+      parseParams(emptyParamsSchema, params ?? {});
+      return this.service.listRuns();
     });
   }
 

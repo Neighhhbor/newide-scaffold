@@ -25,6 +25,11 @@ import {
   FileRunTerminalOutputWriter,
   type RunTerminalOutputWriter,
 } from './run-terminal-output-writer';
+import {
+  FileRunRequestStore,
+  type RunHistoryEntry,
+  type RunRequestStore,
+} from './run-request-store';
 import { projectRunSnapshot } from './run-snapshot-projector';
 import type { RunSnapshot } from '../protocol/run-snapshot';
 
@@ -44,6 +49,10 @@ export interface RunCreateResult {
   status: 'running';
 }
 
+export interface RunListResult {
+  runs: RunHistoryEntry[];
+}
+
 export class NewideBackendService {
   private readonly terminalRuns = new Map<string, Promise<void>>();
 
@@ -52,9 +61,26 @@ export class NewideBackendService {
     private readonly registry = new InMemoryRunRegistry(),
     private readonly auditWriter: RunAuditWriter = new FileRunAuditWriter(),
     private readonly terminalWriter: RunTerminalOutputWriter = new FileRunTerminalOutputWriter(),
+    private readonly requestStore: RunRequestStore = new FileRunRequestStore(),
   ) {}
 
   createRun(params: RunCreateParams): Promise<RunCreateResult> {
+    return this.startRun(params);
+  }
+
+  async listRuns(): Promise<RunListResult> {
+    const history = await this.requestStore.listHistory();
+    return {
+      // 仍在本进程运行中的 run 由 run.getSnapshot 提供真实状态；
+      // 历史列表只回放已经落盘的 run，绝不把遗留目录伪装成 running。
+      runs: history.filter((entry) => !this.isLiveRun(entry.run_id)),
+    };
+  }
+
+  private startRun(
+    params: RunCreateParams,
+    lineage?: { restarted_from_run_id: string },
+  ): Promise<RunCreateResult> {
     const mode = params.mode ?? 'single_agent';
     const workspacePath = normalizeWorkspacePath(params.workspace_path ?? process.cwd());
     const controller = new AbortController();
@@ -103,6 +129,20 @@ export class NewideBackendService {
             for (const event of pendingEvents) this.appendDomainEvent(created, event);
             this.registry.appendEvent(created.run_id, 'run.started', { mode });
             for (const record of pendingTelemetry) this.appendTelemetry(created, record);
+            void this.requestStore
+              .save({
+                run_id: created.run_id,
+                task_id: created.task_id,
+                prompt: params.prompt,
+                workspace_path: workspacePath,
+                mode,
+                ...(params.session_id ? { session_id: params.session_id } : {}),
+                ...(params.project_id ? { project_id: params.project_id } : {}),
+                ...(params.client_task_id ? { client_task_id: params.client_task_id } : {}),
+                ...(params.title ? { title: params.title } : {}),
+                ...(lineage ? { restarted_from_run_id: lineage.restarted_from_run_id } : {}),
+              })
+              .catch(() => undefined);
             resolve({ ...created, status: 'running' });
           },
         });
@@ -187,6 +227,10 @@ export class NewideBackendService {
 
   subscribe(runId: string, listener: (event: AppRunEvent) => void): () => void {
     return this.registry.subscribe(runId, listener);
+  }
+
+  private isLiveRun(runId: string): boolean {
+    return this.terminalRuns.has(runId);
   }
 
   private appendTelemetry(
