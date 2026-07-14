@@ -9,6 +9,7 @@ import type { ArtifactOutput } from './artifact-output';
 import type { RunResultStatus, IntegrationRunOutputPaths } from './run-result';
 import type { SelectionMode } from './artifact-finalizer';
 import type { CouncilDecision, CouncilRunResult } from '../council';
+import type { DriverToolEvent } from '../driver/contract';
 
 export type FrontendStage = 'executing' | 'council' | 'delivery';
 export type FrontendTimelineLevel = 'info' | 'success' | 'warning' | 'council';
@@ -18,9 +19,14 @@ export interface FrontendRunSnapshotSummary {
   task_id: string;
   mode: SelectionMode;
   status: RunResultStatus;
+  outcome: 'completed_files' | 'completed_response' | 'failed';
+  session_id: string;
+  response: string;
+  tool_events: DriverToolEvent[];
   worktree_path: string;
   artifacts_materialized: number;
   files_written: string[];
+  changed_files: string[];
   artifact_outputs: ArtifactOutput[];
   driver_diagnostics: {
     driver_id: string;
@@ -84,6 +90,7 @@ export interface FrontendRunSnapshot {
     status: RunResultStatus;
     mode: SelectionMode;
     driver_id: string;
+    session_id: string;
     created_at: Timestamp;
   };
   flow: {
@@ -100,7 +107,12 @@ export interface FrontendRunSnapshot {
   delivery_report: {
     worktree_path: string;
     files_written: string[];
+    changed_files: string[];
     artifacts_materialized: number;
+    outcome: FrontendRunSnapshotSummary['outcome'];
+    response: string;
+    session_id: string;
+    tool_events: DriverToolEvent[];
     driver_diagnostics: FrontendRunSnapshotSummary['driver_diagnostics'];
   };
   artifacts: ArtifactOutput[];
@@ -160,6 +172,7 @@ export function buildFrontendRunSnapshot(
       status: input.summary.status,
       mode: input.summary.mode,
       driver_id: input.summary.driver_diagnostics.driver_id,
+      session_id: input.summary.session_id,
       created_at: input.summary.created_at,
     },
     flow: {
@@ -176,7 +189,12 @@ export function buildFrontendRunSnapshot(
     delivery_report: {
       worktree_path: input.summary.worktree_path,
       files_written: [...input.summary.files_written],
+      changed_files: [...input.summary.changed_files],
       artifacts_materialized: input.summary.artifacts_materialized,
+      outcome: input.summary.outcome,
+      response: input.summary.response,
+      session_id: input.summary.session_id,
+      tool_events: input.summary.tool_events.map((event) => ({ ...event })),
       driver_diagnostics: input.summary.driver_diagnostics,
     },
     artifacts: [...input.summary.artifact_outputs],

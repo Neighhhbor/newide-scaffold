@@ -68,6 +68,9 @@ export interface IntegrationV0Summary {
   mode: SelectionMode;
   status: 'completed' | 'failed';
   outcome: 'completed_files' | 'completed_response' | 'failed';
+  session_id: string;
+  response: string;
+  tool_events: DriverRunResult['tool_events'];
   failure?: IntegrationV0Failure;
   worktree_path: string;
   artifacts_materialized: number;
@@ -930,6 +933,9 @@ export async function runIntegrationV0Flow(
     mode: selectionResult.mode,
     status: finalRunStatus,
     outcome,
+    session_id: driverResult.session_id,
+    response: driverResult.response ?? '',
+    tool_events: [...driverResult.tool_events],
     ...(failure ? { failure } : {}),
     worktree_path: materializationResult.worktree_path,
     artifacts_materialized: materializationResult.materialized_artifacts.length,

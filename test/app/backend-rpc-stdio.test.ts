@@ -89,6 +89,13 @@ process.stdin.on('end', () => {
       expect(snapshot.snapshot?.delivery_report.driver_diagnostics.driver_id).not.toBe(
         'mock-driver',
       );
+      expect(snapshot.snapshot?.delivery_report).toMatchObject({
+        outcome: 'completed_response',
+        response: 'Fake ACP completed the request.',
+        session_id: 'session_fake_acp',
+        changed_files: [],
+        tool_events: [],
+      });
       expect(snapshot.events).toEqual(
         expect.arrayContaining([expect.objectContaining({ type: 'agent.execution_completed' })]),
       );

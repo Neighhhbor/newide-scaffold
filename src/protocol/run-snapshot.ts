@@ -58,6 +58,7 @@ export const runSnapshotSchema = z
         task_id: z.string().min(1),
         status: z.string().min(1),
         mode: z.enum(['single_agent', 'council']),
+        session_id: z.string().min(1).optional(),
         event_ids: z.array(z.string().min(1)),
         started_at: z.string().min(1).optional(),
         completed_at: z.string().min(1).optional(),
@@ -76,7 +77,12 @@ export const runSnapshotSchema = z
       .object({
         worktree_path: z.string().min(1).optional(),
         files_written: z.array(z.string()),
+        changed_files: z.array(z.string()).optional(),
         artifacts_materialized: z.number().int().nonnegative(),
+        outcome: z.enum(['completed_files', 'completed_response', 'failed']).optional(),
+        response: z.string().optional(),
+        session_id: z.string().min(1).optional(),
+        tool_events: z.array(recordSchema).optional(),
       })
       .strict()
       .optional(),
@@ -119,6 +125,11 @@ export const runSnapshotSchema = z
         status: z.enum(['completed', 'failed', 'cancelled']),
         artifact_refs: z.array(z.string()),
         files_written: z.array(z.string()),
+        changed_files: z.array(z.string()).optional(),
+        outcome: z.enum(['completed_files', 'completed_response', 'failed']).optional(),
+        response: z.string().optional(),
+        session_id: z.string().min(1).optional(),
+        tool_events: z.array(recordSchema).optional(),
       })
       .strict()
       .optional(),
