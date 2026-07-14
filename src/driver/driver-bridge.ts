@@ -255,6 +255,18 @@ export class DriverBridge {
     );
     promptText += '\n<<<END_DRIVER_RETURN>>>';
 
+    // 可选的报告文件写入指令（通过 ACP_WRITE_REPORT_FILE=1 启用）
+    if (process.env.ACP_WRITE_REPORT_FILE === '1' || process.env.ACP_WRITE_REPORT_FILE === 'true') {
+      promptText += '\n\n---\n';
+      promptText +=
+        'IMPORTANT: After completing the task, you MUST also write the full six-field report ';
+      promptText += `to a file named \`${taskId}_report.txt\` in the workspace root directory.\n`;
+      promptText +=
+        'The file content should be the JSON object between the <<<DRIVER_RETURN>>> and <<<END_DRIVER_RETURN>>> markers above.\n';
+      promptText +=
+        'The report MUST contain all six fields: summary, artifacts, decisions, blockers, referenced_experiences, and assumptions.';
+    }
+
     return {
       task_id: taskId,
       run_id: runId,
