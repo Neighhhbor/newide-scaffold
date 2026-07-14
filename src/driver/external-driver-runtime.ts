@@ -8,7 +8,7 @@ import type {
 
 export interface ExternalDriverTransport {
   invoke(input: DriverPrompt): Promise<DriverRunResult>;
-  interrupt?(reason: string): Promise<void>;
+  interrupt?(reason: string, runId?: string): Promise<void>;
   shutdown?(): Promise<void>;
 }
 
@@ -64,8 +64,9 @@ export class ExternalDriverRuntime implements DriverRuntimeHandle {
     }
   }
 
-  async interrupt(reason: string): Promise<void> {
-    await this.transport.interrupt?.(reason);
+  async interrupt(reason: string, runId?: string): Promise<void> {
+    if (runId) await this.transport.interrupt?.(reason, runId);
+    else await this.transport.interrupt?.(reason);
   }
 
   async collectTranscript(): Promise<ArtifactRef> {

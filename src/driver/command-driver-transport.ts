@@ -1,4 +1,4 @@
-import { spawn, type SpawnOptionsWithoutStdio } from 'node:child_process';
+import { spawn, type ChildProcess, type SpawnOptionsWithoutStdio } from 'node:child_process';
 import type { DriverPrompt, DriverRunResult } from './contract';
 import { assertDriverRunResult, type ExternalDriverTransport } from './external-driver-runtime';
 
@@ -18,6 +18,7 @@ export class CommandDriverTransport implements ExternalDriverTransport {
   private readonly env: NodeJS.ProcessEnv | undefined;
   private readonly unsetEnv: readonly string[];
   private readonly timeoutMs: number | undefined;
+  private readonly activeChildren = new Map<string, ChildProcess>();
   private stderr = '';
 
   constructor(options: CommandDriverTransportOptions) {
@@ -49,8 +50,23 @@ export class CommandDriverTransport implements ExternalDriverTransport {
     return parseDriverRunResult(stdout);
   }
 
+  async interrupt(_reason: string, runId?: string): Promise<void> {
+    const children = runId
+      ? [...(this.activeChildren.get(runId) ? [this.activeChildren.get(runId)!] : [])]
+      : [...this.activeChildren.values()];
+    await Promise.all(children.map((child) => terminateAndWait(child)));
+  }
+
+  async shutdown(): Promise<void> {
+    await this.interrupt('Command driver transport shutdown');
+  }
+
   private execute(input: DriverPrompt): Promise<string> {
     return new Promise((resolve, reject) => {
+      if (this.activeChildren.has(input.run_id)) {
+        reject(new Error(`Command driver run ${input.run_id} is already active`));
+        return;
+      }
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];
       let stdinError: Error | undefined;
@@ -60,6 +76,13 @@ export class CommandDriverTransport implements ExternalDriverTransport {
       let forceKillTimeout: NodeJS.Timeout | undefined;
 
       const child = spawn(this.command, this.args, this.spawnOptions());
+      this.activeChildren.set(input.run_id, child);
+
+      const releaseChild = (): void => {
+        if (this.activeChildren.get(input.run_id) === child) {
+          this.activeChildren.delete(input.run_id);
+        }
+      };
 
       const clearTimers = (): void => {
         if (timeout) {
@@ -76,6 +99,7 @@ export class CommandDriverTransport implements ExternalDriverTransport {
         }
         settled = true;
         clearTimers();
+        releaseChild();
         reject(error);
       };
 
@@ -108,6 +132,7 @@ export class CommandDriverTransport implements ExternalDriverTransport {
       });
 
       child.once('close', (code, signal) => {
+        releaseChild();
         if (settled) {
           return;
         }
@@ -132,19 +157,19 @@ export class CommandDriverTransport implements ExternalDriverTransport {
           return;
         }
 
-        if (code !== 0) {
+        if (signal) {
           reject(
             new Error(
-              `Command driver failed: ${this.commandLabel()} exited with code ${String(code)}. stderr: ${stderrSummary}`,
+              `Command driver failed: ${this.commandLabel()} exited with signal ${signal}. stderr: ${stderrSummary}`,
             ),
           );
           return;
         }
 
-        if (signal) {
+        if (code !== 0) {
           reject(
             new Error(
-              `Command driver failed: ${this.commandLabel()} exited with signal ${signal}. stderr: ${stderrSummary}`,
+              `Command driver failed: ${this.commandLabel()} exited with code ${String(code)}. stderr: ${stderrSummary}`,
             ),
           );
           return;
@@ -171,7 +196,7 @@ export class CommandDriverTransport implements ExternalDriverTransport {
       stdio: ['pipe', 'pipe', 'pipe'],
     };
 
-    if (this.timeoutMs !== undefined && process.platform !== 'win32') {
+    if (process.platform !== 'win32') {
       options.detached = true;
     }
 
@@ -199,6 +224,30 @@ export class CommandDriverTransport implements ExternalDriverTransport {
       ...this.args.map((arg) => summarizeText(arg.replace(/\s+/g, ' '), 80)),
     ].join(' ');
   }
+}
+
+function terminateAndWait(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const forceKill = setTimeout(() => terminateChild(child.pid, 'SIGKILL'), 1_000);
+    const giveUp = setTimeout(finish, 2_000);
+    forceKill.unref();
+    giveUp.unref();
+
+    function finish(): void {
+      if (settled) return;
+      settled = true;
+      clearTimeout(forceKill);
+      clearTimeout(giveUp);
+      child.removeListener('close', finish);
+      resolve();
+    }
+
+    child.once('close', finish);
+    terminateChild(child.pid, 'SIGTERM');
+  });
 }
 
 function summarizeText(input: string, maxLength = 500): string {

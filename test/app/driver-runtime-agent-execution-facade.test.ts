@@ -207,7 +207,7 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
     controller.abort(new Error('Cancel B runtime execution'));
 
     await expect(running).rejects.toThrow('Cancel B runtime execution');
-    expect(interrupt).toHaveBeenCalledWith('Cancel B runtime execution');
+    expect(interrupt).toHaveBeenCalledWith('Cancel B runtime execution', 'run_task_cancel');
     expect((await buffer.getBufferMeta('proposer_a')).total_processed).toBe(0);
   });
 

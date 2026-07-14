@@ -68,6 +68,6 @@ export interface DriverRuntimeHandle {
   session_id: DriverSessionId;
   capabilities: DriverCapabilities;
   sendPrompt(input: DriverPrompt): Promise<DriverRunResult>;
-  interrupt(reason: string): Promise<void>;
+  interrupt(reason: string, runId?: RunId): Promise<void>;
   collectTranscript(): Promise<ArtifactRef>;
 }

@@ -28,7 +28,7 @@ describe('runDriverPromptWithSignal', () => {
     controller.abort(new Error('User cancelled the run'));
 
     await expect(running).rejects.toThrow('User cancelled the run');
-    expect(interrupt).toHaveBeenCalledWith('User cancelled the run');
+    expect(interrupt).toHaveBeenCalledWith('User cancelled the run', 'run_cancel');
   });
 
   it('does not interrupt a normally completed driver', async () => {

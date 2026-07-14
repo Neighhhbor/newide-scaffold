@@ -72,6 +72,7 @@ export function createProductionBackendService(
         ACP_WORKSPACE: env.ACP_WORKSPACE ?? path.join(repoRoot, '.newide', 'test-workspace'),
       },
       unsetEnv: MODEL_OVERRIDE_ENV.filter((key) => driverEnv[key] === undefined),
+      timeoutMs: readDriverTimeout(env.ACP_DRIVER_TIMEOUT_MS),
     }),
   });
   const agentExecutionFacade = new DriverRuntimeAgentExecutionFacade({
@@ -95,6 +96,15 @@ const MODEL_OVERRIDE_ENV = [
   'ANTHROPIC_DEFAULT_HAIKU_MODEL',
   'CLAUDE_CODE_SUBAGENT_MODEL',
 ];
+
+function readDriverTimeout(value: string | undefined): number {
+  if (value === undefined) return 120_000;
+  const timeout = Number(value);
+  if (!Number.isInteger(timeout) || timeout <= 0) {
+    throw new Error('ACP_DRIVER_TIMEOUT_MS must be a positive integer');
+  }
+  return timeout;
+}
 
 function readJson(filePath: string): unknown {
   if (!existsSync(filePath)) return undefined;

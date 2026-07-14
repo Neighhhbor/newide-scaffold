@@ -8,7 +8,7 @@ export async function runDriverPromptWithSignal(
   if (!signal) return driver.sendPrompt(input);
   if (signal.aborted) {
     const reason = abortReason(signal);
-    await driver.interrupt(reason.message);
+    await driver.interrupt(reason.message, input.run_id);
     throw reason;
   }
 
@@ -16,7 +16,7 @@ export async function runDriverPromptWithSignal(
   const aborted = new Promise<never>((_, reject) => {
     onAbort = () => {
       const reason = abortReason(signal);
-      void driver.interrupt(reason.message).then(
+      void driver.interrupt(reason.message, input.run_id).then(
         () => reject(reason),
         (error: unknown) => reject(error),
       );
