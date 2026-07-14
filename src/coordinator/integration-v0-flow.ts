@@ -120,6 +120,8 @@ export interface IntegrationV0Materializer {
 export interface IntegrationV0Options {
   driver?: DriverRuntimeHandle;
   driverPrompt?: string;
+  workspacePath?: string;
+  sessionId?: string;
   agentExecutionFacade?: AgentExecutionFacade;
   enableCouncil?: boolean;
   councilProvider?: CouncilProvider;

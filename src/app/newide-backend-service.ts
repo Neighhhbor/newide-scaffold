@@ -4,6 +4,8 @@
  * 这个文件负责异步启动 integration runner 并维护查询状态，不处理 JSON-RPC framing 或进程 I/O。
  */
 import type { IntegrationV0Result } from '../coordinator/integration-v0-flow';
+import { realpathSync, statSync } from 'node:fs';
+import path from 'node:path';
 import { CouncilRoleExecutionError } from '../council';
 import type { Event } from '../core';
 import {
@@ -28,6 +30,8 @@ import type { RunSnapshot } from '../protocol/run-snapshot';
 
 export interface RunCreateParams {
   prompt: string;
+  workspace_path?: string;
+  session_id?: string;
   mode?: AppRunMode;
   project_id?: string;
   client_task_id?: string;
@@ -52,6 +56,7 @@ export class NewideBackendService {
 
   createRun(params: RunCreateParams): Promise<RunCreateResult> {
     const mode = params.mode ?? 'single_agent';
+    const workspacePath = normalizeWorkspacePath(params.workspace_path ?? process.cwd());
     const controller = new AbortController();
     return new Promise<RunCreateResult>((resolve, reject) => {
       let resolveTerminal!: () => void;
@@ -76,6 +81,8 @@ export class NewideBackendService {
         runnerPromise = this.runner.run({
           prompt: params.prompt,
           mode,
+          workspace_path: workspacePath,
+          ...(params.session_id ? { session_id: params.session_id } : {}),
           telemetry,
           signal: controller.signal,
           onEvent: (event) => {
@@ -218,6 +225,21 @@ export class NewideBackendService {
       if (!failure) return;
       this.registry.commitTerminal(runId, failure);
     }
+  }
+}
+
+function normalizeWorkspacePath(input: string): string {
+  if (!path.isAbsolute(input)) {
+    throw new Error('workspace_path must be an absolute directory');
+  }
+  try {
+    const workspacePath = realpathSync(input);
+    if (!statSync(workspacePath).isDirectory()) {
+      throw new Error('not a directory');
+    }
+    return workspacePath;
+  } catch {
+    throw new Error(`workspace_path must be an existing directory: ${input}`);
   }
 }
 

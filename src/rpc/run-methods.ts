@@ -4,6 +4,7 @@
  * 这个文件只校验 RPC 参数并调用 application service，不运行 Coordinator 或读写进程流。
  */
 import { z } from 'zod';
+import path from 'node:path';
 import type { RunCreateParams, RunCreateResult } from '../app/newide-backend-service';
 import { RunNotFoundError, type AppRunEvent } from '../app/run-registry';
 import type { RunSnapshot } from '../protocol/run-snapshot';
@@ -21,6 +22,8 @@ export interface RunMethodsService {
 const createParamsSchema = z
   .object({
     prompt: z.string().trim().min(1),
+    workspace_path: z.string().trim().min(1).refine(path.isAbsolute),
+    session_id: z.string().trim().min(1).optional(),
     mode: z.enum(['single_agent', 'council']).optional(),
     project_id: z.string().min(1).optional(),
     client_task_id: z.string().min(1).optional(),
@@ -99,6 +102,8 @@ function parseParams<T>(schema: z.ZodType<T>, params: unknown): T {
 function compactCreateParams(input: z.infer<typeof createParamsSchema>): RunCreateParams {
   return {
     prompt: input.prompt,
+    workspace_path: input.workspace_path,
+    ...(input.session_id ? { session_id: input.session_id } : {}),
     ...(input.mode ? { mode: input.mode } : {}),
     ...(input.project_id ? { project_id: input.project_id } : {}),
     ...(input.client_task_id ? { client_task_id: input.client_task_id } : {}),

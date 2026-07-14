@@ -24,6 +24,7 @@ interface JsonRpcMessage {
 type SmokeMode = 'single_agent' | 'council' | 'all';
 
 const smokeMode = readSmokeMode(process.argv.slice(2));
+const workspacePath = path.resolve(process.env.RPC_SMOKE_WORKSPACE ?? process.cwd());
 
 const configuredRunnerDir = process.env.RPC_SMOKE_ACP_RUNNER_DIR;
 const usesTemporaryRunner = configuredRunnerDir === undefined;
@@ -156,7 +157,7 @@ async function runAndVerify(mode: 'single_agent' | 'council'): Promise<Record<st
       : '编写一个网页贪吃蛇游戏。请以 snake-council.html 为最终候选文件，要求可直接在浏览器打开运行，包含键盘控制、计分和重新开始功能。';
   const created = await request<{ run_id: string; task_id: string; status: 'running' }>(
     'run.create',
-    { prompt, mode },
+    { prompt, mode, workspace_path: workspacePath },
   );
   runIds.push(created.run_id);
   taskIds.push(created.task_id);
@@ -244,7 +245,7 @@ async function runAndVerify(mode: 'single_agent' | 'council'): Promise<Record<st
 async function createAndCancel(): Promise<Record<string, unknown>> {
   const created = await request<{ run_id: string; task_id: string; status: 'running' }>(
     'run.create',
-    { prompt: 'RPC smoke cancellation', mode: 'single_agent' },
+    { prompt: 'RPC smoke cancellation', mode: 'single_agent', workspace_path: workspacePath },
   );
   runIds.push(created.run_id);
   taskIds.push(created.task_id);

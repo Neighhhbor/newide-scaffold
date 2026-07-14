@@ -15,6 +15,8 @@ describe('IntegrationV0CoordinatorRunner', () => {
     await runner.run({
       prompt: 'Build RPC',
       mode: 'council',
+      workspace_path: process.cwd(),
+      session_id: 'session_existing',
       onRunCreated,
       onEvent,
       signal: controller.signal,
@@ -24,6 +26,8 @@ describe('IntegrationV0CoordinatorRunner', () => {
       driver,
       driverPrompt: 'Build RPC',
       enableCouncil: true,
+      workspacePath: process.cwd(),
+      sessionId: 'session_existing',
       onRunCreated,
       onEvent,
       signal: controller.signal,

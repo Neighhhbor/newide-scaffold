@@ -12,12 +12,14 @@ import { runSnapshotSchema } from '../../src/protocol/run-snapshot';
 
 describe('NewideBackendService', () => {
   it('returns real ids before the runner completes and records telemetry', async () => {
+    let receivedRequest: Parameters<IntegrationV0CoordinatorRunner['run']>[0] | undefined;
     let finish: ((result: IntegrationV0Result) => void) | undefined;
     const runnerResult = new Promise<IntegrationV0Result>((resolve) => {
       finish = resolve;
     });
     const service = new NewideBackendService({
       run: async (request) => {
+        receivedRequest = request;
         request.onRunCreated?.({ run_id: 'run_1', task_id: 'task_1' });
         await request.telemetry?.emit({
           telemetry_id: 'telemetry_1',
@@ -34,10 +36,20 @@ describe('NewideBackendService', () => {
       },
     });
 
-    await expect(service.createRun({ prompt: 'Build RPC' })).resolves.toEqual({
+    await expect(
+      service.createRun({
+        prompt: 'Build RPC',
+        workspace_path: process.cwd(),
+        session_id: 'session_existing',
+      }),
+    ).resolves.toEqual({
       run_id: 'run_1',
       task_id: 'task_1',
       status: 'running',
+    });
+    expect(receivedRequest).toMatchObject({
+      workspace_path: process.cwd(),
+      session_id: 'session_existing',
     });
     expect(service.getSnapshot('run_1')).toMatchObject({
       status: 'running',
