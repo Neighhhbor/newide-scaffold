@@ -21,6 +21,7 @@
     "example:driver-adapter": "tsx src/examples/driver-adapter-flow.ts",
     "backend:rpc": "node --import tsx src/app/backend-rpc-stdio.ts",
     "rpc:smoke": "node --import tsx scripts/rpc-smoke.ts",
+    "acceptance:real": "node --import tsx scripts/real-acceptance.ts",
     "prepare": "husky"
   },
   "lint-staged": {
