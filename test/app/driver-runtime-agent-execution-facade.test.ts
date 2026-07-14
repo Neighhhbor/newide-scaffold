@@ -19,7 +19,7 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
     const driver = new CapturingDriver('succeeded');
     const { facade, buffer } = createFacade(driver);
 
-    const result = await facade.runAgent(request('task_001', 'proposer_a'));
+    const result = await facade.runAgent(request('task_001', 'proposer_a', process.cwd()));
 
     expect(driver.prompts).toHaveLength(1);
     expect(driver.prompts[0]).toMatchObject({
@@ -47,10 +47,11 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
         buffer_seq: 1,
       },
       status: 'completed',
-      memory_buffer_ref: 'proposer_a:1',
+      memory_buffer_ref: expect.stringMatching(/^proposer_a@[a-f0-9]{12}:1$/),
       schema_version: SCHEMA_VERSION,
     });
-    expect(await buffer.getBufferMeta('proposer_a')).toMatchObject({
+    const scopedRole = result.memory_buffer_ref!.split(':')[0]!;
+    expect(await buffer.getBufferMeta(scopedRole)).toMatchObject({
       pending_count: 1,
       total_processed: 0,
     });
@@ -159,6 +160,36 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
     ).toEqual([
       { task_id: 'task_parallel_a', run_id: 'run_task_parallel_a' },
       { task_id: 'task_parallel_b', run_id: 'run_task_parallel_b' },
+    ]);
+  });
+
+  it('serializes different roles that target the same workspace', async () => {
+    const driver = new ConcurrentDriver();
+    const { facade } = createFacade(driver);
+    const workspace = '/tmp/newide-shared-workspace';
+
+    await Promise.all([
+      facade.runAgent(request('task_shared_a', 'proposer', workspace)),
+      facade.runAgent(request('task_shared_b', 'reviewer', workspace)),
+    ]);
+
+    expect(driver.maxActive).toBe(1);
+  });
+
+  it('runs the same role concurrently in different workspace scopes', async () => {
+    const driver = new ConcurrentDriver();
+    const { facade } = createFacade(driver);
+
+    const [first, second] = await Promise.all([
+      facade.runAgent(request('task_workspace_a', 'proposer', '/tmp/newide-workspace-a')),
+      facade.runAgent(request('task_workspace_b', 'proposer', '/tmp/newide-workspace-b')),
+    ]);
+
+    expect(driver.maxActive).toBe(2);
+    expect(first.memory_buffer_ref).not.toBe(second.memory_buffer_ref);
+    expect(driver.prompts.map((prompt) => prompt.workspace_path).sort()).toEqual([
+      '/tmp/newide-workspace-a',
+      '/tmp/newide-workspace-b',
     ]);
   });
 
@@ -456,7 +487,7 @@ class DelayedBufferRepository extends InMemoryBufferRepository {
   }
 }
 
-function request(taskId: string, roleId: string) {
+function request(taskId: string, roleId: string, workspacePath?: string) {
   return {
     task_id: taskId,
     run_id: `run_${taskId}`,
@@ -464,7 +495,7 @@ function request(taskId: string, roleId: string) {
     instruction: 'Execute through B runtime.',
     input_artifact_refs: [],
     context_policy: 'default',
-    workspace_path: process.cwd(),
+    ...(workspacePath ? { workspace_path: workspacePath } : {}),
     session_id: 'session_existing',
     schema_version: SCHEMA_VERSION,
   };

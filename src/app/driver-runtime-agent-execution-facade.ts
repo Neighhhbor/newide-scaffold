@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash } from 'node:crypto';
 import { SCHEMA_VERSION, createId, nowTimestamp, type ArtifactRef } from '../core';
 import {
   AgentManager,
@@ -49,7 +50,7 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
   private readonly manager: Promise<AgentManager>;
   private readonly roleReady = new Map<string, Promise<AgentManager>>();
   private readonly invalidatedRoles = new Set<string>();
-  private readonly roleQueues = new Map<string, Promise<void>>();
+  private readonly executionQueues = new Map<string, Promise<void>>();
   private readonly invocationContext = new AsyncLocalStorage<InvocationContext>();
   private readonly invokeDriverRuntime: ReturnType<typeof createDriverRuntimeInvoker>;
 
@@ -76,12 +77,16 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
     options?: AgentExecutionOptions,
   ): Promise<AgentExecutionResult> {
     throwIfAborted(options?.signal);
+    const runtimeRoleId = scopedRuntimeRole(input.role_id, input.workspace_path);
+    const queueKey = input.workspace_path
+      ? `workspace:${input.workspace_path}`
+      : `role:${input.role_id}`;
     return this.enqueue(
-      input.role_id,
+      queueKey,
       async () => {
         throwIfAborted(options?.signal);
-        const manager = await this.ensureRole(input.role_id);
-        return this.execute(manager, input, options);
+        const manager = await this.ensureRole(runtimeRoleId);
+        return this.execute(manager, input, runtimeRoleId, options);
       },
       options?.signal,
     );
@@ -90,6 +95,7 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
   private async execute(
     manager: AgentManager,
     input: AgentExecutionRequest,
+    runtimeRoleId: string,
     options?: AgentExecutionOptions,
   ): Promise<AgentExecutionResult> {
     const invocation: InvocationContext = {
@@ -103,7 +109,7 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
       ...(options?.signal ? { signal: options.signal } : {}),
     };
     const dispatched = await this.invocationContext.run(invocation, () =>
-      manager.dispatchTask(input.role_id, {
+      manager.dispatchTask(runtimeRoleId, {
         spec: input.instruction,
         task_id: input.task_id,
         call_id: createId('call'),
@@ -112,10 +118,16 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
     );
 
     if (invocation.abortObserved || (invocation.signal?.aborted && !invocation.execution)) {
-      await this.recoverRole(input.role_id);
+      await this.recoverRole(runtimeRoleId);
       throwIfAborted(invocation.signal);
     }
-    return this.buildResult(input, dispatched, invocation.execution, invocation.driver_attempts);
+    return this.buildResult(
+      input,
+      dispatched,
+      runtimeRoleId,
+      invocation.execution,
+      invocation.driver_attempts,
+    );
   }
 
   private async ensureRole(role_id: string): Promise<AgentManager> {
@@ -209,11 +221,12 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
   private buildResult(
     input: AgentExecutionRequest,
     dispatched: DispatchTaskResult,
+    runtimeRoleId: string,
     execution: DriverRunResult | undefined,
     driverAttempts: number,
   ): AgentExecutionResult {
     if (!execution) {
-      return this.buildNoExecutionResult(input, dispatched);
+      return this.buildNoExecutionResult(input, dispatched, runtimeRoleId);
     }
 
     const dispatchFailed = dispatched.status !== 'completed';
@@ -256,7 +269,7 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
             : {}),
       },
       status: mapStatus(dispatched.status, execution.status),
-      memory_buffer_ref: `${input.role_id}:${dispatched.cycle.buffer_seq}`,
+      memory_buffer_ref: `${runtimeRoleId}:${dispatched.cycle.buffer_seq}`,
       created_at: nowTimestamp(),
       schema_version: SCHEMA_VERSION,
     };
@@ -265,6 +278,7 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
   private buildNoExecutionResult(
     input: AgentExecutionRequest,
     dispatched: DispatchTaskResult,
+    runtimeRoleId: string,
   ): AgentExecutionResult {
     const created_at = nowTimestamp();
     const errorCode = `B_${dispatched.status.toUpperCase()}`;
@@ -306,25 +320,25 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
         context_pack_persisted: false,
       },
       status: dispatched.status === 'cancelled' ? 'cancelled' : 'failed',
-      memory_buffer_ref: `${input.role_id}:${dispatched.cycle.buffer_seq}`,
+      memory_buffer_ref: `${runtimeRoleId}:${dispatched.cycle.buffer_seq}`,
       created_at,
       schema_version: SCHEMA_VERSION,
     };
   }
 
   private enqueue<T>(
-    role_id: string,
+    queueKey: string,
     operation: () => Promise<T>,
     signal?: AbortSignal,
   ): Promise<T> {
-    const previous = this.roleQueues.get(role_id) ?? Promise.resolve();
+    const previous = this.executionQueues.get(queueKey) ?? Promise.resolve();
     let started = false;
     const running = previous.then(() => {
       started = true;
       return operation();
     });
-    this.roleQueues.set(
-      role_id,
+    this.executionQueues.set(
+      queueKey,
       running.then(
         () => undefined,
         () => undefined,
@@ -332,6 +346,12 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
     );
     return rejectWhileQueued(running, signal, () => started);
   }
+}
+
+function scopedRuntimeRole(roleId: string, workspacePath?: string): string {
+  if (!workspacePath) return roleId;
+  const scope = createHash('sha256').update(workspacePath).digest('hex').slice(0, 12);
+  return `${roleId}@${scope}`;
 }
 
 function mapStatus(
