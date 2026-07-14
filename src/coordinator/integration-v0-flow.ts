@@ -67,6 +67,7 @@ export interface IntegrationV0Summary {
   task_id: string;
   mode: SelectionMode;
   status: 'completed' | 'failed';
+  outcome: 'completed_files' | 'completed_response' | 'failed';
   failure?: IntegrationV0Failure;
   worktree_path: string;
   artifacts_materialized: number;
@@ -781,15 +782,27 @@ export async function runIntegrationV0Flow(
   const driverSucceeded = driverResult.status === 'succeeded';
   const gatesPassed = preGatesPassed && (!postCouncilGatesRequired || postCouncilGatesPassed);
   const hasSelectedArtifact = selectionResult.selected_artifacts.length > 0;
-  const materialized =
-    materializationResult.status === 'completed' && materializationResult.files_written.length > 0;
-  const flowCompleted = driverSucceeded && gatesPassed && hasSelectedArtifact && materialized;
+  const hasMaterializableArtifact = selectionResult.selected_artifacts.some(
+    (artifact) => artifact.content !== undefined && artifact.content.kind !== 'metadata',
+  );
+  const hasResponse = Boolean(driverResult.response?.trim());
+  const hasChangedFiles =
+    materializationResult.status === 'completed' && materializationResult.changed_files.length > 0;
+  const responseOnlyCompleted = !hasMaterializableArtifact && hasResponse;
+  const flowCompleted =
+    driverSucceeded && gatesPassed && (hasChangedFiles || responseOnlyCompleted);
+  const outcome: IntegrationV0Summary['outcome'] = flowCompleted
+    ? hasChangedFiles
+      ? 'completed_files'
+      : 'completed_response'
+    : 'failed';
   const failure = buildIntegrationFailure({
     driverResult,
     preGateResults,
     postCouncilGateResults,
     postCouncilGatesRequired,
-    hasSelectedArtifact,
+    hasMaterializableArtifact,
+    hasResponse,
     materializationResult,
   });
 
@@ -804,7 +817,7 @@ export async function runIntegrationV0Flow(
     snapshot_commit: 'demo-head',
     worktree_path: materializationResult.worktree_path,
     branch: 'integration-v0-demo',
-    modified_files: materializationResult.files_written,
+    modified_files: materializationResult.changed_files,
   };
   if (diffArtifactId) {
     mechanicalSnapshot.diff_artifact_id = diffArtifactId;
@@ -814,13 +827,16 @@ export async function runIntegrationV0Flow(
   if (driverSucceeded) doneSteps.push('driver completed');
   if (gatesPassed) doneSteps.push('gates passed');
   if (hasSelectedArtifact) doneSteps.push('artifacts selected');
-  if (materialized) doneSteps.push('worktree materialized');
+  if (hasChangedFiles) doneSteps.push('worktree materialized');
+  if (hasResponse) doneSteps.push('agent response available');
 
   const blockedOn: string[] = [];
   if (!driverSucceeded) blockedOn.push('driver execution failed');
   if (!gatesPassed) blockedOn.push('gates blocked or not evaluated');
-  if (!hasSelectedArtifact) blockedOn.push('no artifacts selected');
-  if (!materialized) blockedOn.push('worktree materialization failed');
+  if (!hasChangedFiles && !hasResponse) blockedOn.push('no deliverable output');
+  if (hasMaterializableArtifact && !hasChangedFiles) {
+    blockedOn.push('worktree materialization failed');
+  }
 
   const checkpoint: Checkpoint = {
     checkpoint_id: createId('checkpoint'),
@@ -881,6 +897,7 @@ export async function runIntegrationV0Flow(
     task_id: task.task_id,
     payload: {
       status: finalRunStatus,
+      outcome,
       ...(failure
         ? { code: failure.code, message: failure.message, details: failure.details }
         : {}),
@@ -912,6 +929,7 @@ export async function runIntegrationV0Flow(
     task_id: task.task_id,
     mode: selectionResult.mode,
     status: finalRunStatus,
+    outcome,
     ...(failure ? { failure } : {}),
     worktree_path: materializationResult.worktree_path,
     artifacts_materialized: materializationResult.materialized_artifacts.length,
@@ -1040,7 +1058,8 @@ function buildIntegrationFailure(input: {
   preGateResults: GateResult[];
   postCouncilGateResults: GateResult[];
   postCouncilGatesRequired: boolean;
-  hasSelectedArtifact: boolean;
+  hasMaterializableArtifact: boolean;
+  hasResponse: boolean;
   materializationResult: MaterializationResult;
 }): IntegrationV0Failure | undefined {
   if (input.driverResult.status !== 'succeeded') {
@@ -1113,10 +1132,11 @@ function buildIntegrationFailure(input: {
       },
     };
   }
-  if (!input.hasSelectedArtifact) {
+  if (!input.hasMaterializableArtifact && input.hasResponse) return undefined;
+  if (!input.hasMaterializableArtifact) {
     return {
       code: 'ARTIFACT_NOT_SELECTED',
-      message: 'No artifact was selected',
+      message: 'No changed files or Agent response were produced',
       details: { phase: 'artifact_selection' },
     };
   }
@@ -1142,10 +1162,10 @@ function buildIntegrationFailure(input: {
       details: materializationDetails,
     };
   }
-  if (input.materializationResult.files_written.length === 0) {
+  if (input.materializationResult.changed_files.length === 0) {
     return {
       code: 'MATERIALIZATION_FAILED',
-      message: 'Worktree materialization wrote no files',
+      message: 'Worktree materialization produced no changed files',
       details: materializationDetails,
     };
   }

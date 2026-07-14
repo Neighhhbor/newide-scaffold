@@ -760,6 +760,68 @@ describe('runIntegrationV0Flow', () => {
     );
   });
 
+  it('completes a successful response-only Agent execution without changed files', async () => {
+    const agentExecutionFacade: AgentExecutionFacade = {
+      async runAgent(input) {
+        return {
+          agent_run_id: 'agent_run_response_only',
+          role_id: input.role_id,
+          context_pack_ref: 'context_pack_response_only',
+          driver_run_result_id: 'driver_result_response_only',
+          artifact_refs: [],
+          transcript_ref: createArtifact('transcript_response_only', 'transcript'),
+          session_id: 'session_response_only',
+          response: 'The requested behavior is already implemented.',
+          tool_events: [],
+          diagnostics: { driver_id: 'agent-driver', duration_ms: 12 },
+          status: 'completed',
+          created_at: new Date().toISOString(),
+          schema_version: SCHEMA_VERSION,
+        };
+      },
+    };
+
+    const result = await runFlow({ agentExecutionFacade });
+
+    expect(result.summary).toMatchObject({
+      status: 'completed',
+      outcome: 'completed_response',
+      changed_files: [],
+    });
+    expect(result.driver_result.response).toBe('The requested behavior is already implemented.');
+  });
+
+  it('does not count a metadata-only artifact as a successful file delivery', async () => {
+    const agentExecutionFacade: AgentExecutionFacade = {
+      async runAgent(input) {
+        return {
+          agent_run_id: 'agent_run_metadata_only',
+          role_id: input.role_id,
+          context_pack_ref: 'context_pack_metadata_only',
+          driver_run_result_id: 'driver_result_metadata_only',
+          artifact_refs: [createArtifact('artifact_metadata_only', 'driver_result')],
+          transcript_ref: createArtifact('transcript_metadata_only', 'transcript'),
+          session_id: 'session_metadata_only',
+          response: '',
+          tool_events: [],
+          diagnostics: { driver_id: 'agent-driver', duration_ms: 12 },
+          status: 'completed',
+          created_at: new Date().toISOString(),
+          schema_version: SCHEMA_VERSION,
+        };
+      },
+    };
+
+    const result = await runFlow({ agentExecutionFacade });
+
+    expect(result.summary).toMatchObject({
+      status: 'failed',
+      outcome: 'failed',
+      changed_files: [],
+      failure: { code: 'ARTIFACT_NOT_SELECTED' },
+    });
+  });
+
   it('should include all key timeline events', async () => {
     const result = await runFlow();
 
