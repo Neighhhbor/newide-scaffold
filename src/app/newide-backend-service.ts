@@ -13,6 +13,7 @@ import {
   type CoordinatorRunner,
 } from '../coordinator/coordinator-runner';
 import { createDefaultTaskRequest } from '../coordinator/task-request';
+import type { TaskResumeCursor } from '../persistence';
 import type { TelemetryRecord, TelemetrySink } from '../telemetry/telemetry-sink';
 import {
   InMemoryRunRegistry,
@@ -107,6 +108,19 @@ export class TaskAlreadyRunningError extends Error {
   }
 }
 
+export class TaskNotBlockedError extends Error {
+  constructor(readonly taskId: string) {
+    super(`Task ${taskId} is not blocked and cannot be resumed`);
+    this.name = 'TaskNotBlockedError';
+  }
+}
+
+interface RunLineage {
+  restarted_from_run_id: string;
+  resume_checkpoint_id?: string;
+  requested_resume_cursor?: TaskResumeCursor;
+}
+
 export class NewideBackendService {
   private readonly terminalRuns = new Map<string, Promise<void>>();
   private readonly runWorkspaces = new Map<string, string>();
@@ -197,6 +211,32 @@ export class NewideBackendService {
     return this.getTask(taskId);
   }
 
+  async resumeTask(taskId: string): Promise<TaskSnapshot> {
+    const task = await this.getTask(taskId);
+    if (task.current_run) throw new TaskAlreadyRunningError(taskId);
+    if (task.task.status !== 'blocked') throw new TaskNotBlockedError(taskId);
+    if (!this.taskProcessor) {
+      throw new Error(`Task ${taskId} cannot resume without the persistent Task processor`);
+    }
+    const resume = this.taskProcessor.getTaskResumeContext(taskId);
+    await this.startRun(
+      {
+        prompt: resume.task_request.spec,
+        task_id: taskId,
+        task_request: resume.task_request,
+        workspace_path: resume.workspace_path,
+        mode: resume.mode,
+        ...(resume.session_id ? { session_id: resume.session_id } : {}),
+      },
+      {
+        restarted_from_run_id: resume.interrupted_run_id,
+        resume_checkpoint_id: resume.checkpoint_id,
+        requested_resume_cursor: resume.resume_cursor,
+      },
+    );
+    return this.getTask(taskId);
+  }
+
   async subscribeTask(
     taskId: string,
     listener: (event: AppRunEvent) => void,
@@ -260,7 +300,7 @@ export class NewideBackendService {
 
   private startRun(
     params: RunCreateParams,
-    lineage?: { restarted_from_run_id: string },
+    lineage?: RunLineage,
   ): Promise<RunCreateResult> {
     const mode = params.mode ?? 'single_agent';
     const workspacePath = normalizeWorkspacePath(params.workspace_path ?? process.cwd());
@@ -323,6 +363,12 @@ export class NewideBackendService {
                 mode,
                 ...(params.session_id ? { session_id: params.session_id } : {}),
                 ...(lineage ? { restarted_from_run_id: lineage.restarted_from_run_id } : {}),
+                ...(lineage?.resume_checkpoint_id
+                  ? { resume_checkpoint_id: lineage.resume_checkpoint_id }
+                  : {}),
+                ...(lineage?.requested_resume_cursor
+                  ? { requested_resume_cursor: lineage.requested_resume_cursor }
+                  : {}),
                 ...(taskCreatedEvent ? { task_created_event: taskCreatedEvent } : {}),
                 ...(runCreatedEvent ? { run_created_event: runCreatedEvent } : {}),
                 run_started_event: runStartedEvent,

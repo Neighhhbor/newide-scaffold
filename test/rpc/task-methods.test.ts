@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   TaskAlreadyRunningError,
+  TaskNotBlockedError,
   TaskNotFoundError,
   TaskNotRunningError,
 } from '../../src/app/newide-backend-service';
@@ -129,6 +130,33 @@ describe('TaskRpcMethods', () => {
     expect(startCouncil).toHaveBeenCalledWith('task_council');
   });
 
+  it('resumes a blocked Task and rejects a Task that is not blocked', async () => {
+    const output: string[] = [];
+    const resumeTask = vi.fn(async () => snapshot('task_resumed'));
+    const resumableService = { ...fakeService(), resumeTask };
+    const resumableSession = sessionWith(resumableService, output);
+    await resumableSession.handleLine(
+      '{"jsonrpc":"2.0","id":1,"method":"task.resume","params":{"task_id":"task_resumed"}}',
+    );
+
+    const rejectedService = {
+      ...fakeService(),
+      resumeTask: async (taskId: string) => {
+        throw new TaskNotBlockedError(taskId);
+      },
+    };
+    const rejectedSession = sessionWith(rejectedService, output);
+    await rejectedSession.handleLine(
+      '{"jsonrpc":"2.0","id":2,"method":"task.resume","params":{"task_id":"task_done"}}',
+    );
+
+    expect(output.map((line) => JSON.parse(line))).toMatchObject([
+      { id: 1, result: { task: { task_id: 'task_resumed' } } },
+      { id: 2, error: { code: -32010, message: 'Task not blocked' } },
+    ]);
+    expect(resumeTask).toHaveBeenCalledWith('task_resumed');
+  });
+
   it('subscribes to Task events and returns the current snapshot', async () => {
     const output: string[] = [];
     let listener: ((event: AppRunEvent) => void) | undefined;
@@ -215,6 +243,7 @@ function fakeService(overrides: Partial<TaskMethodsService> = {}): TaskMethodsSe
     getTask: async () => snapshot('task_1'),
     listTasks: async () => ({ tasks: [snapshot('task_1')] }),
     cancelTask: async () => snapshot('task_1', 'cancelled'),
+    resumeTask: async () => snapshot('task_1'),
     startCouncil: async () => snapshot('task_1'),
     subscribeTask: async (_taskId, _listener) => ({
       snapshot: snapshot('task_1'),

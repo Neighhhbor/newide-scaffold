@@ -7,6 +7,7 @@ import type { IntegrationV0Result } from '../../src/coordinator/integration-v0-f
 import {
   NewideBackendService,
   TaskAlreadyRunningError,
+  TaskNotBlockedError,
   TaskNotFoundError,
 } from '../../src/app/newide-backend-service';
 import { InMemoryRunRegistry, type AppRunEvent } from '../../src/app/run-registry';
@@ -171,6 +172,7 @@ describe('NewideBackendService Task-first view', () => {
           response: 'Done.',
         },
       });
+      await expect(service.resumeTask('task_done')).rejects.toBeInstanceOf(TaskNotBlockedError);
 
       const taskEvents: AppRunEvent[] = [];
       const subscription = await service.subscribeTask('task_done', (event) =>

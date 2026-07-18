@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -9,7 +9,10 @@ import { FileRunRequestStore } from '../../src/app/run-request-store';
 import { NewideBackendService } from '../../src/app/newide-backend-service';
 import { TaskProcessor } from '../../src/app/task-processor';
 import { FileRunTerminalOutputWriter } from '../../src/app/run-terminal-output-writer';
-import type { CoordinatorRunner } from '../../src/coordinator/coordinator-runner';
+import type {
+  CoordinatorRunner,
+  CoordinatorRunRequest,
+} from '../../src/coordinator/coordinator-runner';
 import type { IntegrationV0Result } from '../../src/coordinator/integration-v0-flow';
 import { SqliteCoordinationStore } from '../../src/persistence';
 
@@ -82,6 +85,113 @@ describe('NewideBackendService SQLite lifecycle', () => {
         reopenedStore.close();
       }
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('resumes a blocked Task as a new Run with the persisted A session', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'newide-service-resume-'));
+    const runsRoot = path.join(root, 'runs');
+    const databasePath = path.join(root, 'coordination.sqlite');
+    const workspacePath = await realpath(root);
+    const requestStore = new FileRunRequestStore(runsRoot);
+    const seedStore = new SqliteCoordinationStore(databasePath);
+    const seedProcessor = new TaskProcessor(seedStore);
+    seedProcessor.beginRun({
+      task_id: 'task_resume',
+      run_id: 'run_interrupted',
+      task_request: {
+        spec: 'Resume the interrupted task',
+        completion_criteria: ['The resumed Run completes under the same Task'],
+      },
+      workspace_path: workspacePath,
+      mode: 'single_agent',
+      session_id: 'session_resume',
+    });
+    seedProcessor.recordRunEvent('run_interrupted', {
+      event_id: 'event_agent_interrupted',
+      event_type: 'agent.execution_completed',
+      subject_id: 'role_ts_engineer@agent_1',
+      task_id: 'task_resume',
+      run_id: 'run_interrupted',
+      payload: {
+        agent_id: 'role_ts_engineer@agent_1',
+        session_id: 'session_resume',
+        artifact_refs: ['artifact_partial'],
+      },
+      created_at: '2026-07-19T04:30:00.000Z',
+      schema_version: 'v0',
+    });
+    seedStore.close();
+
+    const reopenedStore = new SqliteCoordinationStore(databasePath);
+    const processor = new TaskProcessor(reopenedStore);
+    processor.recoverInterruptedTasks();
+    const checkpoint = reopenedStore.getLatestCheckpoint('task_resume');
+    let resumedRequest: CoordinatorRunRequest | undefined;
+    let runnerCalls = 0;
+    const service = createService(processor, requestStore, runsRoot, {
+      run: async (request) => {
+        runnerCalls += 1;
+        resumedRequest = request;
+        request.onRunCreated?.({ run_id: 'run_resumed', task_id: request.task_id ?? 'wrong_task' });
+        return completedResult(request.prompt, {
+          run_id: 'run_resumed',
+          task_id: 'task_resume',
+          session_id: request.session_id ?? 'missing_session',
+        });
+      },
+    });
+
+    try {
+      await expect(service.getTask('task_resume')).resolves.toMatchObject({
+        task: { status: 'blocked' },
+        run_history: [{ run_id: 'run_interrupted', status: 'interrupted' }],
+      });
+      expect(runnerCalls).toBe(0);
+
+      await service.resumeTask('task_resume');
+      await service.waitForTerminal('run_resumed');
+
+      expect(resumedRequest).toMatchObject({
+        task_id: 'task_resume',
+        mode: 'single_agent',
+        session_id: 'session_resume',
+        workspace_path: workspacePath,
+        task_request: {
+          spec: 'Resume the interrupted task',
+          completion_criteria: ['The resumed Run completes under the same Task'],
+        },
+      });
+      await expect(service.getTask('task_resume')).resolves.toMatchObject({
+        task: { task_id: 'task_resume', status: 'completed' },
+        run_history: [
+          {
+            run_id: 'run_resumed',
+            status: 'completed',
+            session_id: 'session_resume',
+          },
+          {
+            run_id: 'run_interrupted',
+            status: 'interrupted',
+            session_id: 'session_resume',
+          },
+        ],
+      });
+      expect(reopenedStore.getTaskAggregate('task_resume')).toMatchObject({
+        runs: [
+          { run_id: 'run_resumed', restarted_from_run_id: 'run_interrupted' },
+          { run_id: 'run_interrupted', status: 'interrupted' },
+        ],
+        runtime_state: {
+          diagnostics: {
+            resume_checkpoint_id: checkpoint?.checkpoint_id,
+            requested_resume_cursor: 'gate',
+          },
+        },
+      });
+    } finally {
+      reopenedStore.close();
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -199,19 +309,26 @@ function completedRunner(): CoordinatorRunner {
   };
 }
 
-function completedResult(spec: string): IntegrationV0Result {
-  return {
+function completedResult(
+  spec: string,
+  identity: { run_id: string; task_id: string; session_id: string } = {
     run_id: 'run_persisted',
     task_id: 'task_persisted',
+    session_id: 'session_persisted',
+  },
+): IntegrationV0Result {
+  return {
+    run_id: identity.run_id,
+    task_id: identity.task_id,
     summary: { status: 'completed' },
     frontend_snapshot: {
       snapshot_type: 'coordinator.frontend_run_snapshot.v0',
       schema_version: 'v0',
       generated_at: '2026-07-19T04:01:00.000Z',
-      run_id: 'run_persisted',
-      task_id: 'task_persisted',
+      run_id: identity.run_id,
+      task_id: identity.task_id,
       task: {
-        task_id: 'task_persisted',
+        task_id: identity.task_id,
         status: 'completed',
         spec,
         completion_criteria: ['A restarted backend returns the same TaskSnapshot'],
@@ -223,12 +340,12 @@ function completedResult(spec: string): IntegrationV0Result {
       },
       current: { stage: 'delivery', task_status: 'completed', active_node_code: 'N18' },
       run: {
-        run_id: 'run_persisted',
-        task_id: 'task_persisted',
+        run_id: identity.run_id,
+        task_id: identity.task_id,
         status: 'completed',
         mode: 'single_agent',
         driver_id: 'fake-driver',
-        session_id: 'session_persisted',
+        session_id: identity.session_id,
         created_at: '2026-07-19T04:00:00.000Z',
       },
       flow: { active_node_code: 'N18', node_statuses: [] },
@@ -239,13 +356,13 @@ function completedResult(spec: string): IntegrationV0Result {
         changed_files: ['result.ts'],
         artifacts_materialized: 1,
         outcome: 'completed_files',
-        session_id: 'session_persisted',
+        session_id: identity.session_id,
         tool_events: [],
         driver_diagnostics: { driver_id: 'fake-driver', duration_ms: 1 },
       },
       artifacts: [{ artifact_id: 'artifact_persisted' } as never],
       checkpoint: {} as never,
-      mailbox: { thread_id: 'run_persisted', message_refs: [], messages: [] },
+      mailbox: { thread_id: identity.run_id, message_refs: [], messages: [] },
       market: {
         winner_agent_id: 'role_ts_engineer',
         winner_bid_id: 'bid_persisted',

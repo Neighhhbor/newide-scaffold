@@ -35,6 +35,8 @@ export interface BeginTaskRunInput {
   mode: PersistedRunMode;
   session_id?: string;
   restarted_from_run_id?: string;
+  resume_checkpoint_id?: string;
+  requested_resume_cursor?: TaskResumeCursor;
   task_created_event?: Event;
   run_created_event?: Event;
   run_started_event?: Event;
@@ -54,6 +56,13 @@ export interface TaskLaunchContext {
   task_request: TaskCreateRequest;
   workspace_path: string;
   session_id?: string;
+}
+
+export interface TaskResumeContext extends TaskLaunchContext {
+  checkpoint_id: string;
+  resume_cursor: TaskResumeCursor;
+  mode: PersistedRunMode;
+  interrupted_run_id: string;
 }
 
 export class TaskProcessorTaskNotFoundError extends Error {
@@ -183,7 +192,15 @@ export class TaskProcessor {
         resume_cursor: input.mode === 'single_agent' ? 'select_agent' : 'execute_agent',
         waiting_on: [],
         artifact_refs: [],
-        diagnostics: { mode: input.mode },
+        diagnostics: {
+          mode: input.mode,
+          ...(input.resume_checkpoint_id
+            ? { resume_checkpoint_id: input.resume_checkpoint_id }
+            : {}),
+          ...(input.requested_resume_cursor
+            ? { requested_resume_cursor: input.requested_resume_cursor }
+            : {}),
+        },
         updated_at: timestamp,
         schema_version: SCHEMA_VERSION,
       },
@@ -387,6 +404,24 @@ export class TaskProcessor {
       },
       workspace_path: aggregate.task.workspace_path,
       ...(latestSession ? { session_id: latestSession } : {}),
+    };
+  }
+
+  getTaskResumeContext(taskId: string): TaskResumeContext {
+    const aggregate = this.store.getTaskAggregate(taskId);
+    if (!aggregate) throw new TaskProcessorTaskNotFoundError(taskId);
+    const checkpoint = this.store.getLatestCheckpoint(taskId);
+    if (!checkpoint) throw new Error(`Task ${taskId} has no valid full checkpoint`);
+    const interruptedRun = requireRun(aggregate, checkpoint.run_id);
+    const launch = this.getTaskLaunchContext(taskId);
+    const sessionId = checkpoint.session_id ?? interruptedRun.session_id ?? launch.session_id;
+    return {
+      ...launch,
+      ...(sessionId ? { session_id: sessionId } : {}),
+      checkpoint_id: checkpoint.checkpoint_id,
+      resume_cursor: checkpoint.resume_cursor,
+      mode: interruptedRun.mode,
+      interrupted_run_id: interruptedRun.run_id,
     };
   }
 
