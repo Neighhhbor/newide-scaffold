@@ -205,6 +205,92 @@ describe('SqliteCoordinationStore', () => {
     });
     store.close();
   });
+
+  it('stores a full checkpoint in the same state and event transaction', () => {
+    const { store } = createStore();
+    const initial = initialCommit();
+    store.commitState(initial);
+    const checkpoint = {
+      checkpoint_id: 'checkpoint_full',
+      task_id: 'task_sqlite',
+      run_id: 'run_sqlite',
+      agent_id: 'role_ts_engineer@agent_1',
+      session_id: 'session_1',
+      trigger: 'blocked' as const,
+      resume_cursor: 'execute_agent' as const,
+      message_thread: [
+        {
+          message_id: 'event_task_created',
+          role: 'coordinator',
+          content: 'task.created',
+          turn: 0,
+          artifact_refs: [],
+          created_at: '2026-07-19T02:00:00.000Z',
+        },
+      ],
+      mechanical_snapshot: {
+        base_commit: 'unknown',
+        worktree_path: '/workspace',
+        branch: 'runtime-recovery',
+        modified_files: [],
+      },
+      semantic_handoff: {
+        done: ['task.created'],
+        in_progress: ['execute_agent'],
+        blocked_on: ['backend process interrupted'],
+        assumptions: [],
+        next_steps: ['resume execute_agent'],
+        known_risks: ['unfinished action will be re-executed'],
+      },
+      artifact_refs: ['artifact_context'],
+      validity_status: 'valid' as const,
+      created_at: '2026-07-19T02:01:00.000Z',
+      schema_version: 'v0' as const,
+    };
+
+    store.commitState({
+      expected_task_revision: 1,
+      task: {
+        ...initial.task,
+        status: 'blocked',
+        revision: 2,
+        updated_at: '2026-07-19T02:01:00.000Z',
+      },
+      run: {
+        ...initial.run,
+        status: 'interrupted',
+        revision: 2,
+        completed_at: '2026-07-19T02:01:00.000Z',
+        updated_at: '2026-07-19T02:01:00.000Z',
+      },
+      runtime_state: {
+        ...initial.runtime_state,
+        current_run_id: undefined,
+        resume_cursor: 'execute_agent',
+        interrupt_state: {
+          type: 'process_interrupted',
+          reason: 'backend process interrupted',
+        },
+        updated_at: '2026-07-19T02:01:00.000Z',
+      },
+      checkpoint,
+      events: [
+        {
+          event_id: 'event_checkpoint_saved',
+          event_type: 'checkpoint.saved',
+          subject_id: 'checkpoint_full',
+          run_id: 'run_sqlite',
+          task_id: 'task_sqlite',
+          payload: { checkpoint_type: 'full', trigger: 'blocked' },
+          created_at: '2026-07-19T02:01:00.000Z',
+          schema_version: 'v0',
+        },
+      ],
+    });
+
+    expect(store.getLatestCheckpoint('task_sqlite')).toEqual(checkpoint);
+    store.close();
+  });
 });
 
 function createStore(): { databasePath: string; store: SqliteCoordinationStore } {

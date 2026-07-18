@@ -86,11 +86,55 @@ export interface PersistedCoordinationEvent extends Event {
   sequence: number;
 }
 
+export interface PersistedCheckpointMessage {
+  message_id: string;
+  role: string;
+  content: string;
+  turn: number;
+  artifact_refs: string[];
+  created_at: string;
+}
+
+export interface PersistedFullCheckpoint {
+  checkpoint_id: string;
+  parent_checkpoint_id?: string;
+  task_id: string;
+  run_id: string;
+  agent_id: string;
+  session_id?: string;
+  trigger: 'manual' | 'periodic' | 'shutdown' | 'blocked' | 'escalated';
+  resume_cursor: TaskResumeCursor;
+  message_thread: PersistedCheckpointMessage[];
+  mechanical_snapshot: {
+    base_commit: string;
+    snapshot_commit?: string;
+    worktree_path: string;
+    branch: string;
+    modified_files: string[];
+    diff_artifact_id?: string;
+    test_artifact_ids?: string[];
+  };
+  semantic_handoff: {
+    done: string[];
+    in_progress: string[];
+    blocked_on: string[];
+    assumptions: string[];
+    next_steps: string[];
+    known_risks: string[];
+  };
+  interrupt_state?: Record<string, unknown>;
+  artifact_refs: string[];
+  validity_status: 'valid' | 'invalid' | 'superseded';
+  created_at: string;
+  schema_version: SchemaVersion;
+}
+
 export interface CoordinationStateCommit {
   expected_task_revision?: number;
   task: PersistedTaskState;
   run?: PersistedRunState;
   runtime_state: PersistedTaskRuntimeState;
+  checkpoint?: PersistedFullCheckpoint;
   events: Event[];
 }
 
@@ -106,5 +150,6 @@ export interface CoordinationStateStore {
   getTaskAggregate(taskId: string): PersistedTaskAggregate | undefined;
   listTaskAggregates(): PersistedTaskAggregate[];
   listEvents(taskId: string, afterSequence?: number): PersistedCoordinationEvent[];
+  getLatestCheckpoint(taskId: string): PersistedFullCheckpoint | undefined;
   close(): void;
 }

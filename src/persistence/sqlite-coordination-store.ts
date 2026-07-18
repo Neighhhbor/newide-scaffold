@@ -6,6 +6,7 @@ import {
   type CoordinationStateCommit,
   type CoordinationStateStore,
   type PersistedCoordinationEvent,
+  type PersistedFullCheckpoint,
   type PersistedRunState,
   type PersistedTaskAggregate,
   type PersistedTaskRuntimeState,
@@ -52,6 +53,7 @@ export class SqliteCoordinationStore implements CoordinationStateStore {
       this.writeTask(input);
       if (input.run) this.writeRun(input.run);
       this.writeRuntimeState(input.runtime_state);
+      if (input.checkpoint) this.writeCheckpoint(input.checkpoint);
       const events = input.events.map((event) => this.writeEvent(event));
       this.database.exec('COMMIT');
       return events;
@@ -93,6 +95,18 @@ export class SqliteCoordinationStore implements CoordinationStateStore {
       .prepare('SELECT * FROM events WHERE task_id = ? AND sequence > ? ORDER BY sequence ASC')
       .all(taskId, afterSequence)
       .map((row) => readEvent(row));
+  }
+
+  getLatestCheckpoint(taskId: string): PersistedFullCheckpoint | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT * FROM checkpoints
+         WHERE task_id = ? AND checkpoint_type = 'full' AND validity_status = 'valid'
+         ORDER BY created_at DESC, checkpoint_id DESC
+         LIMIT 1`,
+      )
+      .get(taskId);
+    return row ? readCheckpoint(row) : undefined;
   }
 
   close(): void {
@@ -332,6 +346,37 @@ export class SqliteCoordinationStore implements CoordinationStateStore {
       );
   }
 
+  private writeCheckpoint(checkpoint: PersistedFullCheckpoint): void {
+    this.database
+      .prepare(
+        `INSERT INTO checkpoints (
+          checkpoint_id, parent_checkpoint_id, checkpoint_type, task_id, agent_id, trigger,
+          mechanical_snapshot_json, semantic_handoff_json, runtime_state_json,
+          interrupt_state_json, artifact_refs_json, validity_status, created_at, schema_version
+        ) VALUES (?, ?, 'full', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        checkpoint.checkpoint_id,
+        checkpoint.parent_checkpoint_id ?? null,
+        checkpoint.task_id,
+        checkpoint.agent_id,
+        checkpoint.trigger,
+        toJson(checkpoint.mechanical_snapshot),
+        toJson(checkpoint.semantic_handoff),
+        toJson({
+          run_id: checkpoint.run_id,
+          ...(checkpoint.session_id ? { session_id: checkpoint.session_id } : {}),
+          resume_cursor: checkpoint.resume_cursor,
+          message_thread: checkpoint.message_thread,
+        }),
+        checkpoint.interrupt_state ? toJson(checkpoint.interrupt_state) : null,
+        toJson(checkpoint.artifact_refs),
+        checkpoint.validity_status,
+        checkpoint.created_at,
+        checkpoint.schema_version,
+      );
+  }
+
   private writeEvent(event: Event): PersistedCoordinationEvent {
     if (!event.task_id) throw new Error(`Coordination event ${event.event_id} requires task_id`);
     const result = this.database
@@ -376,6 +421,23 @@ function validateCommit(input: CoordinationStateCommit): void {
       !/^[a-f0-9]{64}$/.test(finalOutput.sha256)
     ) {
       throw new Error('Completed task requires verifiable final artifact evidence');
+    }
+  }
+  if (input.checkpoint) {
+    if (
+      input.checkpoint.task_id !== input.task.task_id ||
+      (input.run && input.checkpoint.run_id !== input.run.run_id)
+    ) {
+      throw new Error('Checkpoint belongs to another task or run');
+    }
+    if (
+      !input.events.some(
+        (event) =>
+          event.event_type === 'checkpoint.saved' &&
+          event.subject_id === input.checkpoint?.checkpoint_id,
+      )
+    ) {
+      throw new Error('Checkpoint state commit requires checkpoint.saved event');
     }
   }
 }
@@ -548,6 +610,52 @@ function readEvent(row: SqlRow): PersistedCoordinationEvent {
     ...(runId ? { run_id: runId } : {}),
     task_id: readString(row, 'task_id'),
     payload: readJson<Record<string, unknown>>(row, 'payload_json'),
+    created_at: readString(row, 'created_at'),
+    schema_version: readSchemaVersion(row),
+  };
+}
+
+function readCheckpoint(row: SqlRow): PersistedFullCheckpoint {
+  const runtime = readJson<{
+    run_id: string;
+    session_id?: string;
+    resume_cursor: TaskResumeCursor;
+    message_thread: PersistedFullCheckpoint['message_thread'];
+  }>(row, 'runtime_state_json');
+  const interruptState = readOptionalJson<Record<string, unknown>>(row, 'interrupt_state_json');
+  return {
+    checkpoint_id: readString(row, 'checkpoint_id'),
+    ...(readOptionalString(row, 'parent_checkpoint_id')
+      ? { parent_checkpoint_id: readString(row, 'parent_checkpoint_id') }
+      : {}),
+    task_id: readString(row, 'task_id'),
+    run_id: runtime.run_id,
+    agent_id: readString(row, 'agent_id'),
+    ...(runtime.session_id ? { session_id: runtime.session_id } : {}),
+    trigger: readEnum(row, 'trigger', [
+      'manual',
+      'periodic',
+      'shutdown',
+      'blocked',
+      'escalated',
+    ] as const),
+    resume_cursor: readEnum(
+      { resume_cursor: runtime.resume_cursor },
+      'resume_cursor',
+      RESUME_CURSORS,
+    ),
+    message_thread: runtime.message_thread,
+    mechanical_snapshot: readJson<PersistedFullCheckpoint['mechanical_snapshot']>(
+      row,
+      'mechanical_snapshot_json',
+    ),
+    semantic_handoff: readJson<PersistedFullCheckpoint['semantic_handoff']>(
+      row,
+      'semantic_handoff_json',
+    ),
+    ...(interruptState ? { interrupt_state: interruptState } : {}),
+    artifact_refs: readJson<string[]>(row, 'artifact_refs_json'),
+    validity_status: readEnum(row, 'validity_status', ['valid', 'invalid', 'superseded'] as const),
     created_at: readString(row, 'created_at'),
     schema_version: readSchemaVersion(row),
   };
