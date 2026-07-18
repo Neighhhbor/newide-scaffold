@@ -24,6 +24,8 @@ import type {
   MaterializationInput,
   MaterializationResult,
 } from '../../src/coordinator/worktree-materializer';
+import { SelectAgentHandler } from '../../src/coordinator/handlers/select-agent-handler';
+import type { AgentProjection } from '../../src/market';
 
 describe('runIntegrationV0Flow', () => {
   const createdRunDirs = new Set<string>();
@@ -765,6 +767,58 @@ describe('runIntegrationV0Flow', () => {
     );
   });
 
+  it('dispatches an ordinary task to the persisted AgentMarket winner', async () => {
+    const requests: AgentExecutionRequest[] = [];
+    const agentExecutionFacade = successfulAgentFacade(requests);
+    const selectAgentHandler = new SelectAgentHandler({
+      projectionSource: {
+        async projectCandidates() {
+          return [marketCandidate('role_market_winner')];
+        },
+      },
+      evidenceStore: {
+        async persist() {
+          return {
+            ledger_ref: 'file:///market/ledger.json',
+            audit_ref: 'file:///market/audit.json',
+          };
+        },
+      },
+      now: () => '2026-07-18T00:00:00.000Z',
+    });
+
+    const result = await runFlow({ agentExecutionFacade, selectAgentHandler });
+
+    expect(requests[0]?.role_id).toBe('role_market_winner');
+    expect(result.market_selection).toMatchObject({
+      winner_agent_id: 'role_market_winner',
+      ledger_ref: 'file:///market/ledger.json',
+      audit_ref: 'file:///market/audit.json',
+    });
+    expect(result.summary.market).toMatchObject({
+      winner_agent_id: 'role_market_winner',
+      ledger_ref: 'file:///market/ledger.json',
+      audit_ref: 'file:///market/audit.json',
+      seed: result.run_id,
+      policy_version: 'market-v0',
+    });
+    expect(result.timeline.map((item) => item.name)).toContain('MarketSelected');
+    const eventLog = (await readJson(`.newide/runs/${result.run_id}/event-log.json`)) as Array<{
+      event_type: string;
+      payload: Record<string, unknown>;
+    }>;
+    expect(eventLog).toContainEqual(
+      expect.objectContaining({
+        event_type: 'market.selected',
+        payload: expect.objectContaining({
+          winner_agent_id: 'role_market_winner',
+          ledger_ref: 'file:///market/ledger.json',
+          audit_ref: 'file:///market/audit.json',
+        }),
+      }),
+    );
+  });
+
   it('completes a successful response-only Agent execution without changed files', async () => {
     const agentExecutionFacade: AgentExecutionFacade = {
       async runAgent(input) {
@@ -1252,5 +1306,56 @@ function createArtifact(artifactId: string, type: ArtifactRef['type'] = 'patch')
     task_id: 'task_001',
     created_at: '2026-07-07T00:00:00.000Z',
     schema_version: SCHEMA_VERSION,
+  };
+}
+
+function successfulAgentFacade(requests: AgentExecutionRequest[]): AgentExecutionFacade {
+  return {
+    async runAgent(input) {
+      requests.push(input);
+      return {
+        agent_run_id: 'agent_run_market_winner',
+        agent_id: input.role_id,
+        role_id: input.role_id,
+        context_pack_ref: 'context_pack_market_winner',
+        driver_run_result_id: 'driver_result_market_winner',
+        artifact_refs: [createArtifact('artifact_market_winner')],
+        transcript_ref: createArtifact('transcript_market_winner', 'transcript'),
+        session_id: 'session_market_winner',
+        response: 'Market winner completed the task.',
+        tool_events: [],
+        diagnostics: { driver_id: 'agent-driver', duration_ms: 10 },
+        status: 'completed',
+        memory_buffer_ref: 'buffer_market_winner',
+        created_at: '2026-07-18T00:00:00.000Z',
+        schema_version: SCHEMA_VERSION,
+      };
+    },
+  };
+}
+
+function marketCandidate(agentId: string): AgentProjection {
+  return {
+    agent_id: agentId,
+    persona_ref: `persona://${agentId}/v1`,
+    persona_keywords: ['backend', 'typescript'],
+    skills: [{ name: 'Backend delivery', tags: ['backend', 'typescript'] }],
+    experiences: [
+      {
+        name: 'Backend delivery',
+        type: 'positive',
+        confidence: 0.9,
+        tags: ['backend'],
+      },
+    ],
+    metrics_ref: {
+      total_tasks: 10,
+      tasks_completed: 10,
+      tasks_succeeded: 9,
+      skill_count: 1,
+      experience_count: 1,
+      avg_confidence: 0.9,
+    },
+    load_state: { active_task_count: 0, days_since_last_task: 1 },
   };
 }

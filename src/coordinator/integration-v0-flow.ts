@@ -20,6 +20,10 @@ import {
 } from '../driver';
 import type { AgentExecutionFacade, AgentExecutionResult } from '../protocol/agent-execution';
 import { ExecuteAgentHandler } from './handlers/execute-agent-handler';
+import type {
+  SelectAgentHandler,
+  SelectAgentResult,
+} from './handlers/select-agent-handler';
 import { AutonomousCouncilHandler } from './handlers/autonomous-council-handler';
 import {
   DeliverArtifactHandler,
@@ -95,6 +99,14 @@ export interface IntegrationV0Summary {
   checkpoint_path: string;
   mailbox_message_refs: MessageId[];
   mailbox_thread_id: string;
+  market?: {
+    winner_agent_id: string;
+    winner_bid_id: string;
+    ledger_ref: string;
+    audit_ref: string;
+    policy_version: string;
+    seed: string;
+  };
   council_decision_path?: string;
   council_proposals_path?: string;
   council_reviews_path?: string;
@@ -142,6 +154,7 @@ export interface IntegrationV0Options {
   councilProvider?: CouncilProvider;
   councilRoot?: string;
   executeAgentHandler?: ExecuteAgentHandler;
+  selectAgentHandler?: Pick<SelectAgentHandler, 'execute'>;
   deliverArtifactHandler?: DeliverArtifactHandler;
   hookEngine?: IntegrationV0HookEngine;
   materializer?: IntegrationV0Materializer;
@@ -159,6 +172,7 @@ export interface IntegrationV0Result {
   timeline: IntegrationV0TimelineItem[];
   driver_result: DriverRunResult;
   agent_execution_result?: AgentExecutionResult;
+  market_selection?: SelectAgentResult;
   selection_result: ArtifactSelectionResult;
   materialization_result: MaterializationResult;
   mailbox_thread: Message[];
@@ -214,6 +228,34 @@ export async function runIntegrationV0Flow(
   orchestrator.updateRunStatus(run.run_id, 'running');
   task = orchestrator.updateTaskStatus(task.task_id, 'claimed');
   task = orchestrator.updateTaskStatus(task.task_id, 'running');
+
+  let marketSelection: SelectAgentResult | undefined;
+  if (options?.selectAgentHandler && !options.enableCouncil) {
+    if (!options.agentExecutionFacade) {
+      throw new Error('AgentMarket selection requires AgentExecutionFacade dispatch');
+    }
+    marketSelection = await options.selectAgentHandler.execute({
+      task_id: task.task_id,
+      task_description: task.spec,
+      bootstrap_agent_ids: [task.role_id ?? 'role_ts_engineer'],
+      seed: run.run_id,
+    });
+    const marketEvent = orchestrator.appendEvent({
+      event_type: 'market.selected',
+      subject_id: marketSelection.winner_agent_id,
+      run_id: run.run_id,
+      task_id: task.task_id,
+      payload: {
+        winner_agent_id: marketSelection.winner_agent_id,
+        winner_bid_id: marketSelection.winner_bid_id,
+        ledger_ref: marketSelection.ledger_ref,
+        audit_ref: marketSelection.audit_ref,
+        policy_version: marketSelection.ledger.policy_version,
+        seed: marketSelection.ledger.seed,
+      },
+    });
+    timeline.push({ name: 'MarketSelected', id: marketEvent.event_id });
+  }
 
   // 3. Select driver (injected or default MockDriver)
   const driver = options?.driver ?? new MockDriver();
@@ -376,7 +418,7 @@ export async function runIntegrationV0Flow(
     const agentExecutionRequest = {
       task_id: task.task_id,
       run_id: run.run_id,
-      role_id: task.role_id ?? 'role_ts_engineer',
+      role_id: marketSelection?.winner_agent_id ?? task.role_id ?? 'role_ts_engineer',
       instruction: prompt,
       ...(executionWorkspace ? { workspace_path: executionWorkspace } : {}),
       ...(options.sessionId ? { session_id: options.sessionId } : {}),
@@ -1092,6 +1134,18 @@ export async function runIntegrationV0Flow(
     checkpoint_path: outputPaths.checkpoint_path,
     mailbox_message_refs: mailboxMessageRefs,
     mailbox_thread_id: threadId,
+    ...(marketSelection
+      ? {
+          market: {
+            winner_agent_id: marketSelection.winner_agent_id,
+            winner_bid_id: marketSelection.winner_bid_id,
+            ledger_ref: marketSelection.ledger_ref,
+            audit_ref: marketSelection.audit_ref,
+            policy_version: marketSelection.ledger.policy_version,
+            seed: marketSelection.ledger.seed,
+          },
+        }
+      : {}),
     ...(selectionResult.council_decision && councilRunOutputPaths
       ? {
           council_decision_path: councilRunOutputPaths.decision_path,
@@ -1197,6 +1251,7 @@ export async function runIntegrationV0Flow(
     timeline,
     driver_result: driverResult,
     ...(agentExecutionResult ? { agent_execution_result: agentExecutionResult } : {}),
+    ...(marketSelection ? { market_selection: marketSelection } : {}),
     selection_result: selectionResult,
     materialization_result: materializationResult,
     mailbox_thread: mailboxThread,
