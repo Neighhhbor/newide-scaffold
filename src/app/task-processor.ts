@@ -44,6 +44,12 @@ export interface FinishTaskRunInput {
   event?: Event;
 }
 
+export interface TaskLaunchContext {
+  task_request: TaskCreateRequest;
+  workspace_path: string;
+  session_id?: string;
+}
+
 export class TaskProcessorTaskNotFoundError extends Error {
   constructor(readonly taskId: string) {
     super(`Task ${taskId} was not found in the coordination store`);
@@ -309,6 +315,32 @@ export class TaskProcessor {
 
   listTaskSnapshots(): TaskSnapshot[] {
     return this.store.listTaskAggregates().map(projectAggregate);
+  }
+
+  getRunSnapshot(runId: string): RunSnapshot | undefined {
+    const aggregate = this.store
+      .listTaskAggregates()
+      .find((candidate) => candidate.runs.some((run) => run.run_id === runId));
+    return aggregate?.runs.find((run) => run.run_id === runId)?.snapshot;
+  }
+
+  getTaskLaunchContext(taskId: string): TaskLaunchContext {
+    const aggregate = this.store.getTaskAggregate(taskId);
+    if (!aggregate) throw new TaskProcessorTaskNotFoundError(taskId);
+    const latestSession = aggregate.runs.find((run) => run.session_id)?.session_id;
+    return {
+      task_request: {
+        spec: aggregate.task.spec,
+        ...(aggregate.task.role_id ? { role_id: aggregate.task.role_id } : {}),
+        ...(aggregate.task.parent_id ? { parent_task_id: aggregate.task.parent_id } : {}),
+        risk_level: aggregate.task.risk_level,
+        affected_paths: [...aggregate.task.affected_paths],
+        completion_criteria: [...aggregate.task.completion_criteria],
+        ...(aggregate.task.budget ? { budget: { ...aggregate.task.budget } } : {}),
+      },
+      workspace_path: aggregate.task.workspace_path,
+      ...(latestSession ? { session_id: latestSession } : {}),
+    };
   }
 
   private requireAggregateForRun(runId: string): PersistedTaskAggregate {

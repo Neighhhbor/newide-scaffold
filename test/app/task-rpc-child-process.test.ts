@@ -20,7 +20,11 @@ describe('Task-first JSON-RPC child process acceptance', () => {
       ['--import', 'tsx', path.join(process.cwd(), 'test/fixtures/task-rpc-server.ts')],
       {
         cwd: process.cwd(),
-        env: { ...process.env, ACP_DRIVER_RUNNER_DIR: runnerDir },
+        env: {
+          ...process.env,
+          ACP_DRIVER_RUNNER_DIR: runnerDir,
+          NEWIDE_COORDINATION_DB: path.join(runnerDir, 'coordination.sqlite'),
+        },
         stdio: ['pipe', 'pipe', 'pipe'],
       },
     );

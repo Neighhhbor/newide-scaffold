@@ -80,7 +80,10 @@ process.stdin.on('end', () => {
       );
 
       const service = createProductionBackendService(
-        { ACP_DRIVER_RUNNER_DIR: runnerDir },
+        {
+          ACP_DRIVER_RUNNER_DIR: runnerDir,
+          NEWIDE_COORDINATION_DB: path.join(runnerDir, 'coordination.sqlite'),
+        },
         { agentLlm: invokeDriverLlm() },
       );
       created = await service.createRun({
@@ -141,7 +144,9 @@ process.stdin.on('end', () => {
       expect(snapshot.events).toEqual(
         expect.arrayContaining([expect.objectContaining({ type: 'agent.execution_completed' })]),
       );
-      expect(snapshot.events.find((event) => event.type === 'agent.execution_completed')).toMatchObject({
+      expect(
+        snapshot.events.find((event) => event.type === 'agent.execution_completed'),
+      ).toMatchObject({
         payload: {
           agent_id: expect.stringMatching(/^role_ts_engineer@/),
           context_pack_ref: expect.stringMatching(/^context_pack_[a-f0-9]{24}$/),
@@ -309,7 +314,11 @@ process.stdin.on('end', () => {
     writeFileSync(path.join(runnerDir, 'package.json'), '{"scripts":{"driver:run":"exit 0"}}');
     const child = spawn('pnpm', ['backend:rpc'], {
       cwd: process.cwd(),
-      env: { ...process.env, ACP_DRIVER_RUNNER_DIR: runnerDir },
+      env: {
+        ...process.env,
+        ACP_DRIVER_RUNNER_DIR: runnerDir,
+        NEWIDE_COORDINATION_DB: path.join(runnerDir, 'coordination.sqlite'),
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const lines = createInterface({ input: child.stdout });

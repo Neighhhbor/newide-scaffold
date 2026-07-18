@@ -23,9 +23,15 @@ import { BAgentProjectionAdapter, FileMarketEvidenceStore } from '../market';
 import { JsonRpcDispatcher, JsonRpcLineSession } from '../rpc/json-rpc-dispatcher';
 import { RunRpcMethods } from '../rpc/run-methods';
 import { TaskRpcMethods } from '../rpc/task-methods';
+import { SqliteCoordinationStore } from '../persistence';
 import { DriverRuntimeAgentExecutionFacade } from './driver-runtime-agent-execution-facade';
 import { FileAgentExecutionEvidenceStore } from './agent-execution-evidence-store';
 import { NewideBackendService } from './newide-backend-service';
+import { InMemoryRunRegistry } from './run-registry';
+import { FileRunAuditWriter } from './run-audit-writer';
+import { FileRunRequestStore } from './run-request-store';
+import { FileRunTerminalOutputWriter } from './run-terminal-output-writer';
+import { TaskProcessor } from './task-processor';
 
 export interface BackendRpcServerOptions {
   input: Readable;
@@ -108,7 +114,22 @@ export function createProductionBackendService(
     selectAgentHandler,
     councilProvider: new SynthesisAgentCouncilProvider({ agentExecutionFacade }),
   });
-  return new NewideBackendService(runner);
+  const runsRoot = path.join(repoRoot, '.newide', 'runs');
+  const configuredDatabasePath =
+    env.NEWIDE_COORDINATION_DB ?? path.join(repoRoot, '.newide', 'coordination.sqlite');
+  const databasePath =
+    configuredDatabasePath === ':memory:'
+      ? configuredDatabasePath
+      : path.resolve(configuredDatabasePath);
+  const coordinationStore = new SqliteCoordinationStore(databasePath);
+  return new NewideBackendService(
+    runner,
+    new InMemoryRunRegistry(),
+    new FileRunAuditWriter(runsRoot),
+    new FileRunTerminalOutputWriter(runsRoot),
+    new FileRunRequestStore(runsRoot),
+    new TaskProcessor(coordinationStore),
+  );
 }
 
 const MODEL_OVERRIDE_ENV = [

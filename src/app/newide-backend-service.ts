@@ -7,7 +7,7 @@ import type { IntegrationV0Result } from '../coordinator/integration-v0-flow';
 import { realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { CouncilRoleExecutionError } from '../council';
-import type { Event, TaskCreateRequest } from '../core';
+import { SCHEMA_VERSION, type Event, type TaskCreateRequest } from '../core';
 import {
   IntegrationV0CoordinatorRunner,
   type CoordinatorRunner,
@@ -24,6 +24,7 @@ import {
 import { FileRunAuditWriter, type RunAuditWriter } from './run-audit-writer';
 import {
   FileRunTerminalOutputWriter,
+  type RunTerminalOutputEvidence,
   type RunTerminalOutputWriter,
 } from './run-terminal-output-writer';
 import {
@@ -34,7 +35,8 @@ import {
 import { projectRunSnapshot } from './run-snapshot-projector';
 import type { RunSnapshot } from '../protocol/run-snapshot';
 import { projectTaskSnapshot, type TaskRunFact } from './task-snapshot-projector';
-import type { TaskSnapshot } from '../protocol/task-snapshot';
+import { councilResultEvidenceSchema, type TaskSnapshot } from '../protocol/task-snapshot';
+import { TaskProcessorTaskNotFoundError, type TaskProcessor } from './task-processor';
 
 export interface RunCreateParams {
   prompt: string;
@@ -106,6 +108,7 @@ export class TaskAlreadyRunningError extends Error {
 
 export class NewideBackendService {
   private readonly terminalRuns = new Map<string, Promise<void>>();
+  private readonly runWorkspaces = new Map<string, string>();
   private readonly taskListeners = new Map<string, Set<(event: AppRunEvent) => void>>();
 
   constructor(
@@ -114,6 +117,7 @@ export class NewideBackendService {
     private readonly auditWriter: RunAuditWriter = new FileRunAuditWriter(),
     private readonly terminalWriter: RunTerminalOutputWriter = new FileRunTerminalOutputWriter(),
     private readonly requestStore: RunRequestStore = new FileRunRequestStore(),
+    private readonly taskProcessor?: TaskProcessor,
   ) {}
 
   createRun(params: RunCreateParams): Promise<RunCreateResult> {
@@ -159,6 +163,23 @@ export class NewideBackendService {
   async startCouncil(taskId: string): Promise<TaskSnapshot> {
     const task = await this.getTask(taskId);
     if (task.current_run) throw new TaskAlreadyRunningError(taskId);
+    let durableLaunch;
+    try {
+      durableLaunch = this.taskProcessor?.getTaskLaunchContext(taskId);
+    } catch (error) {
+      if (!(error instanceof TaskProcessorTaskNotFoundError)) throw error;
+    }
+    if (durableLaunch) {
+      await this.startRun({
+        prompt: durableLaunch.task_request.spec,
+        task_id: taskId,
+        task_request: durableLaunch.task_request,
+        workspace_path: durableLaunch.workspace_path,
+        mode: 'council',
+        ...(durableLaunch.session_id ? { session_id: durableLaunch.session_id } : {}),
+      });
+      return this.getTask(taskId);
+    }
     const history = await this.requestStore.listHistory();
     const launch = history.find(
       (entry) => entry.task_id === taskId && entry.task_request && entry.workspace_path,
@@ -276,8 +297,26 @@ export class NewideBackendService {
             if (identity) return;
             identity = created;
             this.terminalRuns.set(created.run_id, terminalRun);
+            this.runWorkspaces.set(created.run_id, workspacePath);
             this.registry.create({ ...created, mode, controller });
+            try {
+              this.taskProcessor?.beginRun({
+                ...created,
+                task_request: taskRequest,
+                workspace_path: workspacePath,
+                mode,
+                ...(params.session_id ? { session_id: params.session_id } : {}),
+                ...(lineage ? { restarted_from_run_id: lineage.restarted_from_run_id } : {}),
+              });
+            } catch (error) {
+              controller.abort(error);
+              reject(toError(error));
+              throw error;
+            }
             this.registry.subscribe(created.run_id, (event) => {
+              if (this.taskProcessor && shouldPersistRuntimeEvent(event.type)) {
+                this.taskProcessor.recordRunEvent(created.run_id, toDomainEvent(event));
+              }
               void this.auditWriter.append(event).catch(() => undefined);
               this.notifyTaskListeners(created.task_id, event);
             });
@@ -350,6 +389,7 @@ export class NewideBackendService {
         })
         .then(resolveTerminal, resolveTerminal);
       void terminalRun.then(() => this.terminalRuns.delete(identity?.run_id ?? ''));
+      void terminalRun.then(() => this.runWorkspaces.delete(identity?.run_id ?? ''));
     });
   }
 
@@ -358,7 +398,13 @@ export class NewideBackendService {
   }
 
   getRunSnapshot(runId: string): RunSnapshot {
-    return projectRunSnapshot(this.registry.getSnapshot(runId));
+    try {
+      return projectRunSnapshot(this.registry.getSnapshot(runId));
+    } catch (error) {
+      const persisted = this.taskProcessor?.getRunSnapshot(runId);
+      if (persisted) return persisted;
+      throw error;
+    }
   }
 
   async waitForTerminal(runId: string): Promise<void> {
@@ -397,6 +443,8 @@ export class NewideBackendService {
   }
 
   private async collectTaskSnapshots(): Promise<TaskSnapshot[]> {
+    const durableTasks = this.taskProcessor?.listTaskSnapshots() ?? [];
+    const durableTaskIds = new Set(durableTasks.map((task) => task.task.task_id));
     const history = await this.requestStore.listHistory();
     const registryRuns = this.registry.listSnapshots();
     const registryRunIds = new Set(registryRuns.map((run) => run.run_id));
@@ -405,6 +453,7 @@ export class NewideBackendService {
 
     for (const entry of history) {
       if (!entry.task_id || !entry.task_request || !entry.created_at) continue;
+      if (durableTaskIds.has(entry.task_id)) continue;
       const existing = requestFacts.get(entry.task_id);
       if (!existing || entry.created_at < existing.created_at) {
         requestFacts.set(entry.task_id, {
@@ -416,7 +465,13 @@ export class NewideBackendService {
 
     await Promise.all(
       history.map(async (entry) => {
-        if (!entry.task_id || registryRunIds.has(entry.run_id)) return;
+        if (
+          !entry.task_id ||
+          durableTaskIds.has(entry.task_id) ||
+          registryRunIds.has(entry.run_id)
+        ) {
+          return;
+        }
         const snapshot = await this.requestStore.loadRunSnapshot(entry.run_id);
         const fact = historicalRunFact(entry, snapshot);
         if (fact) appendRunFact(runFacts, entry.task_id, fact);
@@ -424,19 +479,21 @@ export class NewideBackendService {
     );
 
     for (const run of registryRuns) {
+      if (durableTaskIds.has(run.task_id)) continue;
       appendRunFact(runFacts, run.task_id, liveRunFact(run));
     }
 
-    return [...requestFacts.entries()]
-      .map(([taskId, request]) =>
-        projectTaskSnapshot({
-          task_id: taskId,
-          task_request: request.task_request,
-          created_at: request.created_at,
-          runs: runFacts.get(taskId) ?? [],
-        }),
-      )
-      .sort((left, right) => right.task.updated_at.localeCompare(left.task.updated_at));
+    const legacyTasks = [...requestFacts.entries()].map(([taskId, request]) =>
+      projectTaskSnapshot({
+        task_id: taskId,
+        task_request: request.task_request,
+        created_at: request.created_at,
+        runs: runFacts.get(taskId) ?? [],
+      }),
+    );
+    return [...durableTasks, ...legacyTasks].sort((left, right) =>
+      right.task.updated_at.localeCompare(left.task.updated_at),
+    );
   }
 
   private appendTelemetry(
@@ -462,7 +519,24 @@ export class NewideBackendService {
   private async persistTerminal(runId: string, staged: StagedTerminalTransition): Promise<void> {
     try {
       await this.auditWriter.flush(runId);
-      await this.terminalWriter.finalize(staged.snapshot);
+      const terminalEvidence = await this.terminalWriter.finalize(staged.snapshot);
+      const projected = projectRunSnapshot(staged.snapshot);
+      this.taskProcessor?.finishRun({
+        run_id: runId,
+        status: terminalStatus(staged.snapshot.status),
+        ...(staged.snapshot.status === 'completed'
+          ? {
+              final_output: resolveTaskFinalOutput(
+                projected,
+                terminalEvidence,
+                this.runWorkspaces.get(runId),
+              ),
+            }
+          : {}),
+        snapshot: projected,
+        ...(staged.snapshot.error ? { error: { ...staged.snapshot.error } } : {}),
+        event: toDomainEvent(staged.event),
+      });
       this.registry.commitTerminal(runId, staged);
       await this.auditWriter.flush(runId).catch(() => undefined);
     } catch (error) {
@@ -473,6 +547,12 @@ export class NewideBackendService {
         message: toError(error).message,
       });
       if (!failure) return;
+      this.taskProcessor?.finishRun({
+        run_id: runId,
+        status: 'failed',
+        ...(failure.snapshot.error ? { error: { ...failure.snapshot.error } } : {}),
+        event: toDomainEvent(failure.event),
+      });
       this.registry.commitTerminal(runId, failure);
     }
   }
@@ -552,6 +632,71 @@ function historicalRunFact(
 
 function eventTimestamp(input: AppRunSnapshot, type: string): string | undefined {
   return input.events.find((event) => event.type === type)?.created_at;
+}
+
+const PROCESSOR_CONTROL_EVENTS = new Set([
+  'task.created',
+  'run.created',
+  'run.started',
+  'run.completed',
+  'run.failed',
+  'run.cancelled',
+]);
+
+function shouldPersistRuntimeEvent(type: string): boolean {
+  return !PROCESSOR_CONTROL_EVENTS.has(type);
+}
+
+function toDomainEvent(event: AppRunEvent): Event {
+  return {
+    event_id: event.event_id,
+    event_type: event.type,
+    subject_id:
+      typeof event.payload.subject_id === 'string' ? event.payload.subject_id : event.run_id,
+    run_id: event.run_id,
+    task_id: event.task_id,
+    payload: { ...event.payload },
+    created_at: event.created_at,
+    schema_version: SCHEMA_VERSION,
+  };
+}
+
+function terminalStatus(status: AppRunSnapshot['status']): 'completed' | 'failed' | 'cancelled' {
+  if (status === 'running') throw new Error('Cannot persist a running snapshot as terminal');
+  return status;
+}
+
+function resolveTaskFinalOutput(
+  snapshot: RunSnapshot,
+  terminalEvidence: RunTerminalOutputEvidence | void,
+  workspacePath: string | undefined,
+): { artifact_ref: string; sha256: string; workspace_path: string } {
+  if (!workspacePath) throw new Error(`Run ${snapshot.run_id} has no workspace path`);
+  const councilResult = councilResultEvidenceSchema.safeParse(snapshot.council?.result);
+  if (councilResult.success) {
+    return {
+      artifact_ref: councilResult.data.final_artifact_ref,
+      sha256: councilResult.data.final_artifact_sha256,
+      workspace_path: councilArtifactPath(workspacePath, councilResult.data.verification_refs),
+    };
+  }
+  if (!terminalEvidence) {
+    throw new Error(`Run ${snapshot.run_id} completed without terminal artifact evidence`);
+  }
+  return {
+    ...terminalEvidence,
+    workspace_path: workspacePath,
+  };
+}
+
+function councilArtifactPath(workspacePath: string, verificationRefs: readonly string[]): string {
+  for (const reference of verificationRefs) {
+    if (!reference.startsWith('workspace:')) continue;
+    const hashSeparator = reference.lastIndexOf(':sha256:');
+    if (hashSeparator <= 'workspace:'.length) continue;
+    return path.resolve(workspacePath, reference.slice('workspace:'.length, hashSeparator));
+  }
+  return workspacePath;
 }
 
 function normalizeWorkspacePath(input: string): string {
