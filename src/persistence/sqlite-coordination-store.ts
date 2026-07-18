@@ -1,7 +1,13 @@
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { SCHEMA_VERSION, TASK_STATUSES, type Event } from '../core';
+import {
+  SCHEMA_VERSION,
+  TASK_STATUSES,
+  type AgentMessageType,
+  type Event,
+  type MessageRecipient,
+} from '../core';
 import {
   type CoordinationStateCommit,
   type CoordinationStateStore,
@@ -13,6 +19,14 @@ import {
   type PersistedTaskState,
   type TaskResumeCursor,
 } from './coordination-state-store';
+import type {
+  MailboxStateStore,
+  PersistedMailboxDelivery,
+  PersistedMailboxEnvelope,
+  PersistedMailboxMessage,
+  SaveMailboxReplyInput,
+  SaveMailboxReplyResult,
+} from './mailbox-state-store';
 
 const RUN_STATUSES = [
   'created',
@@ -33,10 +47,24 @@ const RESUME_CURSORS = [
   'mailbox_wait',
   'done',
 ] as const;
+const MAILBOX_MESSAGE_TYPES = [
+  'ask_help',
+  'review_request',
+  'proposal',
+  'critique',
+  'handoff',
+  'status_update',
+  'decision_request',
+  'decision_response',
+  'task.assigned',
+  'driver.requested',
+  'driver.completed',
+] as const satisfies readonly AgentMessageType[];
+const MAILBOX_DELIVERY_STATUSES = ['pending', 'delivered', 'acknowledged'] as const;
 
 type SqlRow = Record<string, unknown>;
 
-export class SqliteCoordinationStore implements CoordinationStateStore {
+export class SqliteCoordinationStore implements CoordinationStateStore, MailboxStateStore {
   private readonly database: DatabaseSync;
 
   constructor(databasePath: string) {
@@ -107,6 +135,175 @@ export class SqliteCoordinationStore implements CoordinationStateStore {
       )
       .get(taskId);
     return row ? readCheckpoint(row) : undefined;
+  }
+
+  saveMailboxMessage(
+    message: PersistedMailboxMessage,
+    deliveries: PersistedMailboxDelivery[],
+  ): void {
+    validateMailboxWrite(message, deliveries);
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      this.writeMailboxMessage(message);
+      for (const delivery of deliveries) this.writeMailboxDelivery(delivery);
+      this.database.exec('COMMIT');
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  receiveMailboxInbox(
+    recipient: MessageRecipient,
+    deliveredAt: string,
+    afterDeliveryId?: string,
+  ): PersistedMailboxEnvelope[] {
+    validateMailboxRecipient(recipient);
+    const cursor = afterDeliveryId ? this.requireMailboxDelivery(afterDeliveryId) : undefined;
+    if (cursor && !deliveryMatchesRecipient(cursor, recipient)) {
+      throw new Error(`Mailbox delivery cursor ${afterDeliveryId} belongs to another recipient`);
+    }
+    const where = recipient.agent_id
+      ? 'recipient_agent_id = ?'
+      : 'recipient_role_id = ?';
+    const recipientId = recipient.agent_id ?? recipient.role_id;
+    const cursorClause = cursor
+      ? 'AND (created_at > ? OR (created_at = ? AND delivery_id > ?))'
+      : '';
+    const parameters: SQLInputValue[] = [recipientId ?? ''];
+    if (cursor) parameters.push(cursor.created_at, cursor.created_at, cursor.delivery_id);
+
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const rows = this.database
+        .prepare(
+          `SELECT * FROM deliveries
+           WHERE ${where} AND status IN ('pending', 'delivered') ${cursorClause}
+           ORDER BY created_at ASC, delivery_id ASC`,
+        )
+        .all(...parameters);
+      const deliveries = rows.map((row) => readMailboxDelivery(row));
+      const update = this.database.prepare(
+        `UPDATE deliveries
+         SET status = 'delivered', delivered_at = COALESCE(delivered_at, ?), updated_at = ?
+         WHERE delivery_id = ? AND status = 'pending'`,
+      );
+      for (const delivery of deliveries) {
+        update.run(deliveredAt, deliveredAt, delivery.delivery_id);
+      }
+      const envelopes = deliveries.map((delivery) =>
+        this.readMailboxEnvelope(delivery.delivery_id),
+      );
+      this.database.exec('COMMIT');
+      return envelopes;
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  acknowledgeMailboxDelivery(
+    deliveryId: string,
+    recipient: MessageRecipient,
+    acknowledgedAt: string,
+  ): PersistedMailboxDelivery {
+    validateMailboxRecipient(recipient);
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const delivery = this.requireMailboxDelivery(deliveryId);
+      assertMailboxDeliveryRecipient(delivery, recipient);
+      if (delivery.status === 'pending') {
+        throw new Error(`Mailbox delivery ${deliveryId} must be delivered before acknowledgement`);
+      }
+      if (delivery.status === 'delivered') {
+        this.database
+          .prepare(
+            `UPDATE deliveries
+             SET status = 'acknowledged', acknowledged_at = ?, updated_at = ?
+             WHERE delivery_id = ?`,
+          )
+          .run(acknowledgedAt, acknowledgedAt, deliveryId);
+      }
+      const acknowledged = this.requireMailboxDelivery(deliveryId);
+      this.database.exec('COMMIT');
+      return acknowledged;
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  saveMailboxReply(input: SaveMailboxReplyInput): SaveMailboxReplyResult {
+    validateMailboxRecipient(input.source_recipient);
+    validateMailboxWrite(input.message, input.deliveries);
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const source = this.requireMailboxDelivery(input.source_delivery_id);
+      assertMailboxDeliveryRecipient(source, input.source_recipient);
+      if (source.status === 'pending') {
+        throw new Error(
+          `Mailbox delivery ${input.source_delivery_id} must be delivered before reply`,
+        );
+      }
+      if (input.message.reply_to_message_id !== source.message_id) {
+        throw new Error('Mailbox reply must reference the source message');
+      }
+      if (source.status === 'delivered') {
+        this.database
+          .prepare(
+            `UPDATE deliveries
+             SET status = 'acknowledged', acknowledged_at = ?, updated_at = ?
+             WHERE delivery_id = ?`,
+          )
+          .run(input.acknowledged_at, input.acknowledged_at, input.source_delivery_id);
+      }
+      this.writeMailboxMessage(input.message);
+      for (const delivery of input.deliveries) this.writeMailboxDelivery(delivery);
+      const result = {
+        source_delivery: this.requireMailboxDelivery(input.source_delivery_id),
+        reply: { message: input.message, deliveries: input.deliveries },
+      };
+      this.database.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  recordMailboxWakeAttempt(
+    deliveryId: string,
+    input: { attempted_at: string; error?: { code: string; message: string; details?: Record<string, unknown> } },
+  ): PersistedMailboxDelivery {
+    const result = this.database
+      .prepare(
+        `UPDATE deliveries
+         SET retry_count = retry_count + 1, last_error_json = ?, updated_at = ?
+         WHERE delivery_id = ? AND status IN ('pending', 'delivered')`,
+      )
+      .run(input.error ? toJson(input.error) : null, input.attempted_at, deliveryId);
+    if (result.changes === 0) {
+      throw new Error(`Replayable mailbox delivery ${deliveryId} was not found`);
+    }
+    return this.requireMailboxDelivery(deliveryId);
+  }
+
+  listMailboxThread(threadId: string): PersistedMailboxMessage[] {
+    return this.database
+      .prepare('SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at, message_id')
+      .all(threadId)
+      .map((row) => readMailboxMessage(row));
+  }
+
+  listReplayableMailboxDeliveries(): PersistedMailboxEnvelope[] {
+    return this.database
+      .prepare(
+        `SELECT delivery_id FROM deliveries
+         WHERE status IN ('pending', 'delivered')
+         ORDER BY created_at, delivery_id`,
+      )
+      .all()
+      .map((row) => this.readMailboxEnvelope(readString(row, 'delivery_id')));
   }
 
   close(): void {
@@ -249,6 +446,13 @@ export class SqliteCoordinationStore implements CoordinationStateStore {
           schema_version TEXT NOT NULL,
           CHECK (recipient_agent_id IS NOT NULL OR recipient_role_id IS NOT NULL)
         );
+
+        CREATE INDEX IF NOT EXISTS messages_by_thread
+          ON messages(thread_id, created_at, message_id);
+        CREATE INDEX IF NOT EXISTS deliveries_by_agent_status
+          ON deliveries(recipient_agent_id, status, created_at, delivery_id);
+        CREATE INDEX IF NOT EXISTS deliveries_by_role_status
+          ON deliveries(recipient_role_id, status, created_at, delivery_id);
       `);
       this.database
         .prepare('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)')
@@ -396,6 +600,73 @@ export class SqliteCoordinationStore implements CoordinationStateStore {
         event.schema_version,
       );
     return { ...event, sequence: Number(result.lastInsertRowid) };
+  }
+
+  private writeMailboxMessage(message: PersistedMailboxMessage): void {
+    this.database
+      .prepare(
+        `INSERT INTO messages (
+          message_id, thread_id, from_agent_id, type, payload_json, artifact_refs_json,
+          requires_ack, reply_to_message_id, created_at, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        message.message_id,
+        message.thread_id,
+        message.from_agent_id,
+        message.type,
+        toJson(message.payload),
+        toJson(message.artifact_refs),
+        message.requires_ack ? 1 : 0,
+        message.reply_to_message_id ?? null,
+        message.created_at,
+        message.schema_version,
+      );
+  }
+
+  private writeMailboxDelivery(delivery: PersistedMailboxDelivery): void {
+    this.database
+      .prepare(
+        `INSERT INTO deliveries (
+          delivery_id, message_id, recipient_agent_id, recipient_role_id, status, deadline_at,
+          delivered_at, acknowledged_at, retry_count, last_error_json, last_delivery_event_id,
+          replay_cursor, created_at, updated_at, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        delivery.delivery_id,
+        delivery.message_id,
+        delivery.recipient_agent_id ?? null,
+        delivery.recipient_role_id ?? null,
+        delivery.status,
+        delivery.deadline_at ?? null,
+        delivery.delivered_at ?? null,
+        delivery.acknowledged_at ?? null,
+        delivery.retry_count,
+        delivery.last_error ? toJson(delivery.last_error) : null,
+        delivery.last_delivery_event_id ?? null,
+        delivery.replay_cursor ?? null,
+        delivery.created_at,
+        delivery.updated_at,
+        delivery.schema_version,
+      );
+  }
+
+  private requireMailboxDelivery(deliveryId: string): PersistedMailboxDelivery {
+    const row = this.database
+      .prepare('SELECT * FROM deliveries WHERE delivery_id = ?')
+      .get(deliveryId);
+    if (!row) throw new Error(`Mailbox delivery ${deliveryId} was not found`);
+    return readMailboxDelivery(row);
+  }
+
+  private readMailboxEnvelope(deliveryId: string): PersistedMailboxEnvelope {
+    const delivery = this.requireMailboxDelivery(deliveryId);
+    const messageRow = this.database
+      .prepare('SELECT * FROM messages WHERE message_id = ?')
+      .get(delivery.message_id);
+    if (!messageRow) throw new Error(`Mailbox message ${delivery.message_id} was not found`);
+    return { message: readMailboxMessage(messageRow), delivery };
   }
 }
 
@@ -659,6 +930,120 @@ function readCheckpoint(row: SqlRow): PersistedFullCheckpoint {
     created_at: readString(row, 'created_at'),
     schema_version: readSchemaVersion(row),
   };
+}
+
+function readMailboxMessage(row: SqlRow): PersistedMailboxMessage {
+  return {
+    message_id: readString(row, 'message_id'),
+    thread_id: readString(row, 'thread_id'),
+    from_agent_id: readString(row, 'from_agent_id'),
+    type: readEnum(row, 'type', MAILBOX_MESSAGE_TYPES),
+    payload: readJson<Record<string, unknown>>(row, 'payload_json'),
+    artifact_refs: readJson<string[]>(row, 'artifact_refs_json'),
+    requires_ack: readNumber(row, 'requires_ack') === 1,
+    ...(readOptionalString(row, 'reply_to_message_id')
+      ? { reply_to_message_id: readString(row, 'reply_to_message_id') }
+      : {}),
+    created_at: readString(row, 'created_at'),
+    schema_version: readSchemaVersion(row),
+  };
+}
+
+function readMailboxDelivery(row: SqlRow): PersistedMailboxDelivery {
+  const lastError = readOptionalJson<PersistedMailboxDelivery['last_error']>(
+    row,
+    'last_error_json',
+  );
+  return {
+    delivery_id: readString(row, 'delivery_id'),
+    message_id: readString(row, 'message_id'),
+    ...(readOptionalString(row, 'recipient_agent_id')
+      ? { recipient_agent_id: readString(row, 'recipient_agent_id') }
+      : {}),
+    ...(readOptionalString(row, 'recipient_role_id')
+      ? { recipient_role_id: readString(row, 'recipient_role_id') }
+      : {}),
+    status: readEnum(row, 'status', MAILBOX_DELIVERY_STATUSES),
+    ...(readOptionalString(row, 'deadline_at')
+      ? { deadline_at: readString(row, 'deadline_at') }
+      : {}),
+    ...(readOptionalString(row, 'delivered_at')
+      ? { delivered_at: readString(row, 'delivered_at') }
+      : {}),
+    ...(readOptionalString(row, 'acknowledged_at')
+      ? { acknowledged_at: readString(row, 'acknowledged_at') }
+      : {}),
+    retry_count: readNumber(row, 'retry_count'),
+    ...(lastError ? { last_error: lastError } : {}),
+    ...(readOptionalString(row, 'last_delivery_event_id')
+      ? { last_delivery_event_id: readString(row, 'last_delivery_event_id') }
+      : {}),
+    ...(readOptionalString(row, 'replay_cursor')
+      ? { replay_cursor: readString(row, 'replay_cursor') }
+      : {}),
+    created_at: readString(row, 'created_at'),
+    updated_at: readString(row, 'updated_at'),
+    schema_version: readSchemaVersion(row),
+  };
+}
+
+function validateMailboxWrite(
+  message: PersistedMailboxMessage,
+  deliveries: PersistedMailboxDelivery[],
+): void {
+  if (deliveries.length === 0) throw new Error('Mailbox message requires at least one delivery');
+  if (message.schema_version !== SCHEMA_VERSION) {
+    throw new Error(`Unsupported mailbox message schema: ${message.schema_version}`);
+  }
+  const recipients = new Set<string>();
+  for (const delivery of deliveries) {
+    if (delivery.message_id !== message.message_id) {
+      throw new Error('Mailbox delivery belongs to another message');
+    }
+    if (delivery.status !== 'pending') {
+      throw new Error('New mailbox delivery must be pending');
+    }
+    const recipient = delivery.recipient_agent_id
+      ? { agent_id: delivery.recipient_agent_id }
+      : delivery.recipient_role_id
+        ? { role_id: delivery.recipient_role_id }
+        : {};
+    validateMailboxRecipient(recipient);
+    const key = delivery.recipient_agent_id
+      ? `agent:${delivery.recipient_agent_id}`
+      : `role:${delivery.recipient_role_id ?? ''}`;
+    if (recipients.has(key)) throw new Error(`Duplicate mailbox recipient ${key}`);
+    recipients.add(key);
+    if (delivery.schema_version !== SCHEMA_VERSION) {
+      throw new Error(`Unsupported mailbox delivery schema: ${delivery.schema_version}`);
+    }
+  }
+}
+
+function validateMailboxRecipient(recipient: MessageRecipient): void {
+  const count = Number(Boolean(recipient.agent_id)) + Number(Boolean(recipient.role_id));
+  if (count !== 1) {
+    throw new Error('Mailbox recipient must set exactly one of agent_id or role_id');
+  }
+}
+
+function deliveryMatchesRecipient(
+  delivery: PersistedMailboxDelivery,
+  recipient: MessageRecipient,
+): boolean {
+  return (
+    (recipient.agent_id !== undefined && delivery.recipient_agent_id === recipient.agent_id) ||
+    (recipient.role_id !== undefined && delivery.recipient_role_id === recipient.role_id)
+  );
+}
+
+function assertMailboxDeliveryRecipient(
+  delivery: PersistedMailboxDelivery,
+  recipient: MessageRecipient,
+): void {
+  if (!deliveryMatchesRecipient(delivery, recipient)) {
+    throw new Error(`Mailbox delivery ${delivery.delivery_id} belongs to another recipient`);
+  }
 }
 
 function readString(row: SqlRow, key: string): string {
