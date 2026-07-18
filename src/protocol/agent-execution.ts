@@ -36,6 +36,7 @@ export interface AgentExecutionRequest {
 
 export interface AgentExecutionResult {
   agent_run_id: AgentRunId;
+  agent_id?: string;
   role_id: RoleId;
   context_pack_ref: ContextPackId;
   driver_run_result_id: DriverRunResultId;

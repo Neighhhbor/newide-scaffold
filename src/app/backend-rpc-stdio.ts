@@ -12,7 +12,7 @@ import { IntegrationV0CoordinatorRunner } from '../coordinator/coordinator-runne
 import { SynthesisAgentCouncilProvider } from '../council';
 import { CommandDriverTransport, ExternalDriverRuntime } from '../driver';
 import {
-  InMemoryBufferRepository,
+  FileBufferRepository,
   InMemoryRepository,
   LiteLLMToolCallingClient,
   type ToolCallingClient,
@@ -20,6 +20,7 @@ import {
 import { JsonRpcDispatcher, JsonRpcLineSession } from '../rpc/json-rpc-dispatcher';
 import { RunRpcMethods } from '../rpc/run-methods';
 import { DriverRuntimeAgentExecutionFacade } from './driver-runtime-agent-execution-facade';
+import { FileAgentExecutionEvidenceStore } from './agent-execution-evidence-store';
 import { NewideBackendService } from './newide-backend-service';
 
 export interface BackendRpcServerOptions {
@@ -78,8 +79,13 @@ export function createProductionBackendService(
   const agentExecutionFacade = new DriverRuntimeAgentExecutionFacade({
     driver,
     repository: new InMemoryRepository(),
-    bufferRepository: new InMemoryBufferRepository(),
+    bufferRepository: new FileBufferRepository({
+      agentStateRoot: path.join(repoRoot, '.newide', 'b', 'agent-state'),
+    }),
     llm: dependencies.agentLlm ?? new LiteLLMToolCallingClient(),
+    evidenceStore: new FileAgentExecutionEvidenceStore({
+      root: path.join(repoRoot, '.newide', 'b', 'context-packs'),
+    }),
   });
   const runner = new IntegrationV0CoordinatorRunner({
     driver,

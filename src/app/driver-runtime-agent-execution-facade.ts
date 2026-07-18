@@ -19,12 +19,17 @@ import type {
 } from '../protocol/agent-execution';
 import type { DriverRunResult, DriverRunStatus, DriverRuntimeHandle } from '../driver/contract';
 import { createDriverRuntimeInvoker } from '../driver/driver-runtime-invoker';
+import type {
+  AgentContextPackEvidence,
+  AgentExecutionEvidenceStore,
+} from './agent-execution-evidence-store';
 
 export interface DriverRuntimeAgentExecutionFacadeOptions {
   driver: DriverRuntimeHandle;
   repository: MemoryRepository;
   bufferRepository: BufferRepository;
   llm: ToolCallingClient;
+  evidenceStore?: AgentExecutionEvidenceStore;
 }
 
 interface InvocationContext {
@@ -218,16 +223,18 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
     }
   }
 
-  private buildResult(
+  private async buildResult(
     input: AgentExecutionRequest,
     dispatched: DispatchTaskResult,
     runtimeRoleId: string,
     execution: DriverRunResult | undefined,
     driverAttempts: number,
-  ): AgentExecutionResult {
+  ): Promise<AgentExecutionResult> {
     if (!execution) {
       return this.buildNoExecutionResult(input, dispatched, runtimeRoleId);
     }
+
+    const contextEvidence = await this.persistContextEvidence(input, dispatched, runtimeRoleId);
 
     const dispatchFailed = dispatched.status !== 'completed';
     const dispatchError = dispatchFailed
@@ -240,8 +247,9 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
 
     return {
       agent_run_id: createId('agent_run'),
+      agent_id: runtimeRoleId,
       role_id: input.role_id,
-      context_pack_ref: createId('context_pack'),
+      context_pack_ref: contextEvidence.context_pack_ref,
       driver_run_result_id: execution.driver_run_result_id,
       artifact_refs: [...execution.artifacts],
       transcript_ref: execution.transcript_ref,
@@ -261,7 +269,8 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
           skills: dispatched.cycle.retrieval.skills.length,
         },
         promotion: dispatched.cycle.promotion.check,
-        context_pack_persisted: false,
+        context_pack_persisted: contextEvidence.persisted,
+        ...(contextEvidence.uri ? { context_pack_uri: contextEvidence.uri } : {}),
         ...(execution.error
           ? { driver_error: { ...execution.error }, driver_error_code: execution.error.code }
           : dispatchError
@@ -269,17 +278,17 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
             : {}),
       },
       status: mapStatus(dispatched.status, execution.status),
-      memory_buffer_ref: `${runtimeRoleId}:${dispatched.cycle.buffer_seq}`,
+      memory_buffer_ref: contextEvidence.memory_buffer_ref,
       created_at: nowTimestamp(),
       schema_version: SCHEMA_VERSION,
     };
   }
 
-  private buildNoExecutionResult(
+  private async buildNoExecutionResult(
     input: AgentExecutionRequest,
     dispatched: DispatchTaskResult,
     runtimeRoleId: string,
-  ): AgentExecutionResult {
+  ): Promise<AgentExecutionResult> {
     const created_at = nowTimestamp();
     const errorCode = `B_${dispatched.status.toUpperCase()}`;
     const errorMessage = dispatched.cycle.buffer_snapshot.driver_return.summary;
@@ -293,11 +302,13 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
       created_at,
       schema_version: SCHEMA_VERSION,
     };
+    const contextEvidence = await this.persistContextEvidence(input, dispatched, runtimeRoleId);
 
     return {
       agent_run_id: createId('agent_run'),
+      agent_id: runtimeRoleId,
       role_id: input.role_id,
-      context_pack_ref: createId('context_pack'),
+      context_pack_ref: contextEvidence.context_pack_ref,
       driver_run_result_id: createId('driver_result'),
       artifact_refs: [],
       transcript_ref: transcript,
@@ -317,12 +328,69 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
         context_policy: input.context_policy,
         input_artifact_refs: [...input.input_artifact_refs],
         buffer_seq: dispatched.cycle.buffer_seq,
-        context_pack_persisted: false,
+        context_pack_persisted: contextEvidence.persisted,
+        ...(contextEvidence.uri ? { context_pack_uri: contextEvidence.uri } : {}),
       },
       status: dispatched.status === 'cancelled' ? 'cancelled' : 'failed',
-      memory_buffer_ref: `${runtimeRoleId}:${dispatched.cycle.buffer_seq}`,
+      memory_buffer_ref: contextEvidence.memory_buffer_ref,
       created_at,
       schema_version: SCHEMA_VERSION,
+    };
+  }
+
+  private async persistContextEvidence(
+    input: AgentExecutionRequest,
+    dispatched: DispatchTaskResult,
+    runtimeRoleId: string,
+  ): Promise<{
+    context_pack_ref: string;
+    memory_buffer_ref: string;
+    persisted: boolean;
+    uri?: string;
+  }> {
+    const memoryBufferRef = `${runtimeRoleId}:${dispatched.cycle.buffer_seq}`;
+    const identity = JSON.stringify({
+      task_id: input.task_id,
+      run_id: input.run_id,
+      agent_id: runtimeRoleId,
+      role_id: input.role_id,
+      context_policy: input.context_policy,
+      input_artifact_refs: input.input_artifact_refs,
+      memory_buffer_ref: memoryBufferRef,
+      retrieval: dispatched.cycle.retrieval,
+      driver_context: dispatched.cycle.driver_context,
+    });
+    const contextPackRef = `context_pack_${createHash('sha256').update(identity).digest('hex').slice(0, 24)}`;
+    const evidence: AgentContextPackEvidence = {
+      context_pack_id: contextPackRef,
+      task_id: input.task_id,
+      run_id: input.run_id,
+      agent_id: runtimeRoleId,
+      role_id: input.role_id,
+      context_policy: input.context_policy,
+      input_artifact_refs: [...input.input_artifact_refs],
+      memory_buffer_ref: memoryBufferRef,
+      retrieval: {
+        experiences: [...dispatched.cycle.retrieval.experiences],
+        skills: [...dispatched.cycle.retrieval.skills],
+      },
+      driver_context: dispatched.cycle.driver_context,
+      created_at: nowTimestamp(),
+      schema_version: SCHEMA_VERSION,
+    };
+    if (!this.options.evidenceStore) {
+      return {
+        context_pack_ref: contextPackRef,
+        memory_buffer_ref: memoryBufferRef,
+        persisted: false,
+      };
+    }
+    const saved = await this.options.evidenceStore.saveContextPack(evidence);
+    return {
+      context_pack_ref: contextPackRef,
+      memory_buffer_ref: memoryBufferRef,
+      persisted: true,
+      uri: saved.uri,
     };
   }
 

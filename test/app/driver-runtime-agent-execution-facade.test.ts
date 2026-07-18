@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { DriverRuntimeAgentExecutionFacade } from '../../src/app/driver-runtime-agent-execution-facade';
+import { FileAgentExecutionEvidenceStore } from '../../src/app/agent-execution-evidence-store';
 import { SCHEMA_VERSION, type ArtifactRef } from '../../src/core';
 import {
   MockDriver,
@@ -31,8 +35,9 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
     });
     expect(result).toMatchObject({
       agent_run_id: expect.stringMatching(/^agent_run_/),
+      agent_id: expect.stringMatching(/^proposer_a@[a-f0-9]{12}$/),
       role_id: 'proposer_a',
-      context_pack_ref: expect.stringMatching(/^context_pack_/),
+      context_pack_ref: expect.stringMatching(/^context_pack_[a-f0-9]{24}$/),
       driver_run_result_id: 'driver_result_001',
       artifact_refs: [createArtifact('artifact_output_001')],
       transcript_ref: createArtifact('artifact_transcript_001', 'transcript'),
@@ -55,6 +60,45 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
       pending_count: 1,
       total_processed: 0,
     });
+  });
+
+  it('persists a content-addressed context pack with real retrieval and buffer evidence', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'newide-b-evidence-'));
+    try {
+      const driver = new CapturingDriver('succeeded');
+      const facade = new DriverRuntimeAgentExecutionFacade({
+        driver,
+        repository: new InMemoryRepository(),
+        bufferRepository: new InMemoryBufferRepository(),
+        llm: invokeDriverLlm(),
+        evidenceStore: new FileAgentExecutionEvidenceStore({ root }),
+      });
+
+      const result = await facade.runAgent(request('task_evidence', 'implementer'));
+
+      expect(result).toMatchObject({
+        agent_id: 'implementer',
+        context_pack_ref: expect.stringMatching(/^context_pack_[a-f0-9]{24}$/),
+        memory_buffer_ref: 'implementer:1',
+        diagnostics: {
+          context_pack_persisted: true,
+          context_pack_uri: expect.stringMatching(/^file:/),
+          retrieval: { experiences: 0, skills: 0 },
+        },
+      });
+      const files = await fs.readdir(root);
+      expect(files).toEqual([`${result.context_pack_ref}.json`]);
+      const persisted = JSON.parse(await fs.readFile(path.join(root, files[0]!), 'utf-8'));
+      expect(persisted).toMatchObject({
+        context_pack_id: result.context_pack_ref,
+        task_id: 'task_evidence',
+        agent_id: 'implementer',
+        memory_buffer_ref: 'implementer:1',
+        retrieval: { experiences: [], skills: [] },
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it('preserves the original C instruction when B delegates a narrower subtask', async () => {
