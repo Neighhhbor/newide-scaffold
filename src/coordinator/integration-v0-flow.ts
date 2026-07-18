@@ -19,6 +19,12 @@ import {
   type DriverRuntimeHandle,
 } from '../driver';
 import type { AgentExecutionFacade, AgentExecutionResult } from '../protocol/agent-execution';
+import { ExecuteAgentHandler } from './handlers/execute-agent-handler';
+import { AutonomousCouncilHandler } from './handlers/autonomous-council-handler';
+import {
+  DeliverArtifactHandler,
+  type DeliverArtifactResult,
+} from './handlers/deliver-artifact-handler';
 import { HookEngine, type HookEvent, type HookResult } from '../hook';
 import { DecisionAggregator, type GateResult } from '../gate';
 import { MockMemoryProvider } from '../memory';
@@ -38,6 +44,7 @@ import {
 import {
   MockCouncil,
   type CouncilDecision,
+  type CouncilResult,
   type CouncilProvider,
   type EvidencePack,
 } from '../council';
@@ -93,6 +100,9 @@ export interface IntegrationV0Summary {
   council_reviews_path?: string;
   council_synthesis_path?: string;
   council_output_path?: string;
+  council_result_path?: string;
+  council_result?: CouncilResult;
+  council_delivery?: DeliverArtifactResult;
   council_decision_id?: string;
   council_decision_mode?: CouncilDecision['decision_mode'];
   council_verdict?: CouncilDecision['verdict'];
@@ -130,6 +140,9 @@ export interface IntegrationV0Options {
   agentExecutionFacade?: AgentExecutionFacade;
   enableCouncil?: boolean;
   councilProvider?: CouncilProvider;
+  councilRoot?: string;
+  executeAgentHandler?: ExecuteAgentHandler;
+  deliverArtifactHandler?: DeliverArtifactHandler;
   hookEngine?: IntegrationV0HookEngine;
   materializer?: IntegrationV0Materializer;
   worktreePath?: string;
@@ -229,48 +242,67 @@ export async function runIntegrationV0Flow(
   });
   timeline.push({ name: 'MailboxMessageSent (task.assigned)', id: taskAssignedEvent.event_id });
 
-  // 5. Build context pack (B: Memory)
-  const roleProfileRef: RoleProfileRef = {
-    role_id: 'role_ts_engineer',
-    persona_ref: 'persona://role_ts_engineer/current',
-    skill_refs: ['skill://typescript-integration'],
-    capability_tags: ['typescript', 'integration', 'v0'],
-    memory_policy: {
-      allow_in_driver_context: true,
-      allow_in_council_proposer: true,
-      allow_in_council_judge: true,
-      max_memory_items: 5,
-    },
-    schema_version: SCHEMA_VERSION,
-  };
-
-  const memory = new MockMemoryProvider();
-  const contextPack = await memory.buildContextPack({
-    task_id: task.task_id,
-    role_profile_ref: roleProfileRef,
-    memory_refs: [
-      {
-        memory_id: 'memory_integration_v0',
-        kind: 'experience',
-        uri: 'memory://integration/v0',
-        summary: 'Integration v0 flow connects A-B-C-D modules.',
-        schema_version: SCHEMA_VERSION,
+  // 5. Legacy direct-driver runs still need the v0 context adapter. Production
+  // B-backed runs obtain their real context pack from ExecuteAgentHandler below.
+  let contextPackId: string | undefined;
+  let contextArtifactRefs: string[] = [];
+  let legacyContextPackRef:
+    | {
+        context_pack_id: string;
+        task_id: string;
+        uri: string;
+        schema_version: SchemaVersion;
+      }
+    | undefined;
+  if (!options?.agentExecutionFacade) {
+    const roleProfileRef: RoleProfileRef = {
+      role_id: 'role_ts_engineer',
+      persona_ref: 'persona://role_ts_engineer/current',
+      skill_refs: ['skill://typescript-integration'],
+      capability_tags: ['typescript', 'integration', 'v0'],
+      memory_policy: {
+        allow_in_driver_context: true,
+        allow_in_council_proposer: true,
+        allow_in_council_judge: true,
+        max_memory_items: 5,
       },
-    ],
-    artifact_refs: [],
-  });
-  options?.signal?.throwIfAborted();
-  const contextEvent = orchestrator.appendEvent({
-    event_type: 'memory.context_pack_built',
-    subject_id: contextPack.context_pack_id,
-    run_id: run.run_id,
-    task_id: task.task_id,
-    payload: {
-      role_id: contextPack.role_profile_ref.role_id,
-      memory_refs: contextPack.memory_refs.map((memoryRef) => memoryRef.memory_id),
-    },
-  });
-  timeline.push({ name: 'ContextPackBuilt', id: contextEvent.event_id });
+      schema_version: SCHEMA_VERSION,
+    };
+    const contextPack = await new MockMemoryProvider().buildContextPack({
+      task_id: task.task_id,
+      role_profile_ref: roleProfileRef,
+      memory_refs: [
+        {
+          memory_id: 'memory_integration_v0',
+          kind: 'experience',
+          uri: 'memory://integration/v0',
+          summary: 'Integration v0 flow connects A-B-C-D modules.',
+          schema_version: SCHEMA_VERSION,
+        },
+      ],
+      artifact_refs: [],
+    });
+    contextPackId = contextPack.context_pack_id;
+    contextArtifactRefs = [...contextPack.artifact_refs];
+    legacyContextPackRef = {
+      context_pack_id: contextPack.context_pack_id,
+      task_id: contextPack.task_id,
+      uri: `artifact://context/${task.task_id}/${contextPack.context_pack_id}`,
+      schema_version: SCHEMA_VERSION,
+    };
+    const contextEvent = orchestrator.appendEvent({
+      event_type: 'memory.context_pack_built',
+      subject_id: contextPack.context_pack_id,
+      run_id: run.run_id,
+      task_id: task.task_id,
+      payload: {
+        role_id: contextPack.role_profile_ref.role_id,
+        memory_refs: contextPack.memory_refs.map((memoryRef) => memoryRef.memory_id),
+        source: 'legacy_direct_driver',
+      },
+    });
+    timeline.push({ name: 'ContextPackBuilt', id: contextEvent.event_id });
+  }
 
   // 6. Start driver session
   const sessionEvent = orchestrator.appendEvent({
@@ -332,26 +364,23 @@ export async function runIntegrationV0Flow(
 
   // 8. Call driver directly, or route through B AgentExecutionFacade when explicitly injected.
   const prompt = options?.driverPrompt || taskRequest.spec;
-  const contextPackRef = {
-    context_pack_id: contextPack.context_pack_id,
-    task_id: contextPack.task_id,
-    uri: `artifact://context/${task.task_id}/${contextPack.context_pack_id}`,
-    schema_version: SCHEMA_VERSION,
-  };
   const workspaceSnapshotBefore = options?.workspacePath
     ? await snapshotWorkspaceFiles(options.workspacePath)
     : undefined;
   let agentExecutionResult: AgentExecutionResult | undefined;
   let driverResult: DriverRunResult;
   if (options?.agentExecutionFacade) {
+    const executionWorkspace = options.enableCouncil
+      ? path.join(options.councilRoot ?? '.newide/council', run.run_id, 'primary')
+      : options.workspacePath;
     const agentExecutionRequest = {
       task_id: task.task_id,
       run_id: run.run_id,
       role_id: task.role_id ?? 'role_ts_engineer',
       instruction: prompt,
-      ...(options.workspacePath ? { workspace_path: options.workspacePath } : {}),
+      ...(executionWorkspace ? { workspace_path: executionWorkspace } : {}),
       ...(options.sessionId ? { session_id: options.sessionId } : {}),
-      input_artifact_refs: contextPack.artifact_refs,
+      input_artifact_refs: contextArtifactRefs,
       context_policy: 'integration_v0_default',
       schema_version: SCHEMA_VERSION,
     };
@@ -370,9 +399,27 @@ export async function runIntegrationV0Flow(
       name: 'AgentExecutionRequested',
       id: agentExecutionRequestedEvent.event_id,
     });
-    agentExecutionResult = await options.agentExecutionFacade.runAgent(agentExecutionRequest, {
+    const executeAgentHandler =
+      options.executeAgentHandler ??
+      new ExecuteAgentHandler({ agentExecutionFacade: options.agentExecutionFacade });
+    agentExecutionResult = await executeAgentHandler.execute(agentExecutionRequest, {
       ...(options.signal ? { signal: options.signal } : {}),
     });
+    contextPackId = agentExecutionResult.context_pack_ref;
+    const contextEvent = orchestrator.appendEvent({
+      event_type: 'memory.context_pack_built',
+      subject_id: agentExecutionResult.context_pack_ref,
+      run_id: run.run_id,
+      task_id: task.task_id,
+      payload: {
+        role_id: agentExecutionResult.role_id,
+        agent_id: agentExecutionResult.agent_id,
+        memory_buffer_ref: agentExecutionResult.memory_buffer_ref,
+        context_pack_persisted: agentExecutionResult.diagnostics.context_pack_persisted,
+        retrieval: agentExecutionResult.diagnostics.retrieval,
+      },
+    });
+    timeline.push({ name: 'ContextPackBuilt', id: contextEvent.event_id });
     driverResult = buildDriverRunResultFromAgentExecution({
       result: agentExecutionResult,
       session_id: options.sessionId ?? driver.session_id,
@@ -387,14 +434,14 @@ export async function runIntegrationV0Flow(
         prompt,
         ...(options?.workspacePath ? { workspace_path: options.workspacePath } : {}),
         ...(options?.sessionId ? { session_id: options.sessionId } : {}),
-        context_pack_ref: contextPackRef,
+        ...(legacyContextPackRef ? { context_pack_ref: legacyContextPackRef } : {}),
         created_at: nowTimestamp(),
         schema_version: SCHEMA_VERSION,
       },
       options?.signal,
     );
   }
-  const workspaceChangedFiles =
+  let workspaceChangedFiles =
     options?.workspacePath && workspaceSnapshotBefore
       ? diffWorkspaceFiles(
           workspaceSnapshotBefore,
@@ -425,9 +472,16 @@ export async function runIntegrationV0Flow(
       run_id: run.run_id,
       task_id: task.task_id,
       payload: {
+        agent_id: agentExecutionResult.agent_id,
         role_id: agentExecutionResult.role_id,
         status: agentExecutionResult.status,
+        context_pack_ref: agentExecutionResult.context_pack_ref,
+        memory_buffer_ref: agentExecutionResult.memory_buffer_ref,
+        driver_run_result_id: agentExecutionResult.driver_run_result_id,
+        session_id: agentExecutionResult.session_id,
         artifact_refs: agentExecutionResult.artifact_refs.map((artifact) => artifact.artifact_id),
+        transcript_ref: agentExecutionResult.transcript_ref.artifact_id,
+        diagnostics: agentExecutionResult.diagnostics,
       },
     });
     timeline.push({ name: 'AgentExecutionCompleted', id: agentExecutionEvent.event_id });
@@ -568,7 +622,7 @@ export async function runIntegrationV0Flow(
   const evidencePack: EvidencePack = {
     evidence_pack_id: createId('evidence_pack'),
     task_id: task.task_id,
-    context_pack_ref: contextPack.context_pack_id,
+    ...(contextPackId ? { context_pack_ref: contextPackId } : {}),
     artifact_refs: driverResult.artifacts.map((a) => a.artifact_id),
     gate_result_refs: preGateResults.map((g) => g.gate_result_id),
     summary: 'Driver artifacts and gate results for v0 artifact selection.',
@@ -579,11 +633,17 @@ export async function runIntegrationV0Flow(
   const selectorOptions: {
     mode: SelectionMode;
     councilProvider?: CouncilProvider;
+    councilHandler?: AutonomousCouncilHandler;
   } = {
     mode: options?.enableCouncil ? 'council' : 'single_agent',
   };
   if (options?.enableCouncil) {
     selectorOptions.councilProvider = options.councilProvider ?? new MockCouncil();
+    if (options.councilProvider && options.agentExecutionFacade) {
+      selectorOptions.councilHandler = new AutonomousCouncilHandler({
+        councilProvider: options.councilProvider,
+      });
+    }
   }
   const selector = new ArtifactSelector(selectorOptions);
   const councilStartedAtMs = options?.enableCouncil ? Date.now() : undefined;
@@ -611,6 +671,7 @@ export async function runIntegrationV0Flow(
       gate_results: preGateResults,
       evidence_pack: evidencePack,
       question: task.spec,
+      ...(options?.workspacePath ? { workspace_path: options.workspacePath } : {}),
     },
     {
       ...(options?.signal ? { signal: options.signal } : {}),
@@ -735,6 +796,52 @@ export async function runIntegrationV0Flow(
     (postCouncilGateResults.length > 0 &&
       postCouncilGateResults.every((gate) => gate.decision === 'allow'));
   const combinedGateResults = [...preGateResults, ...postCouncilGateResults];
+
+  let councilDelivery: DeliverArtifactResult | undefined;
+  if (
+    selectionResult.council_result &&
+    postCouncilGatesPassed &&
+    options?.workspacePath &&
+    workspaceSnapshotBefore
+  ) {
+    const finalArtifact = selectionResult.selected_artifacts.find(
+      (artifact) => artifact.artifact_id === selectionResult.council_result?.final_artifact_ref,
+    );
+    if (!finalArtifact) {
+      throw new Error('CouncilResult final artifact is not present in the selected artifacts');
+    }
+    councilDelivery = await (
+      options.deliverArtifactHandler ?? new DeliverArtifactHandler()
+    ).execute({
+      workspace_path: options.workspacePath,
+      final_artifact: finalArtifact,
+      expected_sha256: selectionResult.council_result.final_artifact_sha256,
+    });
+    const workspaceVerificationRef = `workspace:${councilDelivery.relative_path}:sha256:${councilDelivery.sha256}`;
+    selectionResult.council_result.verification_refs = [
+      ...selectionResult.council_result.verification_refs,
+      workspaceVerificationRef,
+    ];
+    if (selectionResult.council_run_result?.result) {
+      selectionResult.council_run_result.result = selectionResult.council_result;
+    }
+    workspaceChangedFiles = diffWorkspaceFiles(
+      workspaceSnapshotBefore,
+      await snapshotWorkspaceFiles(options.workspacePath),
+    );
+    const deliveredEvent = orchestrator.appendEvent({
+      event_type: 'artifact.delivered',
+      subject_id: finalArtifact.artifact_id,
+      run_id: run.run_id,
+      task_id: task.task_id,
+      payload: {
+        relative_path: councilDelivery.relative_path,
+        sha256: councilDelivery.sha256,
+        council_quality: selectionResult.council_result.quality,
+      },
+    });
+    timeline.push({ name: 'ArtifactDelivered', id: deliveredEvent.event_id });
+  }
 
   // 13. Worktree materialization (C: Coordinator)
   const materializer =
@@ -996,6 +1103,13 @@ export async function runIntegrationV0Flow(
           ...(selectionResult.council_run_result?.output
             ? { council_output_path: councilRunOutputPaths.output_path }
             : {}),
+          ...(selectionResult.council_result
+            ? {
+                council_result_path: councilRunOutputPaths.result_path,
+                council_result: selectionResult.council_result,
+              }
+            : {}),
+          ...(councilDelivery ? { council_delivery: councilDelivery } : {}),
           council_decision_id: selectionResult.council_decision.decision_id,
           council_decision_mode: selectionResult.council_decision.decision_mode,
           council_verdict: selectionResult.council_decision.verdict,
@@ -1056,6 +1170,7 @@ export async function runIntegrationV0Flow(
           council_reviews_path: summary.council_reviews_path,
           council_synthesis_path: summary.council_synthesis_path,
           council_output_path: summary.council_output_path,
+          council_result_path: summary.council_result_path,
           council_verdict: summary.council_verdict,
           council_decision_mode: summary.council_decision_mode,
         }

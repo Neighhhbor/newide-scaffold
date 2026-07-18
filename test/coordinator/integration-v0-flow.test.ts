@@ -670,6 +670,7 @@ describe('runIntegrationV0Flow', () => {
         requests.push(input);
         return {
           agent_run_id: 'agent_run_001',
+          agent_id: input.role_id,
           role_id: input.role_id,
           context_pack_ref: 'context_pack_001',
           driver_run_result_id: 'driver_result_from_agent_001',
@@ -692,6 +693,7 @@ describe('runIntegrationV0Flow', () => {
             duration_ms: 42,
           },
           status: 'completed',
+          memory_buffer_ref: 'memory_buffer_001',
           created_at: new Date().toISOString(),
           schema_version: SCHEMA_VERSION,
         };
@@ -768,6 +770,7 @@ describe('runIntegrationV0Flow', () => {
       async runAgent(input) {
         return {
           agent_run_id: 'agent_run_response_only',
+          agent_id: input.role_id,
           role_id: input.role_id,
           context_pack_ref: 'context_pack_response_only',
           driver_run_result_id: 'driver_result_response_only',
@@ -778,6 +781,7 @@ describe('runIntegrationV0Flow', () => {
           tool_events: [],
           diagnostics: { driver_id: 'agent-driver', duration_ms: 12 },
           status: 'completed',
+          memory_buffer_ref: 'memory_buffer_response_only',
           created_at: new Date().toISOString(),
           schema_version: SCHEMA_VERSION,
         };
@@ -799,6 +803,7 @@ describe('runIntegrationV0Flow', () => {
       async runAgent(input) {
         return {
           agent_run_id: 'agent_run_metadata_only',
+          agent_id: input.role_id,
           role_id: input.role_id,
           context_pack_ref: 'context_pack_metadata_only',
           driver_run_result_id: 'driver_result_metadata_only',
@@ -809,6 +814,7 @@ describe('runIntegrationV0Flow', () => {
           tool_events: [],
           diagnostics: { driver_id: 'agent-driver', duration_ms: 12 },
           status: 'completed',
+          memory_buffer_ref: 'memory_buffer_metadata_only',
           created_at: new Date().toISOString(),
           schema_version: SCHEMA_VERSION,
         };
@@ -1086,6 +1092,7 @@ describe('runIntegrationV0Flow', () => {
         await fs.writeFile(path.join(workspacePath, 'style.css'), 'main { display: grid; }');
         return {
           agent_run_id: 'agent_run_transport_failed_after_write',
+          agent_id: input.role_id,
           role_id: input.role_id,
           context_pack_ref: 'context_pack_transport_failed_after_write',
           driver_run_result_id: 'driver_result_transport_failed_after_write',
@@ -1100,6 +1107,7 @@ describe('runIntegrationV0Flow', () => {
             driver_error_code: 'EXTERNAL_DRIVER_TRANSPORT_ERROR',
           },
           status: 'failed',
+          memory_buffer_ref: 'memory_buffer_transport_failed_after_write',
           created_at: new Date().toISOString(),
           schema_version: SCHEMA_VERSION,
         };

@@ -8,7 +8,7 @@ import type { Checkpoint, Message, MessageId, SchemaVersion, Task, Timestamp } f
 import type { ArtifactOutput } from './artifact-output';
 import type { RunResultStatus, IntegrationRunOutputPaths } from './run-result';
 import type { SelectionMode } from './artifact-finalizer';
-import type { CouncilDecision, CouncilRunResult } from '../council';
+import type { CouncilDecision, CouncilResult, CouncilRunResult } from '../council';
 import type { DriverToolEvent } from '../driver/contract';
 
 export type FrontendStage = 'executing' | 'council' | 'delivery';
@@ -41,6 +41,8 @@ export interface FrontendRunSnapshotSummary {
   council_reviews_path?: string;
   council_synthesis_path?: string;
   council_output_path?: string;
+  council_result_path?: string;
+  council_result?: CouncilResult;
   council_decision_id?: string;
   council_decision_mode?: CouncilDecision['decision_mode'];
   council_verdict?: CouncilDecision['verdict'];
@@ -134,6 +136,7 @@ export interface FrontendRunSnapshot {
     reviews_path?: string;
     synthesis_path?: string;
     output_path?: string;
+    result_path?: string;
     decision_id: string;
     decision_mode: CouncilDecision['decision_mode'];
     verdict: CouncilDecision['verdict'];
@@ -146,6 +149,7 @@ export interface FrontendRunSnapshot {
     reviews: CouncilRunResult['reviews'];
     synthesis?: CouncilRunResult['synthesis'];
     output?: CouncilRunResult['output'];
+    result?: CouncilResult;
   };
   links: Omit<IntegrationRunOutputPaths, 'run_dir'>;
 }
@@ -229,6 +233,9 @@ export function buildFrontendRunSnapshot(
             ...(input.summary.council_output_path
               ? { output_path: input.summary.council_output_path }
               : {}),
+            ...(input.summary.council_result_path
+              ? { result_path: input.summary.council_result_path }
+              : {}),
             decision_id: input.summary.council_decision_id,
             decision_mode: input.summary.council_decision_mode,
             verdict: input.summary.council_verdict,
@@ -251,6 +258,7 @@ export function buildFrontendRunSnapshot(
             ...(input.council_run_result?.output
               ? { output: input.council_run_result.output }
               : {}),
+            ...(input.summary.council_result ? { result: input.summary.council_result } : {}),
           },
         }
       : {}),
