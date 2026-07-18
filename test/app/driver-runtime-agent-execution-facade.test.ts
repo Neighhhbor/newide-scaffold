@@ -81,6 +81,29 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
     expect(driver.prompts).toHaveLength(0);
   });
 
+  it('wakes a sleeping mailbox recipient without dispatching a Driver task', async () => {
+    const driver = new CapturingDriver('succeeded');
+    const { facade } = createFacade(driver);
+
+    await facade.wakeAgent({
+      contract_version: 'agent-mailbox-wake.v1',
+      message_id: 'message_wake',
+      delivery_id: 'delivery_wake',
+      thread_id: 'thread_wake',
+      recipient_role_id: 'role_mailbox_recipient',
+      schema_version: SCHEMA_VERSION,
+    });
+
+    const batch = await facade.collectCompetitionClaims({
+      task_id: 'task_after_wake',
+      spec: 'Confirm the recipient is loaded into the B runtime.',
+    });
+    expect(batch.claims).toEqual([
+      expect.objectContaining({ role_id: 'role_mailbox_recipient' }),
+    ]);
+    expect(driver.prompts).toHaveLength(0);
+  });
+
   it('resolves a relative workspace before crossing the B to A process boundary', async () => {
     const driver = new CapturingDriver('succeeded');
     const { facade } = createFacade(driver);

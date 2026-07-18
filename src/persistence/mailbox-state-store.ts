@@ -85,6 +85,7 @@ export interface MailboxStateStore {
     deliveryId: string,
     input: { attempted_at: Timestamp; error?: PersistedMailboxError },
   ): PersistedMailboxDelivery;
+  getMailboxEnvelope(deliveryId: string): PersistedMailboxEnvelope | undefined;
   listMailboxThread(threadId: string): PersistedMailboxMessage[];
   listReplayableMailboxDeliveries(): PersistedMailboxEnvelope[];
 }

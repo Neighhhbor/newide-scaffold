@@ -288,6 +288,13 @@ export class SqliteCoordinationStore implements CoordinationStateStore, MailboxS
     return this.requireMailboxDelivery(deliveryId);
   }
 
+  getMailboxEnvelope(deliveryId: string): PersistedMailboxEnvelope | undefined {
+    const row = this.database
+      .prepare('SELECT delivery_id FROM deliveries WHERE delivery_id = ?')
+      .get(deliveryId);
+    return row ? this.readMailboxEnvelope(deliveryId) : undefined;
+  }
+
   listMailboxThread(threadId: string): PersistedMailboxMessage[] {
     return this.database
       .prepare('SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at, message_id')

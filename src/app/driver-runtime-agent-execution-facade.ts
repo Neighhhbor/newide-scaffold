@@ -24,6 +24,10 @@ import type {
   CompetitionClaimBatch,
 } from '../memory/competition-types';
 import type { AgentCompetitionQuery } from '../memory/ports/agent-competition-query';
+import type {
+  AgentMailboxWakePort,
+  AgentMailboxWakeRequestV1,
+} from '../protocol/agent-mailbox-wake';
 import type { DriverRunResult, DriverRunStatus, DriverRuntimeHandle } from '../driver/contract';
 import { createDriverRuntimeInvoker } from '../driver/driver-runtime-invoker';
 import type {
@@ -59,7 +63,7 @@ const AGENT_SYSTEM_PROMPT = [
 ].join('\n');
 
 export class DriverRuntimeAgentExecutionFacade
-  implements AgentExecutionFacade, AgentCompetitionQuery
+  implements AgentExecutionFacade, AgentCompetitionQuery, AgentMailboxWakePort
 {
   private readonly manager: Promise<AgentManager>;
   private readonly roleReady = new Map<string, Promise<AgentManager>>();
@@ -88,6 +92,12 @@ export class DriverRuntimeAgentExecutionFacade
 
   async ensureAgent(agentId: string): Promise<void> {
     await this.ensureRole(agentId);
+  }
+
+  async wakeAgent(request: AgentMailboxWakeRequestV1): Promise<void> {
+    const agentId = request.recipient_agent_id ?? request.recipient_role_id;
+    if (!agentId) throw new Error('Mailbox wake requires an Agent or role recipient');
+    await this.ensureAgent(agentId);
   }
 
   async collectCompetitionClaims(
