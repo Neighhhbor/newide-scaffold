@@ -2,7 +2,7 @@
  * 真实链路验收脚本（不注入 fake B LLM，不使用 fake ACP runner）。
  *
  * 用真实 production composition（createProductionBackendService 经 `pnpm backend:rpc`
- * 子进程）执行三个场景：council / subagent / restart。
+ * 子进程）执行四个场景：market / council / subagent / restart。
  * 结果打印到控制台，并留档到 .newide/acceptance/<timestamp>/。
  *
  * 用法：
@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
 
 interface JsonRpcMessage {
   jsonrpc: '2.0';
@@ -23,7 +24,7 @@ interface JsonRpcMessage {
   error?: { code: number; message: string; data?: unknown };
 }
 
-type Scenario = 'council' | 'subagent' | 'restart';
+type Scenario = 'market' | 'council' | 'subagent' | 'restart';
 
 interface CliOptions {
   workspace: string;
@@ -60,11 +61,13 @@ for (const scenario of options.scenarios) {
   log('');
   log(`=== scenario: ${scenario} ===`);
   const report =
-    scenario === 'council'
-      ? await runCouncilScenario()
-      : scenario === 'subagent'
-        ? await runSubagentScenario()
-        : await runRestartScenario();
+    scenario === 'market'
+      ? await runMarketScenario()
+      : scenario === 'council'
+        ? await runCouncilScenario()
+        : scenario === 'subagent'
+          ? await runSubagentScenario()
+          : await runRestartScenario();
   reports.push(report);
   await fs.writeFile(
     path.join(acceptanceDir, `${scenario}.json`),
@@ -100,6 +103,124 @@ if (reports.some((report) => report.status === 'failed')) {
 // ---------------------------------------------------------------------------
 // Scenarios
 // ---------------------------------------------------------------------------
+
+async function runMarketScenario(): Promise<ScenarioReport> {
+  const errors: string[] = [];
+  const details: Record<string, unknown> = {};
+  const backend = await startBackend('market');
+  try {
+    const before = await snapshotWorkspaceFiles();
+    const created = await backend.request<{ run_id: string; task_id: string }>('run.create', {
+      prompt: [
+        '在工作区创建 market-probe.ts。',
+        '导出函数 marketProbe(): string，且固定返回 MARKET_DISPATCH_OK。',
+        '必须真实写入该文件。',
+      ].join(''),
+      mode: 'single_agent',
+      workspace_path: options.workspace,
+    });
+    log(`market run created: ${created.run_id}`);
+    await backend.subscribeAndLog(created.run_id);
+    const snapshot = await backend.waitForTerminal(created.run_id, runTimeoutMs);
+    const after = await snapshotWorkspaceFiles();
+    const workspaceChanges = diffWorkspace(before, after);
+    const market = asRecord(snapshot.market);
+    const timeline = Array.isArray(snapshot.timeline) ? snapshot.timeline : [];
+    const marketEvent = timeline.map(asRecord).find((event) => event?.type === 'market.selected');
+    const executionRequested = timeline
+      .map(asRecord)
+      .find((event) => event?.type === 'agent.execution_requested');
+    const agentRuns = Array.isArray(snapshot.agent_runs) ? snapshot.agent_runs : [];
+    const executionCompleted = agentRuns
+      .map(asRecord)
+      .find((event) => event?.type === 'agent.execution_completed');
+    const ledgerEvidence = await readMarketEvidence(market?.ledger_ref);
+    const auditEvidence = await readMarketEvidence(market?.audit_ref);
+    const ledger = asRecord(ledgerEvidence?.value);
+    const audit = asRecord(auditEvidence?.value);
+    const finalOutput = asRecord(snapshot.final_output) ?? {};
+
+    details.run_id = created.run_id;
+    details.task_id = created.task_id;
+    details.status = snapshot.status;
+    details.market = market ?? null;
+    details.market_event = marketEvent ?? null;
+    details.execution_requested = executionRequested ?? null;
+    details.execution_completed = executionCompleted ?? null;
+    details.ledger = ledger ?? null;
+    details.audit = audit ?? null;
+    details.market_files = {
+      ledger: ledgerEvidence?.path ?? null,
+      audit: auditEvidence?.path ?? null,
+    };
+    details.response = finalOutput.response ?? '';
+    details.changed_files = finalOutput.changed_files ?? [];
+    details.workspace_changes = workspaceChanges;
+    details.errors_from_run = snapshot.errors ?? [];
+
+    if (snapshot.status !== 'completed') {
+      errors.push(`market run ended as ${String(snapshot.status)}`);
+    }
+    if (!market) {
+      errors.push('run.getSnapshot did not expose market evidence');
+    } else {
+      if (market.seed !== created.run_id) errors.push('market seed does not equal run_id');
+      if (market.policy_version !== 'market-v0') errors.push('unexpected market policy version');
+      if (ledger?.winner_agent_id !== market.winner_agent_id) {
+        errors.push('BidLedger winner does not match snapshot market winner');
+      }
+      if (audit?.winner_agent_id !== market.winner_agent_id) {
+        errors.push('MarketAudit winner does not match snapshot market winner');
+      }
+      if (!Array.isArray(ledger?.bids) || ledger.bids.length === 0) {
+        errors.push('BidLedger contains no bids');
+      }
+      if (!Array.isArray(audit?.probabilities) || audit.probabilities.length === 0) {
+        errors.push('MarketAudit contains no selection probabilities');
+      }
+      const requestPayload = asRecord(executionRequested?.payload);
+      if (requestPayload?.role_id !== market.winner_agent_id) {
+        errors.push('Market winner did not drive B execution dispatch');
+      }
+      if (
+        typeof executionCompleted?.agent_id !== 'string' ||
+        !executionCompleted.agent_id.startsWith(`${String(market.winner_agent_id)}@`)
+      ) {
+        errors.push('completed B Agent identity does not match Market winner');
+      }
+    }
+    if (!marketEvent) errors.push('market.selected event is missing');
+    if (!ledgerEvidence) errors.push('BidLedger file reference is unreadable');
+    if (!auditEvidence) errors.push('MarketAudit file reference is unreadable');
+    if (!hasBExecutionEvidence(executionCompleted)) {
+      errors.push('B execution evidence is incomplete');
+    }
+    const probeFile = workspaceChanges.find((file) => file.endsWith('market-probe.ts'));
+    details.probe_file = probeFile ?? null;
+    if (!probeFile) {
+      errors.push('market-probe.ts was not materialized in the user workspace');
+    } else {
+      details.probe_file_content = await fs.readFile(
+        path.join(options.workspace, probeFile),
+        'utf-8',
+      );
+    }
+
+    log(`market winner: ${String(market?.winner_agent_id)}`);
+    log(`market bids: ${String(Array.isArray(ledger?.bids) ? ledger.bids.length : 0)}`);
+    log(`workspace changes: ${workspaceChanges.join(', ') || '(none)'}`);
+  } catch (error) {
+    errors.push(toMessage(error));
+  } finally {
+    await backend.close();
+  }
+  return {
+    scenario: 'market',
+    status: errors.length === 0 ? 'passed' : 'failed',
+    details,
+    errors,
+  };
+}
 
 async function runCouncilScenario(): Promise<ScenarioReport> {
   const errors: string[] = [];
@@ -193,9 +314,7 @@ async function runCouncilScenario(): Promise<ScenarioReport> {
     const agentRuns = Array.isArray(snapshot.agent_runs) ? snapshot.agent_runs : [];
     const mainAgentRun = agentRuns.find((value) => {
       const record = asRecord(value);
-      return (
-        record?.type === 'agent.execution_completed' && record.role_id === 'role_ts_engineer'
-      );
+      return record?.type === 'agent.execution_completed' && record.role_id === 'role_ts_engineer';
     });
     details.main_agent_evidence = mainAgentRun ?? null;
     if (!hasBExecutionEvidence(mainAgentRun)) {
@@ -541,7 +660,7 @@ async function startBackend(label: string): Promise<BackendClient> {
         if (!type || seen.has(String(event?.event_id))) return;
         seen.add(String(event?.event_id));
         if (
-          /^(run\.|council\.|driver\.run_result|agent\.execution|gate\.result|worktree\.)/.test(
+          /^(run\.|market\.|council\.|driver\.run_result|agent\.execution|gate\.result|worktree\.)/.test(
             type,
           )
         ) {
@@ -632,6 +751,18 @@ async function readJsonIfExists(filePath: string): Promise<unknown> {
   }
 }
 
+async function readMarketEvidence(
+  ref: unknown,
+): Promise<{ path: string; value: unknown } | undefined> {
+  if (typeof ref !== 'string' || !ref.startsWith('file:')) return undefined;
+  try {
+    const filePath = fileURLToPath(ref);
+    return { path: filePath, value: JSON.parse(await fs.readFile(filePath, 'utf-8')) };
+  } catch {
+    return undefined;
+  }
+}
+
 function parseCli(args: string[]): CliOptions {
   const workspaceIndex = args.indexOf('--workspace');
   const workspace = workspaceIndex >= 0 ? args[workspaceIndex + 1] : undefined;
@@ -642,8 +773,11 @@ function parseCli(args: string[]): CliOptions {
   const scenarioValue = scenarioIndex >= 0 ? (args[scenarioIndex + 1] ?? 'all') : 'all';
   const scenarios: Scenario[] =
     scenarioValue === 'all'
-      ? ['council', 'subagent', 'restart']
-      : scenarioValue === 'council' || scenarioValue === 'subagent' || scenarioValue === 'restart'
+      ? ['market', 'council', 'subagent', 'restart']
+      : scenarioValue === 'market' ||
+          scenarioValue === 'council' ||
+          scenarioValue === 'subagent' ||
+          scenarioValue === 'restart'
         ? [scenarioValue]
         : (() => {
             throw new Error(`Invalid --scenario value: ${scenarioValue}`);
