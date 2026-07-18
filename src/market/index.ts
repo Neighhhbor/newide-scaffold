@@ -11,3 +11,9 @@ export {
   type AgentProjectionSource,
   type BAgentProjectionAdapterOptions,
 } from './b-agent-projection-adapter';
+export {
+  FileMarketEvidenceStore,
+  type FileMarketEvidenceStoreOptions,
+  type MarketEvidenceRefs,
+  type MarketEvidenceStore,
+} from './market-evidence-store';
