@@ -4,7 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import type { CoordinatorRunRequest } from '../../src/coordinator/coordinator-runner';
 import type { IntegrationV0Result } from '../../src/coordinator/integration-v0-flow';
-import { NewideBackendService, TaskNotFoundError } from '../../src/app/newide-backend-service';
+import {
+  NewideBackendService,
+  TaskAlreadyRunningError,
+  TaskNotFoundError,
+} from '../../src/app/newide-backend-service';
 import { InMemoryRunRegistry } from '../../src/app/run-registry';
 import { FileRunRequestStore } from '../../src/app/run-request-store';
 
@@ -54,6 +58,9 @@ describe('NewideBackendService Task-first view', () => {
       });
       await expect(service.getTask('task_live')).resolves.toEqual(created);
       await expect(service.listTasks()).resolves.toEqual({ tasks: [created] });
+      await expect(service.startCouncil('task_live')).rejects.toBeInstanceOf(
+        TaskAlreadyRunningError,
+      );
       await expect(requestStore.load('run_live')).resolves.toMatchObject({
         task_id: 'task_live',
         task_request: received?.task_request,
@@ -142,8 +149,14 @@ describe('NewideBackendService Task-first view', () => {
       }),
       'utf-8',
     );
-    const service = serviceWith(requestStore, new InMemoryRunRegistry(), async () => {
-      throw new Error('Historical projection must not start a runner');
+    let councilRequest: CoordinatorRunRequest | undefined;
+    const service = serviceWith(requestStore, new InMemoryRunRegistry(), async (request) => {
+      councilRequest = request;
+      request.onRunCreated?.({
+        run_id: 'run_council',
+        task_id: request.task_id ?? 'wrong_task',
+      });
+      return new Promise<IntegrationV0Result>(() => undefined);
     });
 
     try {
@@ -157,6 +170,35 @@ describe('NewideBackendService Task-first view', () => {
           changed_files: ['result.ts'],
           response: 'Done.',
         },
+      });
+
+      const council = await service.startCouncil('task_done');
+      expect(council.task.task_id).toBe('task_done');
+      expect(council.task.status).toBe('running');
+      expect(council.current_run).toMatchObject({
+        run_id: 'run_council',
+        task_id: 'task_done',
+        mode: 'council',
+        status: 'running',
+      });
+      expect(council.run_history).toEqual([
+        expect.objectContaining({ run_id: 'run_done', status: 'completed' }),
+      ]);
+      expect(councilRequest).toMatchObject({
+        task_id: 'task_done',
+        mode: 'council',
+        workspace_path: process.cwd(),
+        task_request: {
+          spec: 'Durable task',
+          completion_criteria: ['Result survives restart'],
+        },
+      });
+      await expect(requestStore.load('run_council')).resolves.toMatchObject({
+        task_id: 'task_done',
+        mode: 'council',
+      });
+      await expect(service.listTasks()).resolves.toMatchObject({
+        tasks: [{ task: { task_id: 'task_done' } }],
       });
     } finally {
       await rm(runsRoot, { recursive: true, force: true });

@@ -40,6 +40,7 @@ export interface RunCreateParams {
   prompt: string;
   workspace_path?: string;
   session_id?: string;
+  task_id?: string;
   task_request?: TaskCreateRequest;
   mode?: AppRunMode;
   project_id?: string;
@@ -91,6 +92,13 @@ export class TaskNotRunningError extends Error {
   }
 }
 
+export class TaskAlreadyRunningError extends Error {
+  constructor(readonly taskId: string) {
+    super(`Task ${taskId} already has a running run`);
+    this.name = 'TaskAlreadyRunningError';
+  }
+}
+
 export class NewideBackendService {
   private readonly terminalRuns = new Map<string, Promise<void>>();
 
@@ -139,6 +147,25 @@ export class NewideBackendService {
       .find((run) => run.task_id === taskId && run.status === 'running');
     if (!current) throw new TaskNotRunningError(taskId);
     await this.cancelRun(current.run_id);
+    return this.getTask(taskId);
+  }
+
+  async startCouncil(taskId: string): Promise<TaskSnapshot> {
+    const task = await this.getTask(taskId);
+    if (task.current_run) throw new TaskAlreadyRunningError(taskId);
+    const history = await this.requestStore.listHistory();
+    const launch = history.find(
+      (entry) => entry.task_id === taskId && entry.task_request && entry.workspace_path,
+    );
+    if (!launch?.task_request || !launch.workspace_path) throw new TaskNotFoundError(taskId);
+    await this.startRun({
+      prompt: launch.task_request.spec,
+      task_id: taskId,
+      task_request: launch.task_request,
+      workspace_path: launch.workspace_path,
+      mode: 'council',
+      ...(launch.session_id ? { session_id: launch.session_id } : {}),
+    });
     return this.getTask(taskId);
   }
 
@@ -210,6 +237,7 @@ export class NewideBackendService {
           mode,
           workspace_path: workspacePath,
           ...(params.session_id ? { session_id: params.session_id } : {}),
+          ...(params.task_id ? { task_id: params.task_id } : {}),
           task_request: taskRequest,
           telemetry,
           signal: controller.signal,
