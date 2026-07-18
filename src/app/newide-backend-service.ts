@@ -12,6 +12,8 @@ import {
   IntegrationV0CoordinatorRunner,
   type CoordinatorRunner,
 } from '../coordinator/coordinator-runner';
+import { createDefaultTaskRequest } from '../coordinator/task-request';
+import type { TaskCreateRequest } from '../core';
 import type { TelemetryRecord, TelemetrySink } from '../telemetry/telemetry-sink';
 import {
   InMemoryRunRegistry,
@@ -37,6 +39,7 @@ export interface RunCreateParams {
   prompt: string;
   workspace_path?: string;
   session_id?: string;
+  task_request?: TaskCreateRequest;
   mode?: AppRunMode;
   project_id?: string;
   client_task_id?: string;
@@ -100,6 +103,7 @@ export class NewideBackendService {
         workspace_path: request.workspace_path,
         mode: request.mode,
         ...(sessionId ? { session_id: sessionId } : {}),
+        ...(request.task_request ? { task_request: request.task_request } : {}),
         ...(request.project_id ? { project_id: request.project_id } : {}),
         ...(request.client_task_id ? { client_task_id: request.client_task_id } : {}),
         ...(request.title ? { title: request.title } : {}),
@@ -115,6 +119,7 @@ export class NewideBackendService {
   ): Promise<RunCreateResult> {
     const mode = params.mode ?? 'single_agent';
     const workspacePath = normalizeWorkspacePath(params.workspace_path ?? process.cwd());
+    const taskRequest = params.task_request ?? createDefaultTaskRequest(params.prompt);
     const controller = new AbortController();
     return new Promise<RunCreateResult>((resolve, reject) => {
       let resolveTerminal!: () => void;
@@ -141,6 +146,7 @@ export class NewideBackendService {
           mode,
           workspace_path: workspacePath,
           ...(params.session_id ? { session_id: params.session_id } : {}),
+          task_request: taskRequest,
           telemetry,
           signal: controller.signal,
           onEvent: (event) => {
@@ -168,6 +174,7 @@ export class NewideBackendService {
                 prompt: params.prompt,
                 workspace_path: workspacePath,
                 mode,
+                task_request: taskRequest,
                 ...(params.session_id ? { session_id: params.session_id } : {}),
                 ...(params.project_id ? { project_id: params.project_id } : {}),
                 ...(params.client_task_id ? { client_task_id: params.client_task_id } : {}),

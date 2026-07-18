@@ -3,6 +3,7 @@ import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { IntegrationV0Result } from '../../src/coordinator/integration-v0-flow';
+import type { TaskCreateRequest } from '../../src/core';
 import { NewideBackendService } from '../../src/app/newide-backend-service';
 import { InMemoryRunRegistry } from '../../src/app/run-registry';
 import { FileRunRequestStore, RunRequestNotFoundError } from '../../src/app/run-request-store';
@@ -19,6 +20,11 @@ describe('FileRunRequestStore', () => {
         workspace_path: '/tmp/workspace-a',
         mode: 'single_agent',
         session_id: 'session_created_with',
+        task_request: {
+          spec: 'Finish the durable task',
+          completion_criteria: ['Durable task is complete'],
+          risk_level: 'medium',
+        },
       });
       await writeFile(
         path.join(runsRoot, 'run_done', 'frontend-snapshot.json'),
@@ -49,6 +55,11 @@ describe('FileRunRequestStore', () => {
         ]),
       );
       expect(history).toHaveLength(2);
+      expect(history.find((entry) => entry.run_id === 'run_done')?.task_request).toEqual({
+        spec: 'Finish the durable task',
+        completion_criteria: ['Durable task is complete'],
+        risk_level: 'medium',
+      });
       await expect(store.readTerminalSessionId('run_done')).resolves.toBe('session_terminal');
       await expect(store.readTerminalSessionId('run_interrupted')).resolves.toBeUndefined();
       await expect(store.load('run_missing')).rejects.toBeInstanceOf(RunRequestNotFoundError);
@@ -62,9 +73,11 @@ describe('NewideBackendService run history', () => {
   it('writes request.json on create and hides live runs from run.list', async () => {
     const runsRoot = await mkdtemp(path.join(os.tmpdir(), 'run-history-service-'));
     const requestStore = new FileRunRequestStore(runsRoot);
+    let receivedTaskRequest: TaskCreateRequest | undefined;
     const service = new NewideBackendService(
       {
         run: async (request) => {
+          receivedTaskRequest = request.task_request;
           request.onRunCreated?.({ run_id: 'run_live', task_id: 'task_live' });
           return new Promise<IntegrationV0Result>(() => undefined);
         },
@@ -99,6 +112,14 @@ describe('NewideBackendService run history', () => {
         client_task_id: 'client_task_1',
         schema_version: 'v0',
       });
+      expect(persisted.task_request).toEqual({
+        spec: 'Persist me',
+        role_id: 'role_ts_engineer',
+        risk_level: 'low',
+        affected_paths: ['src/**'],
+        completion_criteria: ['integration v0 flow completes successfully'],
+      });
+      expect(receivedTaskRequest).toEqual(persisted.task_request);
       expect(persisted.workspace_path).toBeTruthy();
       expect(persisted.created_at).toBeTruthy();
 
@@ -115,7 +136,12 @@ describe('NewideBackendService run restart', () => {
   it('restarts a persisted run as a new execution reusing the terminal session', async () => {
     const runsRoot = await mkdtemp(path.join(os.tmpdir(), 'run-restart-service-'));
     const requestStore = new FileRunRequestStore(runsRoot);
-    const received: { prompt: string; mode: string; session_id?: string }[] = [];
+    const received: {
+      prompt: string;
+      mode: string;
+      session_id?: string;
+      task_request?: TaskCreateRequest;
+    }[] = [];
     let nextRun = 1;
     const service = new NewideBackendService(
       {
@@ -124,6 +150,7 @@ describe('NewideBackendService run restart', () => {
             prompt: request.prompt,
             mode: request.mode,
             ...(request.session_id ? { session_id: request.session_id } : {}),
+            ...(request.task_request ? { task_request: request.task_request } : {}),
           });
           const sequence = nextRun;
           nextRun += 1;
@@ -145,7 +172,17 @@ describe('NewideBackendService run restart', () => {
     );
 
     try {
-      await service.createRun({ prompt: 'Original task', workspace_path: process.cwd() });
+      await service.createRun({
+        prompt: 'Original task',
+        workspace_path: process.cwd(),
+        task_request: {
+          spec: 'Original durable task definition',
+          role_id: 'role_backend_engineer',
+          risk_level: 'high',
+          affected_paths: ['src/app/**'],
+          completion_criteria: ['Original acceptance criterion remains unchanged'],
+        },
+      });
       await requestPersisted(runsRoot, 'run_1');
       // 模拟上个进程留下的终态快照：restart 必须复用其中的 session_id。
       await writeFile(
@@ -168,6 +205,13 @@ describe('NewideBackendService run restart', () => {
         prompt: 'Original task',
         mode: 'single_agent',
         session_id: 'session_from_terminal',
+        task_request: {
+          spec: 'Original durable task definition',
+          role_id: 'role_backend_engineer',
+          risk_level: 'high',
+          affected_paths: ['src/app/**'],
+          completion_criteria: ['Original acceptance criterion remains unchanged'],
+        },
       });
       // 新 run 的 request.json 记录血缘；原 run 的 request.json 保持不变。
       await requestPersisted(runsRoot, 'run_2');

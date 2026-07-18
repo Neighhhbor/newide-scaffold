@@ -7,7 +7,12 @@
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { SCHEMA_VERSION, type SchemaVersion, type Timestamp } from '../core';
+import {
+  SCHEMA_VERSION,
+  type SchemaVersion,
+  type TaskCreateRequest,
+  type Timestamp,
+} from '../core';
 import type { AppRunMode } from './run-registry';
 
 export interface PersistedRunRequest {
@@ -17,6 +22,7 @@ export interface PersistedRunRequest {
   prompt: string;
   workspace_path: string;
   session_id?: string;
+  task_request?: TaskCreateRequest;
   mode: AppRunMode;
   project_id?: string;
   client_task_id?: string;
@@ -36,6 +42,7 @@ export interface RunHistoryEntry {
   prompt?: string;
   workspace_path?: string;
   session_id?: string;
+  task_request?: TaskCreateRequest;
   restarted_from_run_id?: string;
   created_at?: Timestamp;
   error?: { code: string; message: string };
@@ -133,6 +140,7 @@ export class FileRunRequestStore implements RunRequestStore {
             workspace_path: request.workspace_path,
             created_at: request.created_at,
             ...(request.session_id ? { session_id: request.session_id } : {}),
+            ...(request.task_request ? { task_request: request.task_request } : {}),
             ...(request.restarted_from_run_id
               ? { restarted_from_run_id: request.restarted_from_run_id }
               : {}),
@@ -218,8 +226,30 @@ function isPersistedRunRequest(value: unknown): value is PersistedRunRequest {
     typeof record.run_id === 'string' &&
     typeof record.prompt === 'string' &&
     typeof record.workspace_path === 'string' &&
+    (record.task_request === undefined || isTaskCreateRequest(record.task_request)) &&
     asRunMode(record.mode) !== undefined
   );
+}
+
+function isTaskCreateRequest(value: unknown): value is TaskCreateRequest {
+  const record = asRecord(value);
+  return (
+    record !== undefined &&
+    typeof record.spec === 'string' &&
+    Array.isArray(record.completion_criteria) &&
+    record.completion_criteria.every((criterion) => typeof criterion === 'string') &&
+    (record.role_id === undefined || typeof record.role_id === 'string') &&
+    (record.parent_task_id === undefined || typeof record.parent_task_id === 'string') &&
+    (record.deps === undefined || isStringArray(record.deps)) &&
+    (record.risk_level === undefined ||
+      ['low', 'medium', 'high', 'critical'].includes(String(record.risk_level))) &&
+    (record.affected_paths === undefined || isStringArray(record.affected_paths)) &&
+    (record.budget === undefined || asRecord(record.budget) !== undefined)
+  );
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
 function asTerminalStatus(value: unknown): 'completed' | 'failed' | 'cancelled' | undefined {
