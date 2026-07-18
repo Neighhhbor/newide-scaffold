@@ -7,13 +7,12 @@ import type { IntegrationV0Result } from '../coordinator/integration-v0-flow';
 import { realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { CouncilRoleExecutionError } from '../council';
-import type { Event } from '../core';
+import type { Event, TaskCreateRequest } from '../core';
 import {
   IntegrationV0CoordinatorRunner,
   type CoordinatorRunner,
 } from '../coordinator/coordinator-runner';
 import { createDefaultTaskRequest } from '../coordinator/task-request';
-import type { TaskCreateRequest } from '../core';
 import type { TelemetryRecord, TelemetrySink } from '../telemetry/telemetry-sink';
 import {
   InMemoryRunRegistry,
@@ -34,6 +33,8 @@ import {
 } from './run-request-store';
 import { projectRunSnapshot } from './run-snapshot-projector';
 import type { RunSnapshot } from '../protocol/run-snapshot';
+import { projectTaskSnapshot, type TaskRunFact } from './task-snapshot-projector';
+import type { TaskSnapshot } from '../protocol/task-snapshot';
 
 export interface RunCreateParams {
   prompt: string;
@@ -63,6 +64,33 @@ export interface RunRestartResult {
   status: 'running';
 }
 
+export interface TaskCreateParams extends TaskCreateRequest {
+  workspace_path?: string;
+  session_id?: string;
+  mode?: AppRunMode;
+  project_id?: string;
+  client_task_id?: string;
+  title?: string;
+}
+
+export interface TaskListResult {
+  tasks: TaskSnapshot[];
+}
+
+export class TaskNotFoundError extends Error {
+  constructor(readonly taskId: string) {
+    super(`Task ${taskId} was not found`);
+    this.name = 'TaskNotFoundError';
+  }
+}
+
+export class TaskNotRunningError extends Error {
+  constructor(readonly taskId: string) {
+    super(`Task ${taskId} has no running run`);
+    this.name = 'TaskNotRunningError';
+  }
+}
+
 export class NewideBackendService {
   private readonly terminalRuns = new Map<string, Promise<void>>();
 
@@ -76,6 +104,42 @@ export class NewideBackendService {
 
   createRun(params: RunCreateParams): Promise<RunCreateResult> {
     return this.startRun(params);
+  }
+
+  async createTask(params: TaskCreateParams): Promise<TaskSnapshot> {
+    const taskRequest = toTaskCreateRequest(params);
+    const created = await this.startRun({
+      prompt: taskRequest.spec,
+      task_request: taskRequest,
+      ...(params.workspace_path ? { workspace_path: params.workspace_path } : {}),
+      ...(params.session_id ? { session_id: params.session_id } : {}),
+      ...(params.mode ? { mode: params.mode } : {}),
+      ...(params.project_id ? { project_id: params.project_id } : {}),
+      ...(params.client_task_id ? { client_task_id: params.client_task_id } : {}),
+      ...(params.title ? { title: params.title } : {}),
+    });
+    return this.getTask(created.task_id);
+  }
+
+  async getTask(taskId: string): Promise<TaskSnapshot> {
+    const tasks = await this.collectTaskSnapshots();
+    const task = tasks.find((candidate) => candidate.task.task_id === taskId);
+    if (!task) throw new TaskNotFoundError(taskId);
+    return task;
+  }
+
+  async listTasks(): Promise<TaskListResult> {
+    return { tasks: await this.collectTaskSnapshots() };
+  }
+
+  async cancelTask(taskId: string): Promise<TaskSnapshot> {
+    await this.getTask(taskId);
+    const current = this.registry
+      .listSnapshots()
+      .find((run) => run.task_id === taskId && run.status === 'running');
+    if (!current) throw new TaskNotRunningError(taskId);
+    await this.cancelRun(current.run_id);
+    return this.getTask(taskId);
   }
 
   async listRuns(): Promise<RunListResult> {
@@ -181,8 +245,11 @@ export class NewideBackendService {
                 ...(params.title ? { title: params.title } : {}),
                 ...(lineage ? { restarted_from_run_id: lineage.restarted_from_run_id } : {}),
               })
-              .catch(() => undefined);
-            resolve({ ...created, status: 'running' });
+              .then(() => resolve({ ...created, status: 'running' }))
+              .catch((error: unknown) => {
+                controller.abort(error);
+                reject(toError(error));
+              });
           },
         });
       } catch (error) {
@@ -272,6 +339,49 @@ export class NewideBackendService {
     return this.terminalRuns.has(runId);
   }
 
+  private async collectTaskSnapshots(): Promise<TaskSnapshot[]> {
+    const history = await this.requestStore.listHistory();
+    const registryRuns = this.registry.listSnapshots();
+    const registryRunIds = new Set(registryRuns.map((run) => run.run_id));
+    const requestFacts = new Map<string, { task_request: TaskCreateRequest; created_at: string }>();
+    const runFacts = new Map<string, TaskRunFact[]>();
+
+    for (const entry of history) {
+      if (!entry.task_id || !entry.task_request || !entry.created_at) continue;
+      const existing = requestFacts.get(entry.task_id);
+      if (!existing || entry.created_at < existing.created_at) {
+        requestFacts.set(entry.task_id, {
+          task_request: entry.task_request,
+          created_at: entry.created_at,
+        });
+      }
+    }
+
+    await Promise.all(
+      history.map(async (entry) => {
+        if (!entry.task_id || registryRunIds.has(entry.run_id)) return;
+        const snapshot = await this.requestStore.loadRunSnapshot(entry.run_id);
+        const fact = historicalRunFact(entry, snapshot);
+        if (fact) appendRunFact(runFacts, entry.task_id, fact);
+      }),
+    );
+
+    for (const run of registryRuns) {
+      appendRunFact(runFacts, run.task_id, liveRunFact(run));
+    }
+
+    return [...requestFacts.entries()]
+      .map(([taskId, request]) =>
+        projectTaskSnapshot({
+          task_id: taskId,
+          task_request: request.task_request,
+          created_at: request.created_at,
+          runs: runFacts.get(taskId) ?? [],
+        }),
+      )
+      .sort((left, right) => right.task.updated_at.localeCompare(left.task.updated_at));
+  }
+
   private appendTelemetry(
     identity: { run_id: string; task_id: string },
     record: TelemetryRecord,
@@ -309,6 +419,82 @@ export class NewideBackendService {
       this.registry.commitTerminal(runId, failure);
     }
   }
+}
+
+function toTaskCreateRequest(params: TaskCreateParams): TaskCreateRequest {
+  return {
+    spec: params.spec,
+    ...(params.role_id ? { role_id: params.role_id } : {}),
+    ...(params.parent_task_id ? { parent_task_id: params.parent_task_id } : {}),
+    ...(params.deps ? { deps: [...params.deps] } : {}),
+    ...(params.risk_level ? { risk_level: params.risk_level } : {}),
+    ...(params.affected_paths ? { affected_paths: [...params.affected_paths] } : {}),
+    completion_criteria: [...params.completion_criteria],
+    ...(params.budget ? { budget: { ...params.budget } } : {}),
+  };
+}
+
+function appendRunFact(facts: Map<string, TaskRunFact[]>, taskId: string, fact: TaskRunFact): void {
+  const current = facts.get(taskId) ?? [];
+  current.push(fact);
+  facts.set(taskId, current);
+}
+
+function liveRunFact(input: AppRunSnapshot): TaskRunFact {
+  const snapshot = projectRunSnapshot(input);
+  const startedAt = eventTimestamp(input, 'run.started') ?? input.events[0]?.created_at;
+  const completedAt = [...input.events]
+    .reverse()
+    .find((event) =>
+      ['run.completed', 'run.failed', 'run.cancelled'].includes(event.type),
+    )?.created_at;
+  const sessionId = snapshot.run?.session_id ?? snapshot.final_output?.session_id;
+  return {
+    run_id: input.run_id,
+    task_id: input.task_id,
+    status: input.status,
+    mode: input.mode,
+    restartable: input.status !== 'running',
+    ...(sessionId ? { session_id: sessionId } : {}),
+    ...(startedAt ? { started_at: startedAt } : {}),
+    ...(completedAt ? { completed_at: completedAt } : {}),
+    ...(input.error ? { error: { ...input.error } } : {}),
+    revision: input.revision,
+    snapshot,
+  };
+}
+
+function historicalRunFact(
+  entry: RunHistoryEntry,
+  snapshot: RunSnapshot | undefined,
+): TaskRunFact | undefined {
+  const taskId = entry.task_id ?? snapshot?.task_id;
+  const mode = entry.mode ?? snapshot?.mode;
+  if (!taskId || !mode) return undefined;
+  const sessionId =
+    entry.session_id ?? snapshot?.run?.session_id ?? snapshot?.final_output?.session_id;
+  const error = entry.error ?? snapshot?.errors[0];
+  return {
+    run_id: entry.run_id,
+    task_id: taskId,
+    status: entry.status,
+    mode,
+    restartable: entry.restartable,
+    ...(sessionId ? { session_id: sessionId } : {}),
+    ...(snapshot?.run?.started_at
+      ? { started_at: snapshot.run.started_at }
+      : entry.created_at
+        ? { started_at: entry.created_at }
+        : {}),
+    ...(snapshot?.run?.completed_at ? { completed_at: snapshot.run.completed_at } : {}),
+    ...(error ? { error: { ...error } } : {}),
+    revision: snapshot?.timeline.length ?? 0,
+    ...(snapshot ? { snapshot } : {}),
+  };
+}
+
+function eventTimestamp(input: AppRunSnapshot, type: string): string | undefined {
+  return input.events.find((event) => event.type === type)?.created_at;
 }
 
 function normalizeWorkspacePath(input: string): string {
