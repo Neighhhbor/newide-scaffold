@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { createProductionBackendService, parseDriverEnv } from '../../src/app/backend-rpc-stdio';
 import type { AppRunEvent } from '../../src/app/run-registry';
@@ -53,6 +54,7 @@ describe('backend RPC stdio entrypoint', () => {
     let created: { run_id: string; task_id: string } | undefined;
     let councilCreated: { run_id: string; task_id: string } | undefined;
     let failedCouncilCreated: { run_id: string; task_id: string } | undefined;
+    let marketEvidenceDirectory: string | undefined;
     try {
       writeFileSync(
         path.join(runnerDir, 'package.json'),
@@ -89,8 +91,42 @@ process.stdin.on('end', () => {
 
       expect(snapshot.status).toBe('completed');
       expect(snapshot.events.map((event) => event.type)).toEqual(
-        expect.arrayContaining(['agent.execution_requested', 'agent.execution_completed']),
+        expect.arrayContaining([
+          'market.selected',
+          'agent.execution_requested',
+          'agent.execution_completed',
+        ]),
       );
+      const marketEvent = snapshot.events.find((event) => event.type === 'market.selected');
+      expect(marketEvent).toMatchObject({
+        payload: {
+          winner_agent_id: 'role_ts_engineer',
+          winner_bid_id: expect.stringMatching(/^bid_[a-f0-9]{24}$/),
+          ledger_ref: expect.stringMatching(/^file:/),
+          audit_ref: expect.stringMatching(/^file:/),
+          policy_version: 'market-v0',
+          seed: created.run_id,
+        },
+      });
+      const ledgerRef = marketEvent?.payload.ledger_ref;
+      const auditRef = marketEvent?.payload.audit_ref;
+      expect(typeof ledgerRef).toBe('string');
+      expect(typeof auditRef).toBe('string');
+      if (typeof ledgerRef === 'string' && typeof auditRef === 'string') {
+        const ledgerPath = fileURLToPath(ledgerRef);
+        marketEvidenceDirectory = path.dirname(ledgerPath);
+        expect(JSON.parse(readFileSync(ledgerPath, 'utf8'))).toMatchObject({
+          policy_version: 'market-v0',
+          seed: created.run_id,
+          winner_agent_id: 'role_ts_engineer',
+          bids: [expect.objectContaining({ agent_id: 'role_ts_engineer' })],
+        });
+        expect(JSON.parse(readFileSync(fileURLToPath(auditRef), 'utf8'))).toMatchObject({
+          policy_version: 'market-v0',
+          seed: created.run_id,
+          winner_agent_id: 'role_ts_engineer',
+        });
+      }
       expect(snapshot.snapshot?.delivery_report.driver_diagnostics.driver_id).toBe('claude-fake');
       expect(snapshot.snapshot?.delivery_report.driver_diagnostics.driver_id).not.toBe(
         'mock-driver',
@@ -131,6 +167,7 @@ process.stdin.on('end', () => {
       unsubscribe();
       expect(councilSnapshot.status).toBe('completed');
       const councilEventTypes = councilSnapshot.events.map((event) => event.type);
+      expect(councilEventTypes).not.toContain('market.selected');
       expect(
         councilEventTypes.filter((type) => type === 'council.proposal.completed'),
       ).toHaveLength(2);
@@ -234,6 +271,9 @@ process.stdin.on('end', () => {
     } finally {
       rmSync(runnerDir, { recursive: true, force: true });
       rmSync(workspaceDir, { recursive: true, force: true });
+      if (marketEvidenceDirectory) {
+        rmSync(marketEvidenceDirectory, { recursive: true, force: true });
+      }
       if (created) {
         rmSync(path.join('.newide', 'runs', created.run_id), { recursive: true, force: true });
         rmSync(path.join('.newide', 'worktrees', created.task_id), {

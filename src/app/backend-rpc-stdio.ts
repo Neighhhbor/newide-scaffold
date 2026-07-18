@@ -9,14 +9,17 @@ import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
 import { IntegrationV0CoordinatorRunner } from '../coordinator/coordinator-runner';
+import { SelectAgentHandler } from '../coordinator/handlers/select-agent-handler';
 import { SynthesisAgentCouncilProvider } from '../council';
 import { CommandDriverTransport, ExternalDriverRuntime } from '../driver';
 import {
   FileBufferRepository,
   InMemoryRepository,
   LiteLLMToolCallingClient,
+  RepositoryAgentBoardQuery,
   type ToolCallingClient,
 } from '../memory';
+import { BAgentProjectionAdapter, FileMarketEvidenceStore } from '../market';
 import { JsonRpcDispatcher, JsonRpcLineSession } from '../rpc/json-rpc-dispatcher';
 import { RunRpcMethods } from '../rpc/run-methods';
 import { DriverRuntimeAgentExecutionFacade } from './driver-runtime-agent-execution-facade';
@@ -76,9 +79,10 @@ export function createProductionBackendService(
       timeoutMs: readDriverTimeout(env.ACP_DRIVER_TIMEOUT_MS),
     }),
   });
+  const repository = new InMemoryRepository();
   const agentExecutionFacade = new DriverRuntimeAgentExecutionFacade({
     driver,
-    repository: new InMemoryRepository(),
+    repository,
     bufferRepository: new FileBufferRepository({
       agentStateRoot: path.join(repoRoot, '.newide', 'b', 'agent-state'),
     }),
@@ -87,9 +91,20 @@ export function createProductionBackendService(
       root: path.join(repoRoot, '.newide', 'b', 'context-packs'),
     }),
   });
+  const selectAgentHandler = new SelectAgentHandler({
+    projectionSource: new BAgentProjectionAdapter({
+      competitionQuery: agentExecutionFacade,
+      boardQuery: new RepositoryAgentBoardQuery(repository),
+      ensureAgent: (agentId) => agentExecutionFacade.ensureAgent(agentId),
+    }),
+    evidenceStore: new FileMarketEvidenceStore({
+      root: path.join(repoRoot, '.newide', 'market'),
+    }),
+  });
   const runner = new IntegrationV0CoordinatorRunner({
     driver,
     agentExecutionFacade,
+    selectAgentHandler,
     councilProvider: new SynthesisAgentCouncilProvider({ agentExecutionFacade }),
   });
   return new NewideBackendService(runner);
