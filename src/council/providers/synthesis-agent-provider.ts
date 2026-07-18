@@ -254,6 +254,7 @@ export class SynthesisAgentCouncilProvider implements CouncilProvider {
     workspacePath: string,
     options?: CouncilExecutionOptions,
   ): Promise<AgentExecutionResult> {
+    await fs.mkdir(workspacePath, { recursive: true });
     let result: AgentExecutionResult;
     try {
       result = await this.agentExecutionFacade.runAgent(

@@ -88,6 +88,9 @@ describe('SynthesisAgentCouncilProvider', () => {
       path.join(councilRoot, 'run_001', 'reviewer'),
       path.join(councilRoot, 'run_001', 'synthesizer'),
     ]);
+    for (const request of requests) {
+      await expect(fs.stat(request.workspace_path!)).resolves.toMatchObject({});
+    }
     expect(result.proposals).toHaveLength(2);
     expect(result.reviews).toHaveLength(2);
     expect(result.synthesis).toMatchObject({
