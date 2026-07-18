@@ -62,6 +62,25 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
     });
   });
 
+  it('registers and projects a market candidate without executing A', async () => {
+    const driver = new CapturingDriver('succeeded');
+    const { facade } = createFacade(driver);
+
+    await facade.ensureAgent('role_market_candidate');
+    const batch = await facade.collectCompetitionClaims({
+      task_id: 'task_market_claim',
+      spec: 'Implement a backend service.',
+    });
+
+    expect(batch.claims).toEqual([
+      expect.objectContaining({
+        role_id: 'role_market_candidate',
+        decision: 'participate',
+      }),
+    ]);
+    expect(driver.prompts).toHaveLength(0);
+  });
+
   it('resolves a relative workspace before crossing the B to A process boundary', async () => {
     const driver = new CapturingDriver('succeeded');
     const { facade } = createFacade(driver);

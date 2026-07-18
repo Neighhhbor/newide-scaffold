@@ -19,17 +19,24 @@ describe('BAgentProjectionAdapter', () => {
       claim('agent_busy', true),
     ]);
     const boardQuery = board();
+    const ensureAgent = vi.fn(async () => undefined);
     const adapter = new BAgentProjectionAdapter({
       competitionQuery,
       boardQuery,
+      ensureAgent,
       now: () => NOW,
     });
 
-    const projections = await adapter.projectCandidates({
-      task_id: 'task_projection',
-      spec: 'Implement a TypeScript backend.',
-    });
+    const projections = await adapter.projectCandidates(
+      {
+        task_id: 'task_projection',
+        spec: 'Implement a TypeScript backend.',
+      },
+      { bootstrap_agent_ids: ['agent_alpha', 'agent_beta'] },
+    );
 
+    expect(ensureAgent).toHaveBeenNthCalledWith(1, 'agent_alpha');
+    expect(ensureAgent).toHaveBeenNthCalledWith(2, 'agent_beta');
     expect(projections.map((projection) => projection.agent_id)).toEqual([
       'agent_alpha',
       'agent_beta',
@@ -70,6 +77,21 @@ describe('BAgentProjectionAdapter', () => {
     await expect(
       adapter.projectCandidates({ task_id: 'task_busy', spec: 'Do work.' }),
     ).resolves.toEqual([]);
+  });
+
+  it('requires the B ensure hook when bootstrap candidates are requested', async () => {
+    const adapter = new BAgentProjectionAdapter({
+      competitionQuery: competition([]),
+      boardQuery: board(),
+      now: () => NOW,
+    });
+
+    await expect(
+      adapter.projectCandidates(
+        { task_id: 'task_bootstrap', spec: 'Do work.' },
+        { bootstrap_agent_ids: ['role_ts_engineer'] },
+      ),
+    ).rejects.toThrow('B Agent ensure hook is required for bootstrap candidates');
   });
 
   it('rejects a B experience type that cannot satisfy the Market contract', async () => {

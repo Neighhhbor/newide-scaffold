@@ -18,6 +18,12 @@ import type {
   AgentExecutionResult,
   AgentExecutionStatus,
 } from '../protocol/agent-execution';
+import type { AgentTaskRequest } from '../memory/agent-types';
+import type {
+  CollectCompetitionClaimsOptions,
+  CompetitionClaimBatch,
+} from '../memory/competition-types';
+import type { AgentCompetitionQuery } from '../memory/ports/agent-competition-query';
 import type { DriverRunResult, DriverRunStatus, DriverRuntimeHandle } from '../driver/contract';
 import { createDriverRuntimeInvoker } from '../driver/driver-runtime-invoker';
 import type {
@@ -52,7 +58,9 @@ const AGENT_SYSTEM_PROMPT = [
   'After invoke_driver returns, do not call more tools. Summarize the result and include "[done]".',
 ].join('\n');
 
-export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
+export class DriverRuntimeAgentExecutionFacade
+  implements AgentExecutionFacade, AgentCompetitionQuery
+{
   private readonly manager: Promise<AgentManager>;
   private readonly roleReady = new Map<string, Promise<AgentManager>>();
   private readonly invalidatedRoles = new Set<string>();
@@ -76,6 +84,17 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
         maxToolCalls: 4,
       },
     });
+  }
+
+  async ensureAgent(agentId: string): Promise<void> {
+    await this.ensureRole(agentId);
+  }
+
+  async collectCompetitionClaims(
+    task: AgentTaskRequest,
+    options?: CollectCompetitionClaimsOptions,
+  ): Promise<CompetitionClaimBatch> {
+    return (await this.manager).collectCompetitionClaims(task, options);
   }
 
   async runAgent(

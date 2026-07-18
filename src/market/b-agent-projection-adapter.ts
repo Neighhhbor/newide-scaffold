@@ -9,12 +9,20 @@ import type { AgentCompetitionQuery } from '../memory/ports/agent-competition-qu
 import { AgentProjectionSchema, type AgentProjection } from './models';
 
 export interface AgentProjectionSource {
-  projectCandidates(task: AgentTaskRequest): Promise<AgentProjection[]>;
+  projectCandidates(
+    task: AgentTaskRequest,
+    options?: AgentProjectionOptions,
+  ): Promise<AgentProjection[]>;
+}
+
+export interface AgentProjectionOptions {
+  bootstrap_agent_ids?: string[];
 }
 
 export interface BAgentProjectionAdapterOptions {
   competitionQuery: AgentCompetitionQuery;
   boardQuery: AgentBoardQuery;
+  ensureAgent?: (agentId: string) => Promise<void>;
   now?: () => number;
 }
 
@@ -25,7 +33,17 @@ export class BAgentProjectionAdapter implements AgentProjectionSource {
     this.now = options.now ?? Date.now;
   }
 
-  async projectCandidates(task: AgentTaskRequest): Promise<AgentProjection[]> {
+  async projectCandidates(
+    task: AgentTaskRequest,
+    projectionOptions?: AgentProjectionOptions,
+  ): Promise<AgentProjection[]> {
+    const bootstrapAgentIds = [...new Set(projectionOptions?.bootstrap_agent_ids ?? [])].sort();
+    if (bootstrapAgentIds.length > 0 && !this.options.ensureAgent) {
+      throw new Error('B Agent ensure hook is required for bootstrap candidates');
+    }
+    for (const agentId of bootstrapAgentIds) {
+      await this.options.ensureAgent!(agentId);
+    }
     const batch = await this.options.competitionQuery.collectCompetitionClaims(task);
     const eligible = batch.claims
       .filter((claim) => claim.decision === 'participate' && claim.availability.busy !== true)

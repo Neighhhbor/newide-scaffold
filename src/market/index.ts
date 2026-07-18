@@ -7,6 +7,7 @@ export {
 } from './selection-engine';
 export {
   BAgentProjectionAdapter,
+  type AgentProjectionOptions,
   type AgentProjectionSource,
   type BAgentProjectionAdapterOptions,
 } from './b-agent-projection-adapter';
