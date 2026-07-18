@@ -107,6 +107,7 @@ export const runSnapshotSchema = z
         reviews: z.array(recordSchema).optional(),
         synthesis: recordSchema.optional(),
         output: recordSchema.optional(),
+        result: recordSchema.optional(),
       })
       .strict()
       .optional(),

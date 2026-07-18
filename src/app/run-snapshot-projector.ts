@@ -124,6 +124,7 @@ function projectCouncil(
     ...(council?.reviews ? { reviews: asRecords(council.reviews) } : {}),
     ...(council?.synthesis ? { synthesis: asRecord(council.synthesis) } : {}),
     ...(council?.output ? { output: asRecord(council.output) } : {}),
+    ...(council?.result ? { result: asRecord(council.result) } : {}),
   };
 }
 

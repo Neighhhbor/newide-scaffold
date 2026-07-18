@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -48,6 +49,7 @@ describe('backend RPC stdio entrypoint', () => {
 
   it('executes the production C-to-B-to-A chain through a real driver:run process', async () => {
     const runnerDir = mkdtempSync(path.join(os.tmpdir(), 'newide-fake-acp-'));
+    const workspaceDir = mkdtempSync(path.join(os.tmpdir(), 'newide-fake-workspace-'));
     let created: { run_id: string; task_id: string } | undefined;
     let councilCreated: { run_id: string; task_id: string } | undefined;
     let failedCouncilCreated: { run_id: string; task_id: string } | undefined;
@@ -67,8 +69,9 @@ process.stdin.on('end', () => {
   const input = JSON.parse(body);
   appendFileSync(new URL('./prompts.log', import.meta.url), input.prompt + '\\n');
   const created_at = new Date().toISOString();
-  const reviewerFailed = existsSync(new URL('./fail-reviewer', import.meta.url)) && input.prompt.includes('Review proposals:');
-  const artifact = { artifact_id: 'artifact_fake_acp', type: 'driver_result', uri: 'artifact://fake/result', producer_id: 'claude-fake', task_id: input.task_id, created_at, schema_version: input.schema_version };
+  const reviewerFailed = existsSync(new URL('./fail-reviewer', import.meta.url)) && input.prompt.includes('Review the isolated proposal inputs');
+  const councilRole = String(input.workspace_path || '').includes('.newide/council');
+  const artifact = { artifact_id: 'artifact_fake_acp', type: councilRole ? 'diff' : 'driver_result', uri: 'artifact://fake/result', producer_id: 'claude-fake', task_id: input.task_id, ...(councilRole ? { content: { kind: 'text', content_ref: 'data:text/plain,COUNCIL_FINAL%0A', target_path: 'council-output.txt', media_type: 'text/plain' } } : {}), created_at, schema_version: input.schema_version };
   process.stdout.write(JSON.stringify({ driver_run_result_id: 'driver_result_fake_acp', session_id: 'session_fake_acp', status: reviewerFailed ? 'failed' : 'succeeded', response: reviewerFailed ? '' : 'Fake ACP completed the request.', artifacts: reviewerFailed ? [] : [artifact], transcript_ref: { ...artifact, artifact_id: 'transcript_fake_acp', type: 'transcript' }, tool_events: [], diagnostics: { driver_id: 'claude-fake', duration_ms: 1, notes: ['fake ACP process'] }, ...(reviewerFailed ? { error: { code: 'FAKE_REVIEW_FAILURE', message: 'controlled failure', retryable: false } } : {}), created_at, schema_version: input.schema_version }));
 });
 `,
@@ -78,7 +81,10 @@ process.stdin.on('end', () => {
         { ACP_DRIVER_RUNNER_DIR: runnerDir },
         { agentLlm: invokeDriverLlm() },
       );
-      created = await service.createRun({ prompt: 'Exercise production composition.' });
+      created = await service.createRun({
+        prompt: 'Exercise production composition.',
+        workspace_path: workspaceDir,
+      });
       const snapshot = await waitForTerminal(service, created.run_id);
 
       expect(snapshot.status).toBe('completed');
@@ -99,10 +105,23 @@ process.stdin.on('end', () => {
       expect(snapshot.events).toEqual(
         expect.arrayContaining([expect.objectContaining({ type: 'agent.execution_completed' })]),
       );
+      expect(snapshot.events.find((event) => event.type === 'agent.execution_completed')).toMatchObject({
+        payload: {
+          agent_id: expect.stringMatching(/^role_ts_engineer@/),
+          context_pack_ref: expect.stringMatching(/^context_pack_[a-f0-9]{24}$/),
+          memory_buffer_ref: expect.stringMatching(/^role_ts_engineer@.+:1$/),
+          driver_run_result_id: 'driver_result_fake_acp',
+          session_id: 'session_fake_acp',
+          artifact_refs: ['artifact_fake_acp'],
+          transcript_ref: 'transcript_fake_acp',
+          diagnostics: expect.objectContaining({ context_pack_persisted: true }),
+        },
+      });
 
       councilCreated = await service.createRun({
         prompt: 'Exercise production council composition.',
         mode: 'council',
+        workspace_path: workspaceDir,
       });
       const notifications: AppRunEvent[] = [];
       const unsubscribe = service.subscribe(councilCreated.run_id, (event) =>
@@ -132,6 +151,14 @@ process.stdin.on('end', () => {
         councilEventTypes.indexOf('worktree.materialized'),
       );
       expect(councilSnapshot.snapshot?.delivery_report.files_written.length).toBeGreaterThan(0);
+      const councilResult = councilSnapshot.snapshot?.council?.result;
+      const deliveredCouncilFile = readFileSync(path.join(workspaceDir, 'council-output.txt'));
+      expect(councilResult).toMatchObject({
+        quality: 'best_effort',
+        final_artifact_ref: 'artifact_fake_acp',
+        final_artifact_sha256: createHash('sha256').update(deliveredCouncilFile).digest('hex'),
+        decision_record_ref: expect.stringMatching(/^council_decision_/),
+      });
       const audit = readFileSync(
         path.join('.newide', 'runs', councilCreated.run_id, 'audit.jsonl'),
         'utf8',
@@ -162,13 +189,14 @@ process.stdin.on('end', () => {
       const driverPrompts = readFileSync(path.join(runnerDir, 'prompts.log'), 'utf8');
       expect(driverPrompts).toContain('Exercise production composition.');
       expect(driverPrompts).toContain('Produce proposal A for:');
-      expect(driverPrompts).toContain('Review proposals:');
-      expect(driverPrompts).toContain('Synthesize the final candidate');
+      expect(driverPrompts).toContain('Review the isolated proposal inputs');
+      expect(driverPrompts).toContain('Synthesis round 1');
 
       writeFileSync(path.join(runnerDir, 'fail-reviewer'), '1');
       failedCouncilCreated = await service.createRun({
         prompt: 'Exercise structured Council reviewer failure.',
         mode: 'council',
+        workspace_path: workspaceDir,
       });
       const failedNotifications: AppRunEvent[] = [];
       const unsubscribeFailed = service.subscribe(failedCouncilCreated.run_id, (event) =>
@@ -177,27 +205,22 @@ process.stdin.on('end', () => {
       const failedSnapshot = await waitForTerminal(service, failedCouncilCreated.run_id);
       unsubscribeFailed();
       expect(service.getRunSnapshot(failedCouncilCreated.run_id)).toMatchObject({
-        status: 'failed',
-        errors: [
-          {
-            code: 'COUNCIL_REVIEW_FAILED',
-            message: 'Council review role failed',
-            details: {
-              phase: 'council',
-              council_phase: 'review',
-              role_id: 'reviewer',
-              agent_status: 'failed',
-            },
+        status: 'completed',
+        council: {
+          result: {
+            quality: 'best_effort',
+            warnings: expect.arrayContaining([
+              'Council verification did not fully pass; delivering the best available artifact.',
+            ]),
           },
-        ],
+        },
+        errors: [],
       });
       expect(failedNotifications.map((event) => event.type)).toEqual(
-        expect.arrayContaining(['council.failed', 'run.failed']),
+        expect.arrayContaining(['council.failed', 'council.completed', 'run.completed']),
       );
-      expect(failedSnapshot.events.map((event) => event.type)).not.toContain('council.completed');
-      expect(failedSnapshot.events.map((event) => event.type)).not.toContain(
-        'worktree.materialized',
-      );
+      expect(failedSnapshot.events.map((event) => event.type)).toContain('council.completed');
+      expect(failedSnapshot.events.map((event) => event.type)).toContain('worktree.materialized');
       const failedAudit = readFileSync(
         path.join('.newide', 'runs', failedCouncilCreated.run_id, 'audit.jsonl'),
         'utf8',
@@ -206,10 +229,11 @@ process.stdin.on('end', () => {
         .split('\n')
         .map((line) => JSON.parse(line) as AppRunEvent);
       expect(failedAudit.map((event) => event.type)).toEqual(
-        expect.arrayContaining(['council.failed', 'run.failed']),
+        expect.arrayContaining(['council.failed', 'council.completed', 'run.completed']),
       );
     } finally {
       rmSync(runnerDir, { recursive: true, force: true });
+      rmSync(workspaceDir, { recursive: true, force: true });
       if (created) {
         rmSync(path.join('.newide', 'runs', created.run_id), { recursive: true, force: true });
         rmSync(path.join('.newide', 'worktrees', created.task_id), {
