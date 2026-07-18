@@ -23,6 +23,7 @@ import { BAgentProjectionAdapter, FileMarketEvidenceStore } from '../market';
 import { JsonRpcDispatcher, JsonRpcLineSession } from '../rpc/json-rpc-dispatcher';
 import { RunRpcMethods } from '../rpc/run-methods';
 import { TaskRpcMethods } from '../rpc/task-methods';
+import { MailboxRpcMethods } from '../rpc/mailbox-methods';
 import { SqliteCoordinationStore } from '../persistence';
 import { DriverRuntimeAgentExecutionFacade } from './driver-runtime-agent-execution-facade';
 import { FileAgentExecutionEvidenceStore } from './agent-execution-evidence-store';
@@ -32,6 +33,7 @@ import { FileRunAuditWriter } from './run-audit-writer';
 import { FileRunRequestStore } from './run-request-store';
 import { FileRunTerminalOutputWriter } from './run-terminal-output-writer';
 import { TaskProcessor } from './task-processor';
+import { PersistentMailboxService } from './persistent-mailbox-service';
 
 export interface BackendRpcServerOptions {
   input: Readable;
@@ -124,6 +126,8 @@ export function createProductionBackendService(
   const coordinationStore = new SqliteCoordinationStore(databasePath);
   const taskProcessor = new TaskProcessor(coordinationStore);
   taskProcessor.recoverInterruptedTasks();
+  const mailboxService = new PersistentMailboxService(coordinationStore, agentExecutionFacade);
+  const mailboxRecovery = mailboxService.replayPendingDeliveries();
   return new NewideBackendService(
     runner,
     new InMemoryRunRegistry(),
@@ -131,6 +135,8 @@ export function createProductionBackendService(
     new FileRunTerminalOutputWriter(runsRoot),
     new FileRunRequestStore(runsRoot),
     taskProcessor,
+    mailboxService,
+    mailboxRecovery,
   );
 }
 
@@ -177,8 +183,10 @@ export function startBackendRpcServer(options: BackendRpcServerOptions): Backend
   const taskMethods = new TaskRpcMethods(service, (method, params) =>
     session.sendNotification(method, params),
   );
+  const mailboxMethods = new MailboxRpcMethods(service);
   runMethods.register(dispatcher);
   taskMethods.register(dispatcher);
+  mailboxMethods.register(dispatcher);
 
   const lines = createInterface({ input: options.input, crlfDelay: Infinity });
   let pending = Promise.resolve();

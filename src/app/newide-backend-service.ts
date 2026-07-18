@@ -7,7 +7,13 @@ import type { IntegrationV0Result } from '../coordinator/integration-v0-flow';
 import { realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { CouncilRoleExecutionError } from '../council';
-import { SCHEMA_VERSION, createId, type Event, type TaskCreateRequest } from '../core';
+import {
+  SCHEMA_VERSION,
+  createId,
+  type Event,
+  type MessageRecipient,
+  type TaskCreateRequest,
+} from '../core';
 import {
   IntegrationV0CoordinatorRunner,
   type CoordinatorRunner,
@@ -38,6 +44,17 @@ import type { RunSnapshot } from '../protocol/run-snapshot';
 import { projectTaskSnapshot, type TaskRunFact } from './task-snapshot-projector';
 import { councilResultEvidenceSchema, type TaskSnapshot } from '../protocol/task-snapshot';
 import { TaskProcessorTaskNotFoundError, type TaskProcessor } from './task-processor';
+import type {
+  PersistentMailboxService,
+  MailboxReplyInput,
+  MailboxSendInput,
+  MailboxSendResult,
+} from './persistent-mailbox-service';
+import type {
+  PersistedMailboxDelivery,
+  PersistedMailboxEnvelope,
+  SaveMailboxReplyResult,
+} from '../persistence';
 
 export interface RunCreateParams {
   prompt: string;
@@ -133,7 +150,35 @@ export class NewideBackendService {
     private readonly terminalWriter: RunTerminalOutputWriter = new FileRunTerminalOutputWriter(),
     private readonly requestStore: RunRequestStore = new FileRunRequestStore(),
     private readonly taskProcessor?: TaskProcessor,
+    private readonly mailboxService?: PersistentMailboxService,
+    private readonly mailboxRecovery: Promise<unknown> = Promise.resolve(),
   ) {}
+
+  async sendMailboxMessage(input: MailboxSendInput): Promise<MailboxSendResult> {
+    await this.mailboxRecovery;
+    return this.requireMailboxService().send(input);
+  }
+
+  async listMailboxInbox(
+    recipient: MessageRecipient,
+    afterDeliveryId?: string,
+  ): Promise<PersistedMailboxEnvelope[]> {
+    await this.mailboxRecovery;
+    return this.requireMailboxService().inbox(recipient, afterDeliveryId);
+  }
+
+  async acknowledgeMailboxDelivery(
+    deliveryId: string,
+    recipient: MessageRecipient,
+  ): Promise<PersistedMailboxDelivery> {
+    await this.mailboxRecovery;
+    return this.requireMailboxService().ack(deliveryId, recipient);
+  }
+
+  async replyMailboxMessage(input: MailboxReplyInput): Promise<SaveMailboxReplyResult> {
+    await this.mailboxRecovery;
+    return this.requireMailboxService().reply(input);
+  }
 
   createRun(params: RunCreateParams): Promise<RunCreateResult> {
     return this.startRun(params);
@@ -506,6 +551,13 @@ export class NewideBackendService {
 
   private isLiveRun(runId: string): boolean {
     return this.terminalRuns.has(runId);
+  }
+
+  private requireMailboxService(): PersistentMailboxService {
+    if (!this.mailboxService) {
+      throw new Error('Mailbox service is not configured');
+    }
+    return this.mailboxService;
   }
 
   private notifyTaskListeners(taskId: string, event: AppRunEvent): void {
