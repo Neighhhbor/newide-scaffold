@@ -74,6 +74,23 @@ describe('runIntegrationV0Flow', () => {
     expect(identity).toEqual({ run_id: result.run_id, task_id: result.task_id });
   });
 
+  it('creates a new run under an existing durable task identity', async () => {
+    const eventTypes: string[] = [];
+    const result = await runFlow({
+      taskId: 'task_existing',
+      taskRequest: {
+        spec: 'Run Council for the existing task',
+        completion_criteria: ['Council produces a final artifact'],
+      },
+      onEvent: (event) => eventTypes.push(event.event_type),
+    });
+
+    expect(result.task_id).toBe('task_existing');
+    expect(result.frontend_snapshot.task.task_id).toBe('task_existing');
+    expect(result.timeline[0]?.name).toBe('TaskAttached');
+    expect(eventTypes).not.toContain('task.created');
+  });
+
   it('should run complete flow with MockDriver and single_agent mode', async () => {
     const result = await runFlow();
 

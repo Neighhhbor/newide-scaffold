@@ -9,6 +9,7 @@ import {
   type RoleProfileRef,
   type SchemaVersion,
   type TaskCreateRequest,
+  type TaskId,
   type Timestamp,
 } from '../core';
 import path from 'node:path';
@@ -145,6 +146,7 @@ export interface IntegrationV0Materializer {
 export interface IntegrationV0Options {
   driver?: DriverRuntimeHandle;
   driverPrompt?: string;
+  taskId?: TaskId;
   taskRequest?: TaskCreateRequest;
   workspacePath?: string;
   sessionId?: string;
@@ -210,8 +212,10 @@ export async function runIntegrationV0Flow(
 
   // 1. Create task
   const taskRequest = options?.taskRequest ?? createDefaultTaskRequest(options?.driverPrompt);
-  let task = orchestrator.createTask(taskRequest);
-  timeline.push({ name: 'TaskCreated', id: task.task_id });
+  let task = options?.taskId
+    ? orchestrator.attachTaskForRun(options.taskId, taskRequest)
+    : orchestrator.createTask(taskRequest);
+  timeline.push({ name: options?.taskId ? 'TaskAttached' : 'TaskCreated', id: task.task_id });
 
   // 2. Create run
   const run = orchestrator.createRun(task.task_id);
