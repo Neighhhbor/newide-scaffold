@@ -2,13 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { runBasicFlow } from '../src/coordinator/basic-flow';
 import { RuntimeOrchestrator } from '../src/coordinator/orchestrator';
 import { SCHEMA_VERSION, createId, nowTimestamp } from '../src/core';
-import { HashEmbeddingProvider } from '../src/memory/adapters/hash-embedding-provider';
-import { InMemoryRepository } from '../src/memory/adapters/in-memory-repository';
-import { InMemoryBufferRepository } from '../src/memory/adapters/in-memory-buffer-repository';
-import { createAgentMemoryScope } from '../src/memory/adapters/agent-memory-scope';
-import { defaultMvpAgentRunDeps } from '../src/memory/mvp/default-agent-run-deps';
-import { runTaskMemoryCycle } from '../src/memory/services/memory-cycle';
-import { InMemoryTelemetrySink, createFHarnessTelemetryPort } from '../src/telemetry';
+import {
+  AgentManager,
+  InMemoryBufferRepository,
+  InMemoryRepository,
+  createAgentMemoryScope,
+} from '../src/memory';
+import {
+  InMemoryTelemetrySink,
+  createFHarnessTelemetryPort,
+  recordMemoryCycleTelemetry,
+} from '../src/telemetry';
 
 describe('telemetry integration', () => {
   it('mirrors cataloged coordinator events and checkpoint L3 observations from basic flow', async () => {
@@ -42,23 +46,48 @@ describe('telemetry integration', () => {
     });
   });
 
-  it('records memory-cycle B-owned observations without requiring EventStore events', async () => {
+  it('records public dispatch-cycle B-owned observations without EventStore events', async () => {
     const sink = new InMemoryTelemetrySink();
-    const repository = new InMemoryRepository(new HashEmbeddingProvider());
+    const repository = new InMemoryRepository();
     const bufferRepository = new InMemoryBufferRepository();
-    await repository.initializeAgent({
+    const manager = await AgentManager.create(repository, bufferRepository, {
+      tools: {
+        llm: {
+          completeWithTools: async () => ({ content: 'Task completed. [done]' }),
+        },
+        tools: [],
+      },
+    });
+    await manager.createAgent({
       role_id: 'role_telemetry',
       name: 'Telemetry Agent',
+      tags: [],
     });
-    await bufferRepository.ensureAgent('role_telemetry');
     const memory = createAgentMemoryScope(repository, bufferRepository, 'role_telemetry');
-
-    await runTaskMemoryCycle(
-      memory,
-      { spec: 'telemetry memory cycle', scenario: 'promotion_ready' },
-      { ...defaultMvpAgentRunDeps, telemetry: sink },
-      { memory_ablation: 'B2' },
-    );
+    const result = await manager.dispatchTask('role_telemetry', {
+      spec: 'telemetry memory cycle',
+      task_id: 'task_telemetry',
+      call_id: 'call_telemetry',
+      source_driver: 'telemetry-test',
+    });
+    const cycle = result.cycle;
+    await recordMemoryCycleTelemetry(sink, {
+      context: {
+        task_id: cycle.buffer_snapshot.task_id,
+        role_id: result.role_id,
+        memory_ablation: 'B2',
+      },
+      retrieval: cycle.retrieval,
+      call_id: 'call_telemetry',
+      source_driver: 'telemetry-test',
+      driver_return: cycle.buffer_snapshot.driver_return,
+      buffer_seq: cycle.buffer_seq,
+      extract_result: cycle.extraction.result,
+      promotion: cycle.promotion,
+      persona: cycle.persona,
+      skills_after: await memory.listSkills(),
+      experience_count: (await memory.listExperiences()).length,
+    });
 
     const eventTypes = sink.list().map((record) => record.event_type);
     expect(eventTypes).toEqual(

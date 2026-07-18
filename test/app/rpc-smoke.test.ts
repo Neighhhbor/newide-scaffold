@@ -6,7 +6,7 @@ describe('production RPC composition smoke script', () => {
   it('verifies the production A/B chain, Council, cancellation, and protocol errors', async () => {
     expect(await runSmoke()).toMatchObject({
       status: 'ok',
-      runtime: 'production-composition-fake-acp',
+      runtime: 'production-composition-deterministic-b-llm-fake-acp',
       mode: 'all',
       single_agent: { artifacts: 1 },
       council: { artifacts: 1 },

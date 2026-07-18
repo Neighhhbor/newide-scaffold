@@ -1,0 +1,7 @@
+tasks:
+  extract-driver-return:
+    profile: balanced
+    timeoutMs: 30000
+    maxRetries: 2
+    temperature: 0.1
+    maxTokens: 4000

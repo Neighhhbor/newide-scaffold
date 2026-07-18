@@ -25,7 +25,11 @@ export class HttpRunner extends BaseGateRunner {
       );
     }
 
-    const timeout = this.definition.timeout ?? request.timeout_ms ?? 30_000;
+    // definition.timeout is seconds; setTimeout/AbortController expect ms
+    const timeout =
+      this.definition.timeout != null
+        ? this.definition.timeout * 1000
+        : (request.timeout_ms ?? 30_000);
     const maxRetries = this.definition.retry_threshold ?? 0;
 
     let lastError: Error | null = null;
