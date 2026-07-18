@@ -62,6 +62,16 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
     });
   });
 
+  it('resolves a relative workspace before crossing the B to A process boundary', async () => {
+    const driver = new CapturingDriver('succeeded');
+    const { facade } = createFacade(driver);
+    const relativeWorkspace = '.newide/council/run_relative/proposer_a';
+
+    await facade.runAgent(request('task_relative_workspace', 'proposer_a', relativeWorkspace));
+
+    expect(driver.prompts[0]?.workspace_path).toBe(path.resolve(relativeWorkspace));
+  });
+
   it('persists a content-addressed context pack with real retrieval and buffer evidence', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'newide-b-evidence-'));
     try {

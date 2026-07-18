@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
+import path from 'node:path';
 import { SCHEMA_VERSION, createId, nowTimestamp, type ArtifactRef } from '../core';
 import {
   AgentManager,
@@ -82,16 +83,22 @@ export class DriverRuntimeAgentExecutionFacade implements AgentExecutionFacade {
     options?: AgentExecutionOptions,
   ): Promise<AgentExecutionResult> {
     throwIfAborted(options?.signal);
-    const runtimeRoleId = scopedRuntimeRole(input.role_id, input.workspace_path);
-    const queueKey = input.workspace_path
-      ? `workspace:${input.workspace_path}`
-      : `role:${input.role_id}`;
+    const normalizedInput = input.workspace_path
+      ? { ...input, workspace_path: path.resolve(input.workspace_path) }
+      : input;
+    const runtimeRoleId = scopedRuntimeRole(
+      normalizedInput.role_id,
+      normalizedInput.workspace_path,
+    );
+    const queueKey = normalizedInput.workspace_path
+      ? `workspace:${normalizedInput.workspace_path}`
+      : `role:${normalizedInput.role_id}`;
     return this.enqueue(
       queueKey,
       async () => {
         throwIfAborted(options?.signal);
         const manager = await this.ensureRole(runtimeRoleId);
-        return this.execute(manager, input, runtimeRoleId, options);
+        return this.execute(manager, normalizedInput, runtimeRoleId, options);
       },
       options?.signal,
     );
