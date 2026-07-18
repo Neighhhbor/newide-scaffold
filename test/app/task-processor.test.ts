@@ -146,6 +146,64 @@ describe('TaskProcessor', () => {
     });
     store.close();
   });
+
+  it('blocks interrupted active runs once and saves a resumable full checkpoint', () => {
+    const { processor, store } = createProcessor();
+    processor.beginRun({
+      task_id: 'task_processor',
+      run_id: 'run_processor',
+      task_request: taskRequest,
+      workspace_path: '/workspace',
+      mode: 'single_agent',
+    });
+    processor.recordRunEvent(
+      'run_processor',
+      event('event_agent_done', 'agent.execution_completed', {
+        agent_id: 'role_ts_engineer@agent_1',
+        session_id: 'session_resume',
+        artifact_refs: ['artifact_partial'],
+      }),
+    );
+
+    const recovered = processor.recoverInterruptedTasks();
+    expect(recovered).toEqual([
+      expect.objectContaining({
+        task: expect.objectContaining({ task_id: 'task_processor', status: 'blocked' }),
+        run_history: [
+          expect.objectContaining({
+            run_id: 'run_processor',
+            status: 'interrupted',
+            session_id: 'session_resume',
+          }),
+        ],
+        waiting_reason: 'The backend process ended before the active run reached a terminal state.',
+      }),
+    ]);
+    const checkpoint = store.getLatestCheckpoint('task_processor');
+    expect(checkpoint).toMatchObject({
+      checkpoint_id: expect.stringMatching(/^checkpoint_/),
+      task_id: 'task_processor',
+      run_id: 'run_processor',
+      agent_id: 'role_ts_engineer@agent_1',
+      session_id: 'session_resume',
+      trigger: 'blocked',
+      resume_cursor: 'gate',
+      artifact_refs: ['artifact_partial'],
+      validity_status: 'valid',
+      mechanical_snapshot: { worktree_path: '/workspace' },
+      semantic_handoff: {
+        in_progress: ['gate'],
+        blocked_on: ['backend process interrupted'],
+      },
+    });
+    expect(checkpoint?.message_thread.map((message) => message.content)).toContain(
+      'agent.execution_completed',
+    );
+    const revision = store.getTaskAggregate('task_processor')?.task.revision;
+    expect(processor.recoverInterruptedTasks()).toEqual([]);
+    expect(store.getTaskAggregate('task_processor')?.task.revision).toBe(revision);
+    store.close();
+  });
 });
 
 const taskRequest: TaskCreateRequest = {

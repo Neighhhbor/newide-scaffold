@@ -12,6 +12,7 @@ import {
   type PersistedRunState,
   type PersistedTaskAggregate,
   type PersistedTaskFinalOutput,
+  type PersistedFullCheckpoint,
   type PersistedTaskState,
   type TaskResumeCursor,
 } from '../persistence';
@@ -204,6 +205,7 @@ export class TaskProcessor {
 
     const timestamp = event.created_at || this.now();
     const selectedAgent = readPayloadString(event.payload, 'winner_agent_id');
+    const sessionId = run.session_id ?? readPayloadString(event.payload, 'session_id');
     const artifactRefs = appendUnique(
       aggregate.runtime_state.artifact_refs,
       readPayloadStringArray(event.payload, 'artifact_refs'),
@@ -218,6 +220,7 @@ export class TaskProcessor {
       },
       run: {
         ...run,
+        ...(sessionId ? { session_id: sessionId } : {}),
         revision: run.revision + 1,
         updated_at: timestamp,
       },
@@ -240,6 +243,13 @@ export class TaskProcessor {
       events: [event],
     });
     return this.getTaskSnapshot(aggregate.task.task_id);
+  }
+
+  recoverInterruptedTasks(): TaskSnapshot[] {
+    return this.store
+      .listTaskAggregates()
+      .filter((aggregate) => aggregate.runs.some((run) => isActiveRun(run)))
+      .map((aggregate) => this.recoverInterruptedTask(aggregate));
   }
 
   finishRun(input: FinishTaskRunInput): TaskSnapshot {
@@ -386,6 +396,115 @@ export class TaskProcessor {
       .find((candidate) => candidate.runs.some((run) => run.run_id === runId));
     if (!aggregate) throw new TaskProcessorRunNotFoundError(runId);
     return aggregate;
+  }
+
+  private recoverInterruptedTask(aggregate: PersistedTaskAggregate): TaskSnapshot {
+    const run = aggregate.runs.find((candidate) => isActiveRun(candidate));
+    if (!run) return projectAggregate(aggregate);
+    assertTaskStatusTransition(aggregate.task.status, 'blocked');
+
+    const timestamp = this.now();
+    const reason = 'The backend process ended before the active run reached a terminal state.';
+    const interruptState = {
+      type: 'process_interrupted',
+      reason,
+      interrupted_run_id: run.run_id,
+    };
+    const checkpointId = createId('checkpoint');
+    const latestCheckpoint = this.store.getLatestCheckpoint(aggregate.task.task_id);
+    const checkpoint: PersistedFullCheckpoint = {
+      checkpoint_id: checkpointId,
+      ...(latestCheckpoint ? { parent_checkpoint_id: latestCheckpoint.checkpoint_id } : {}),
+      task_id: aggregate.task.task_id,
+      run_id: run.run_id,
+      agent_id:
+        readLatestEventString(aggregate, 'agent_id') ??
+        aggregate.task.owner_agent_id ??
+        aggregate.task.role_id ??
+        'coordinator',
+      ...(run.session_id ? { session_id: run.session_id } : {}),
+      trigger: 'blocked',
+      resume_cursor: aggregate.runtime_state.resume_cursor,
+      message_thread: aggregate.events.map((event, index) => ({
+        message_id: event.event_id,
+        role: projectRunEventSource(event.event_type),
+        content: event.event_type,
+        turn: index + 1,
+        artifact_refs: readPayloadStringArray(event.payload, 'artifact_refs'),
+        created_at: event.created_at,
+      })),
+      mechanical_snapshot: {
+        base_commit: 'unknown',
+        worktree_path: aggregate.task.workspace_path,
+        branch: 'runtime-recovery',
+        modified_files: [],
+      },
+      semantic_handoff: {
+        done: aggregate.events.map((event) => event.event_type),
+        in_progress: [aggregate.runtime_state.resume_cursor],
+        blocked_on: ['backend process interrupted'],
+        assumptions: [],
+        next_steps: [`resume ${aggregate.runtime_state.resume_cursor}`],
+        known_risks: ['unfinished action will be re-executed'],
+      },
+      interrupt_state: interruptState,
+      artifact_refs: [...aggregate.runtime_state.artifact_refs],
+      validity_status: 'valid',
+      created_at: timestamp,
+      schema_version: SCHEMA_VERSION,
+    };
+    const runInterrupted = this.createEvent(
+      'run.interrupted',
+      run.run_id,
+      aggregate.task.task_id,
+      run.run_id,
+      { reason, resume_cursor: aggregate.runtime_state.resume_cursor },
+    );
+    const taskBlocked = this.createEvent(
+      'task.blocked',
+      aggregate.task.task_id,
+      aggregate.task.task_id,
+      run.run_id,
+      { reason, interrupted_run_id: run.run_id },
+    );
+    const checkpointSaved = this.createEvent(
+      'checkpoint.saved',
+      checkpointId,
+      aggregate.task.task_id,
+      run.run_id,
+      { checkpoint_id: checkpointId, resume_cursor: aggregate.runtime_state.resume_cursor },
+    );
+    const { current_run_id: _currentRunId, ...runtimeWithoutCurrentRun } = aggregate.runtime_state;
+
+    this.store.commitState({
+      expected_task_revision: aggregate.task.revision,
+      task: {
+        ...aggregate.task,
+        status: 'blocked',
+        revision: aggregate.task.revision + 1,
+        updated_at: timestamp,
+      },
+      run: {
+        ...run,
+        status: 'interrupted',
+        revision: run.revision + 1,
+        completed_at: timestamp,
+        updated_at: timestamp,
+      },
+      runtime_state: {
+        ...runtimeWithoutCurrentRun,
+        interrupt_state: interruptState,
+        diagnostics: {
+          ...aggregate.runtime_state.diagnostics,
+          interrupted_run_id: run.run_id,
+          recovery_checkpoint_id: checkpointId,
+        },
+        updated_at: timestamp,
+      },
+      checkpoint,
+      events: [runInterrupted, taskBlocked, checkpointSaved],
+    });
+    return this.getTaskSnapshot(aggregate.task.task_id);
   }
 
   private createEvent(
@@ -546,6 +665,19 @@ function readPayloadStringArray(payload: Record<string, unknown>, key: string): 
 
 function appendUnique(current: readonly string[], additions: readonly string[]): string[] {
   return [...new Set([...current, ...additions])];
+}
+
+function readLatestEventString(
+  aggregate: PersistedTaskAggregate,
+  key: string,
+): string | undefined {
+  for (let index = aggregate.events.length - 1; index >= 0; index -= 1) {
+    const event = aggregate.events[index];
+    if (!event) continue;
+    const value = readPayloadString(event.payload, key);
+    if (value) return value;
+  }
+  return undefined;
 }
 
 function councilWarnings(snapshot: RunSnapshot | undefined): string[] {
