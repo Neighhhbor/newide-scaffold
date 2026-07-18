@@ -193,7 +193,9 @@ async function runCouncilScenario(): Promise<ScenarioReport> {
     const agentRuns = Array.isArray(snapshot.agent_runs) ? snapshot.agent_runs : [];
     const mainAgentRun = agentRuns.find((value) => {
       const record = asRecord(value);
-      return record?.role_id === 'role_ts_engineer';
+      return (
+        record?.type === 'agent.execution_completed' && record.role_id === 'role_ts_engineer'
+      );
     });
     details.main_agent_evidence = mainAgentRun ?? null;
     if (!hasBExecutionEvidence(mainAgentRun)) {
