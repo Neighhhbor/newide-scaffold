@@ -9,6 +9,7 @@
  *   pnpm acceptance:real -- --workspace /absolute/path --scenario all
  */
 import { spawn, type ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -123,10 +124,15 @@ async function runCouncilScenario(): Promise<ScenarioReport> {
     const workspaceChanges = diffWorkspace(before, after);
 
     const council = asRecord(snapshot.council) ?? {};
+    const councilResult = asRecord(council.result);
     const proposals = Array.isArray(council.proposals) ? council.proposals : [];
     const runDir = path.join(repoRoot, '.newide', 'runs', created.run_id);
     const decision = await readJsonIfExists(path.join(runDir, 'council', 'decision.json'));
     const reviews = await readJsonIfExists(path.join(runDir, 'council', 'reviews.json'));
+    const synthesis = await readJsonIfExists(path.join(runDir, 'council', 'synthesis.json'));
+    const persistedCouncilResult = await readJsonIfExists(
+      path.join(runDir, 'council', 'result.json'),
+    );
     const finalOutput = asRecord(snapshot.final_output) ?? {};
 
     details.run_id = created.run_id;
@@ -140,6 +146,8 @@ async function runCouncilScenario(): Promise<ScenarioReport> {
     details.can_create_merge_authorization = council.can_create_merge_authorization ?? null;
     details.proposal_count = proposals.length;
     details.review_count = Array.isArray(reviews) ? reviews.length : 0;
+    details.synthesis = synthesis;
+    details.council_result = councilResult ?? persistedCouncilResult;
     details.selected_artifact_refs = council.selected_artifact_refs ?? [];
     details.response = finalOutput.response ?? '';
     details.session_id = finalOutput.session_id ?? null;
@@ -156,7 +164,15 @@ async function runCouncilScenario(): Promise<ScenarioReport> {
       reviews: path.join(runDir, 'council', 'reviews.json'),
       synthesis: path.join(runDir, 'council', 'synthesis.json'),
       output: path.join(runDir, 'council', 'output.json'),
+      result: path.join(runDir, 'council', 'result.json'),
     };
+    details.council_role_directories = [
+      'primary',
+      'proposer_a',
+      'proposer_b',
+      'reviewer',
+      'synthesizer',
+    ].map((role) => path.join(repoRoot, '.newide', 'council', created.run_id, role));
     details.run_dir = runDir;
     details.errors_from_run = snapshot.errors ?? [];
 
@@ -164,7 +180,30 @@ async function runCouncilScenario(): Promise<ScenarioReport> {
       errors.push(`council run ended as ${String(snapshot.status)}`);
     }
     if (!decision) errors.push('council decision.json was not written');
-    if (proposals.length === 0) errors.push('council snapshot has no proposals');
+    if (proposals.length < 2) errors.push('council snapshot has fewer than two proposals');
+    if (!Array.isArray(reviews) || reviews.length === 0) {
+      errors.push('council has no structured reviews');
+    } else if (!reviews.every(isStructuredReview)) {
+      errors.push('council review payload is not structured');
+    }
+    if (!synthesis) errors.push('council synthesis.json was not written');
+    if (!councilResult && !persistedCouncilResult) {
+      errors.push('CouncilResult was not returned or persisted');
+    }
+    const agentRuns = Array.isArray(snapshot.agent_runs) ? snapshot.agent_runs : [];
+    const mainAgentRun = agentRuns.find((value) => {
+      const record = asRecord(value);
+      return record?.role_id === 'role_ts_engineer';
+    });
+    details.main_agent_evidence = mainAgentRun ?? null;
+    if (!hasBExecutionEvidence(mainAgentRun)) {
+      errors.push('main B execution evidence is incomplete');
+    }
+    for (const roleDirectory of details.council_role_directories as string[]) {
+      if (!(await pathExists(roleDirectory))) {
+        errors.push(`missing isolated Council role directory: ${roleDirectory}`);
+      }
+    }
     if (workspaceChanges.length === 0) {
       errors.push('no real files were created or modified in the workspace');
     }
@@ -172,10 +211,17 @@ async function runCouncilScenario(): Promise<ScenarioReport> {
     const finalCandidate = workspaceChanges.find((file) => file.endsWith('council-final.ts'));
     details.final_candidate_file = finalCandidate ?? null;
     if (finalCandidate) {
-      details.final_candidate_content = await fs.readFile(
-        path.join(options.workspace, finalCandidate),
-        'utf-8',
-      );
+      const finalBytes = await fs.readFile(path.join(options.workspace, finalCandidate));
+      const workspaceSha256 = createHash('sha256').update(finalBytes).digest('hex');
+      details.final_candidate_content = finalBytes.toString('utf-8');
+      details.workspace_sha256 = workspaceSha256;
+      const resultRecord = councilResult ?? asRecord(persistedCouncilResult);
+      if (resultRecord?.final_artifact_sha256 !== workspaceSha256) {
+        errors.push('CouncilResult final_artifact_sha256 does not match the workspace file');
+      }
+      if (!['verified', 'best_effort'].includes(String(resultRecord?.quality))) {
+        errors.push('CouncilResult quality is missing or invalid');
+      }
     }
 
     log(`council decision_id: ${String(details.decision_id)}`);
@@ -192,6 +238,39 @@ async function runCouncilScenario(): Promise<ScenarioReport> {
     details,
     errors,
   };
+}
+
+function isStructuredReview(value: unknown): boolean {
+  const review = asRecord(value);
+  return Boolean(
+    review &&
+    typeof review.proposal_id === 'string' &&
+    ['approve', 'reject', 'needs_revision'].includes(String(review.verdict)) &&
+    typeof review.reason === 'string' &&
+    Array.isArray(review.unmet_criteria) &&
+    Array.isArray(review.evidence_refs),
+  );
+}
+
+function hasBExecutionEvidence(value: unknown): boolean {
+  const evidence = asRecord(value);
+  return Boolean(
+    evidence &&
+    typeof evidence.agent_id === 'string' &&
+    typeof evidence.context_pack_ref === 'string' &&
+    typeof evidence.memory_buffer_ref === 'string' &&
+    typeof evidence.driver_run_result_id === 'string' &&
+    typeof evidence.session_id === 'string' &&
+    Array.isArray(evidence.artifact_refs) &&
+    typeof evidence.transcript_ref === 'string',
+  );
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  return fs
+    .stat(filePath)
+    .then(() => true)
+    .catch(() => false);
 }
 
 async function runSubagentScenario(): Promise<ScenarioReport> {
