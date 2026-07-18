@@ -122,13 +122,15 @@ export function createProductionBackendService(
       ? configuredDatabasePath
       : path.resolve(configuredDatabasePath);
   const coordinationStore = new SqliteCoordinationStore(databasePath);
+  const taskProcessor = new TaskProcessor(coordinationStore);
+  taskProcessor.recoverInterruptedTasks();
   return new NewideBackendService(
     runner,
     new InMemoryRunRegistry(),
     new FileRunAuditWriter(runsRoot),
     new FileRunTerminalOutputWriter(runsRoot),
     new FileRunRequestStore(runsRoot),
-    new TaskProcessor(coordinationStore),
+    taskProcessor,
   );
 }
 

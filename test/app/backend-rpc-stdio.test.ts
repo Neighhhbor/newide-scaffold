@@ -2,14 +2,16 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { createProductionBackendService, parseDriverEnv } from '../../src/app/backend-rpc-stdio';
 import type { AppRunEvent } from '../../src/app/run-registry';
+import { TaskProcessor } from '../../src/app/task-processor';
 import type { ToolCallingClient } from '../../src/memory';
+import { SqliteCoordinationStore } from '../../src/persistence';
 
 describe('backend RPC stdio entrypoint', () => {
   it('fails fast when the configured ACP runner directory does not exist', () => {
@@ -46,6 +48,58 @@ describe('backend RPC stdio entrypoint', () => {
     expect(
       parseDriverEnv('GOOD="quoted"\nTOKEN=a=b=c\nINVALID-KEY=no\n=no-key\n# comment'),
     ).toEqual({ GOOD: 'quoted', TOKEN: 'a=b=c' });
+  });
+
+  it('blocks a persisted active run when the production service starts', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'newide-startup-recovery-'));
+    const runnerDir = path.join(root, 'runner');
+    const databasePath = path.join(root, 'coordination.sqlite');
+    const workspacePath = path.join(root, 'workspace');
+    try {
+      mkdirSync(runnerDir, { recursive: true });
+      writeFileSync(path.join(runnerDir, 'package.json'), '{"scripts":{"driver:run":"exit 99"}}');
+      const seedStore = new SqliteCoordinationStore(databasePath);
+      const seedProcessor = new TaskProcessor(seedStore);
+      seedProcessor.beginRun({
+        task_id: 'task_interrupted',
+        run_id: 'run_interrupted',
+        task_request: {
+          spec: 'Recover without automatically executing',
+          completion_criteria: ['Task is blocked until explicit resume'],
+        },
+        workspace_path: workspacePath,
+        mode: 'single_agent',
+        session_id: 'session_interrupted',
+      });
+      seedStore.close();
+
+      const service = createProductionBackendService({
+        ACP_DRIVER_RUNNER_DIR: runnerDir,
+        NEWIDE_COORDINATION_DB: databasePath,
+      });
+
+      await expect(service.getTask('task_interrupted')).resolves.toMatchObject({
+        task: { status: 'blocked' },
+        run_history: [
+          {
+            run_id: 'run_interrupted',
+            status: 'interrupted',
+            session_id: 'session_interrupted',
+          },
+        ],
+        waiting_reason: 'The backend process ended before the active run reached a terminal state.',
+      });
+      const evidenceStore = new SqliteCoordinationStore(databasePath);
+      expect(evidenceStore.getLatestCheckpoint('task_interrupted')).toMatchObject({
+        run_id: 'run_interrupted',
+        session_id: 'session_interrupted',
+        trigger: 'blocked',
+        validity_status: 'valid',
+      });
+      evidenceStore.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('executes the production C-to-B-to-A chain through a real driver:run process', async () => {
