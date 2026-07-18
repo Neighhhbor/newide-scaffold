@@ -11,12 +11,20 @@ describe('IntegrationV0CoordinatorRunner', () => {
     const onRunCreated = vi.fn();
     const onEvent = vi.fn();
     const controller = new AbortController();
+    const taskRequest = {
+      spec: 'Build the RPC transport',
+      role_id: 'role_backend_engineer',
+      risk_level: 'medium' as const,
+      affected_paths: ['src/rpc/**'],
+      completion_criteria: ['RPC subprocess acceptance passes'],
+    };
 
     await runner.run({
       prompt: 'Build RPC',
       mode: 'council',
       workspace_path: process.cwd(),
       session_id: 'session_existing',
+      task_request: taskRequest,
       onRunCreated,
       onEvent,
       signal: controller.signal,
@@ -28,6 +36,7 @@ describe('IntegrationV0CoordinatorRunner', () => {
       enableCouncil: true,
       workspacePath: process.cwd(),
       sessionId: 'session_existing',
+      taskRequest,
       onRunCreated,
       onEvent,
       signal: controller.signal,

@@ -119,6 +119,28 @@ describe('runIntegrationV0Flow', () => {
     expect(driverRequestedDelivery.ack_at).toBeDefined();
   });
 
+  it('creates the runtime task from the supplied task definition', async () => {
+    const result = await runFlow({
+      taskRequest: {
+        spec: 'Implement the task-first RPC surface',
+        role_id: 'role_backend_engineer',
+        risk_level: 'medium',
+        affected_paths: ['src/app/**', 'src/protocol/**'],
+        completion_criteria: ['TaskSnapshot is queryable through JSON-RPC'],
+        budget: { max_tool_calls: 20 },
+      },
+    });
+
+    expect(result.frontend_snapshot.task).toMatchObject({
+      spec: 'Implement the task-first RPC surface',
+      role_id: 'role_backend_engineer',
+      risk_level: 'medium',
+      affected_paths: ['src/app/**', 'src/protocol/**'],
+      completion_criteria: ['TaskSnapshot is queryable through JSON-RPC'],
+      budget: { max_tool_calls: 20 },
+    });
+  });
+
   it('reports a structured GATE_DENIED failure', async () => {
     const result = await runFlow({ hookEngine: fakeHookEngine('deny') });
 

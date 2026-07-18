@@ -20,10 +20,7 @@ import {
 } from '../driver';
 import type { AgentExecutionFacade, AgentExecutionResult } from '../protocol/agent-execution';
 import { ExecuteAgentHandler } from './handlers/execute-agent-handler';
-import type {
-  SelectAgentHandler,
-  SelectAgentResult,
-} from './handlers/select-agent-handler';
+import type { SelectAgentHandler, SelectAgentResult } from './handlers/select-agent-handler';
 import { AutonomousCouncilHandler } from './handlers/autonomous-council-handler';
 import {
   DeliverArtifactHandler,
@@ -40,6 +37,7 @@ import {
   type SelectionMode,
 } from './artifact-finalizer';
 import { buildDriverRunResultFromAgentExecution } from './agent-execution-driver-result';
+import { createDefaultTaskRequest } from './task-request';
 import {
   WorktreeMaterializer,
   type MaterializationInput,
@@ -147,6 +145,7 @@ export interface IntegrationV0Materializer {
 export interface IntegrationV0Options {
   driver?: DriverRuntimeHandle;
   driverPrompt?: string;
+  taskRequest?: TaskCreateRequest;
   workspacePath?: string;
   sessionId?: string;
   agentExecutionFacade?: AgentExecutionFacade;
@@ -210,13 +209,7 @@ export async function runIntegrationV0Flow(
   const mailboxMessageRefs: MessageId[] = [];
 
   // 1. Create task
-  const taskRequest: TaskCreateRequest = {
-    spec: options?.driverPrompt || 'Run the integration v0 flow',
-    role_id: 'role_ts_engineer',
-    risk_level: 'low',
-    affected_paths: ['src/**'],
-    completion_criteria: ['integration v0 flow completes successfully'],
-  };
+  const taskRequest = options?.taskRequest ?? createDefaultTaskRequest(options?.driverPrompt);
   let task = orchestrator.createTask(taskRequest);
   timeline.push({ name: 'TaskCreated', id: task.task_id });
 
