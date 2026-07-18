@@ -14,6 +14,15 @@ import type { DriverToolEvent } from '../driver/contract';
 export type FrontendStage = 'executing' | 'council' | 'delivery';
 export type FrontendTimelineLevel = 'info' | 'success' | 'warning' | 'council';
 
+export interface FrontendMarketSelection {
+  winner_agent_id: string;
+  winner_bid_id: string;
+  ledger_ref: string;
+  audit_ref: string;
+  policy_version: string;
+  seed: string;
+}
+
 export interface FrontendRunSnapshotSummary {
   run_id: string;
   task_id: string;
@@ -36,6 +45,7 @@ export interface FrontendRunSnapshotSummary {
   checkpoint_path: string;
   mailbox_message_refs: MessageId[];
   mailbox_thread_id: string;
+  market?: FrontendMarketSelection;
   council_decision_path?: string;
   council_proposals_path?: string;
   council_reviews_path?: string;
@@ -130,6 +140,7 @@ export interface FrontendRunSnapshot {
     message_refs: MessageId[];
     messages: Message[];
   };
+  market?: FrontendMarketSelection;
   council?: {
     decision_path: string;
     proposals_path?: string;
@@ -214,6 +225,7 @@ export function buildFrontendRunSnapshot(
       message_refs: [...input.summary.mailbox_message_refs],
       messages: [...input.message_thread],
     },
+    ...(input.summary.market ? { market: { ...input.summary.market } } : {}),
     ...(input.summary.council_decision_path &&
     input.summary.council_decision_id &&
     input.summary.council_decision_mode &&

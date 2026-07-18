@@ -81,6 +81,7 @@ export function projectRunSnapshot(input: AppRunSnapshot): RunSnapshot {
         created_at: event.created_at,
         ...event.payload,
       })),
+    ...(rich?.market ? { market: { ...rich.market } } : {}),
     ...(input.mode === 'council' ? { council: projectCouncil(input, rich) } : {}),
     ...(rich?.checkpoint ? { checkpoint: asRecord(rich.checkpoint) } : {}),
     errors: input.error ? [{ ...input.error }] : [],

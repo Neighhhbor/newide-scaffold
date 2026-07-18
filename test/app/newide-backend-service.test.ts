@@ -66,6 +66,14 @@ describe('NewideBackendService', () => {
       snapshot: { run_id: 'run_1', task_id: 'task_1' },
       events: [{ sequence: 1 }, { sequence: 2 }, { sequence: 3, type: 'run.completed' }],
     });
+    expect(service.getRunSnapshot('run_1').market).toEqual({
+      winner_agent_id: 'role_ts_engineer',
+      winner_bid_id: 'bid_1',
+      ledger_ref: 'file:///market/ledger.json',
+      audit_ref: 'file:///market/audit.json',
+      policy_version: 'market-v0',
+      seed: 'run_1',
+    });
   });
 
   it('does not publish completed state before terminal outputs are durable', async () => {
@@ -601,6 +609,14 @@ function completedResult(runId: string, taskId: string): IntegrationV0Result {
       artifacts: [],
       checkpoint: {} as never,
       mailbox: { thread_id: runId, message_refs: [], messages: [] },
+      market: {
+        winner_agent_id: 'role_ts_engineer',
+        winner_bid_id: 'bid_1',
+        ledger_ref: 'file:///market/ledger.json',
+        audit_ref: 'file:///market/audit.json',
+        policy_version: 'market-v0',
+        seed: runId,
+      },
       links: {} as never,
     },
   } as IntegrationV0Result;

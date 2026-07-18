@@ -91,6 +91,17 @@ export const runSnapshotSchema = z
     agent_runs: z.array(recordSchema),
     artifacts: z.array(recordSchema),
     gates: z.array(recordSchema),
+    market: z
+      .object({
+        winner_agent_id: z.string().min(1),
+        winner_bid_id: z.string().min(1),
+        ledger_ref: z.string().min(1),
+        audit_ref: z.string().min(1),
+        policy_version: z.string().min(1),
+        seed: z.string().min(1),
+      })
+      .strict()
+      .optional(),
     council: z
       .object({
         enabled: z.literal(true),
