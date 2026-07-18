@@ -1,25 +1,9 @@
 import { z } from 'zod';
+import { TASK_STATUSES } from '../core';
 import { runEventSchema } from './run-event';
 
 const recordSchema = z.record(z.string(), z.unknown());
-const taskStatusSchema = z.enum([
-  'created',
-  'triaged',
-  'ready',
-  'claimed',
-  'running',
-  'waiting_input',
-  'waiting_help',
-  'pending_gate',
-  'pending_council',
-  'reviewing',
-  'blocked',
-  'escalated',
-  'merging',
-  'completed',
-  'failed',
-  'cancelled',
-]);
+const taskStatusSchema = z.enum(TASK_STATUSES);
 
 export const runSnapshotSchema = z
   .object({

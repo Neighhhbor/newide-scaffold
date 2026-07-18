@@ -1,11 +1,37 @@
 import { describe, expect, it } from 'vitest';
+import { TASK_STATUSES } from '../../src/core';
 import {
   assertTaskStatusTransition,
   isTerminalTaskStatus,
+  listNonTerminalTaskStatuses,
   transitionTaskStatus,
 } from '../../src/coordinator/task-state-machine';
 
 describe('coordinator task state machine', () => {
+  it('uses the single core TaskStatus contract', () => {
+    expect(TASK_STATUSES).toEqual([
+      'created',
+      'triaged',
+      'ready',
+      'claimed',
+      'running',
+      'waiting_help',
+      'waiting_input',
+      'pending_gate',
+      'pending_council',
+      'reviewing',
+      'blocked',
+      'escalated',
+      'merging',
+      'completed',
+      'failed',
+      'cancelled',
+    ]);
+    expect([...listNonTerminalTaskStatuses(), 'completed', 'failed', 'cancelled']).toEqual(
+      TASK_STATUSES,
+    );
+  });
+
   it('allows the spec-c v0 happy path', () => {
     expect(transitionTaskStatus('created', 'claimed')).toMatchObject({
       previous_status: 'created',

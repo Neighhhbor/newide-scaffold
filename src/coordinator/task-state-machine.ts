@@ -8,23 +8,9 @@
  * 这里是 coordinator 控制面的基础约束：上层 facade / contract 只能通过这个状态机推进任务，
  * 避免 demo 或后续 mock 直接把 task.status 当普通字符串随意改写。
  */
-export type CoordinatorTaskStatus =
-  | 'created'
-  | 'triaged'
-  | 'ready'
-  | 'claimed'
-  | 'running'
-  | 'waiting_help'
-  | 'waiting_input'
-  | 'pending_gate'
-  | 'pending_council'
-  | 'reviewing'
-  | 'blocked'
-  | 'escalated'
-  | 'merging'
-  | 'completed'
-  | 'failed'
-  | 'cancelled';
+import { TASK_STATUSES, type TaskStatus } from '../core';
+
+export type CoordinatorTaskStatus = TaskStatus;
 
 export interface TaskStatusTransition {
   previous_status: CoordinatorTaskStatus;
@@ -33,21 +19,9 @@ export interface TaskStatusTransition {
 
 const TERMINAL_TASK_STATUSES = new Set<CoordinatorTaskStatus>(['completed', 'failed', 'cancelled']);
 
-const NON_TERMINAL_TASK_STATUSES: readonly CoordinatorTaskStatus[] = [
-  'created',
-  'triaged',
-  'ready',
-  'claimed',
-  'running',
-  'waiting_help',
-  'waiting_input',
-  'pending_gate',
-  'pending_council',
-  'reviewing',
-  'blocked',
-  'escalated',
-  'merging',
-];
+const NON_TERMINAL_TASK_STATUSES = TASK_STATUSES.filter(
+  (status) => !TERMINAL_TASK_STATUSES.has(status),
+);
 
 const ALLOWED_TRANSITIONS: Readonly<
   Record<CoordinatorTaskStatus, readonly CoordinatorTaskStatus[]>
