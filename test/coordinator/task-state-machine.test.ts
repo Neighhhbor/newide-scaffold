@@ -41,6 +41,7 @@ describe('coordinator task state machine', () => {
     expect(transitionTaskStatus('running', 'reviewing').next_status).toBe('reviewing');
     expect(transitionTaskStatus('reviewing', 'merging').next_status).toBe('merging');
     expect(transitionTaskStatus('merging', 'completed').next_status).toBe('completed');
+    expect(transitionTaskStatus('running', 'completed').next_status).toBe('completed');
   });
 
   it('allows the v0 waiting and blocked paths', () => {

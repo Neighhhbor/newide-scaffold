@@ -38,6 +38,7 @@ const ALLOWED_TRANSITIONS: Readonly<
     'pending_council',
     'blocked',
     'escalated',
+    'completed',
     'failed',
     'cancelled',
   ],
