@@ -78,6 +78,11 @@ export interface TaskListResult {
   tasks: TaskSnapshot[];
 }
 
+export interface TaskSubscription {
+  snapshot: TaskSnapshot;
+  unsubscribe: () => void;
+}
+
 export class TaskNotFoundError extends Error {
   constructor(readonly taskId: string) {
     super(`Task ${taskId} was not found`);
@@ -101,6 +106,7 @@ export class TaskAlreadyRunningError extends Error {
 
 export class NewideBackendService {
   private readonly terminalRuns = new Map<string, Promise<void>>();
+  private readonly taskListeners = new Map<string, Set<(event: AppRunEvent) => void>>();
 
   constructor(
     private readonly runner: CoordinatorRunner = new IntegrationV0CoordinatorRunner(),
@@ -167,6 +173,24 @@ export class NewideBackendService {
       ...(launch.session_id ? { session_id: launch.session_id } : {}),
     });
     return this.getTask(taskId);
+  }
+
+  async subscribeTask(
+    taskId: string,
+    listener: (event: AppRunEvent) => void,
+  ): Promise<TaskSubscription> {
+    await this.getTask(taskId);
+    const listeners = this.taskListeners.get(taskId) ?? new Set();
+    listeners.add(listener);
+    this.taskListeners.set(taskId, listeners);
+    const snapshot = await this.getTask(taskId);
+    return {
+      snapshot,
+      unsubscribe: () => {
+        listeners.delete(listener);
+        if (listeners.size === 0) this.taskListeners.delete(taskId);
+      },
+    };
   }
 
   async listRuns(): Promise<RunListResult> {
@@ -255,6 +279,7 @@ export class NewideBackendService {
             this.registry.create({ ...created, mode, controller });
             this.registry.subscribe(created.run_id, (event) => {
               void this.auditWriter.append(event).catch(() => undefined);
+              this.notifyTaskListeners(created.task_id, event);
             });
             for (const event of pendingEvents) this.appendDomainEvent(created, event);
             this.registry.appendEvent(created.run_id, 'run.started', { mode });
@@ -365,6 +390,10 @@ export class NewideBackendService {
 
   private isLiveRun(runId: string): boolean {
     return this.terminalRuns.has(runId);
+  }
+
+  private notifyTaskListeners(taskId: string, event: AppRunEvent): void {
+    for (const listener of this.taskListeners.get(taskId) ?? []) listener(event);
   }
 
   private async collectTaskSnapshots(): Promise<TaskSnapshot[]> {

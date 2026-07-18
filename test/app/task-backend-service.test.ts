@@ -9,7 +9,7 @@ import {
   TaskAlreadyRunningError,
   TaskNotFoundError,
 } from '../../src/app/newide-backend-service';
-import { InMemoryRunRegistry } from '../../src/app/run-registry';
+import { InMemoryRunRegistry, type AppRunEvent } from '../../src/app/run-registry';
 import { FileRunRequestStore } from '../../src/app/run-request-store';
 
 describe('NewideBackendService Task-first view', () => {
@@ -172,6 +172,11 @@ describe('NewideBackendService Task-first view', () => {
         },
       });
 
+      const taskEvents: AppRunEvent[] = [];
+      const subscription = await service.subscribeTask('task_done', (event) =>
+        taskEvents.push(event),
+      );
+      expect(subscription.snapshot.task.status).toBe('completed');
       const council = await service.startCouncil('task_done');
       expect(council.task.task_id).toBe('task_done');
       expect(council.task.status).toBe('running');
@@ -200,6 +205,14 @@ describe('NewideBackendService Task-first view', () => {
       await expect(service.listTasks()).resolves.toMatchObject({
         tasks: [{ task: { task_id: 'task_done' } }],
       });
+      expect(taskEvents).toEqual([
+        expect.objectContaining({
+          run_id: 'run_council',
+          task_id: 'task_done',
+          type: 'run.started',
+        }),
+      ]);
+      subscription.unsubscribe();
     } finally {
       await rm(runsRoot, { recursive: true, force: true });
     }

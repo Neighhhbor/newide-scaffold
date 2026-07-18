@@ -7,6 +7,7 @@ import {
 import { JsonRpcDispatcher, JsonRpcLineSession } from '../../src/rpc/json-rpc-dispatcher';
 import { TaskRpcMethods, type TaskMethodsService } from '../../src/rpc/task-methods';
 import type { TaskSnapshot } from '../../src/protocol/task-snapshot';
+import type { AppRunEvent } from '../../src/app/run-registry';
 
 describe('TaskRpcMethods', () => {
   it('validates task.create and exposes create/get/list', async () => {
@@ -114,12 +115,66 @@ describe('TaskRpcMethods', () => {
     expect(cancelTask).toHaveBeenCalledWith('task_cancelled');
     expect(startCouncil).toHaveBeenCalledWith('task_council');
   });
+
+  it('subscribes to Task events and returns the current snapshot', async () => {
+    const output: string[] = [];
+    let listener: ((event: AppRunEvent) => void) | undefined;
+    const service = fakeService({
+      subscribeTask: async (_taskId, next) => {
+        listener = next;
+        return {
+          snapshot: snapshot('task_1'),
+          unsubscribe: () => {
+            listener = undefined;
+          },
+        };
+      },
+    });
+    const session = sessionWith(service, output);
+
+    await session.handleLine(
+      '{"jsonrpc":"2.0","id":1,"method":"task.subscribe","params":{"task_id":"task_1"}}',
+    );
+    listener?.({
+      event_id: 'event_1',
+      sequence: 1,
+      run_id: 'run_1',
+      task_id: 'task_1',
+      type: 'council.started',
+      source: 'council',
+      created_at: '2026-07-19T00:00:02.000Z',
+      payload: {},
+      schema_version: 'v0',
+    });
+    await session.handleLine(
+      '{"jsonrpc":"2.0","id":2,"method":"task.unsubscribe","params":{"task_id":"task_1"}}',
+    );
+
+    expect(output.map((line) => JSON.parse(line))).toMatchObject([
+      {
+        id: 1,
+        result: { subscribed: true, snapshot: { task: { task_id: 'task_1' } } },
+      },
+      {
+        method: 'task.event',
+        params: {
+          task_id: 'task_1',
+          event: { event_id: 'event_1', run_id: 'run_1', type: 'council.started' },
+        },
+      },
+      { id: 2, result: { unsubscribed: true } },
+    ]);
+    expect(listener).toBeUndefined();
+  });
 });
 
 function sessionWith(service: TaskMethodsService, output: string[]): JsonRpcLineSession {
   const dispatcher = new JsonRpcDispatcher();
-  new TaskRpcMethods(service).register(dispatcher);
-  return new JsonRpcLineSession(dispatcher, (line) => output.push(line));
+  const session = new JsonRpcLineSession(dispatcher, (line) => output.push(line));
+  new TaskRpcMethods(service, (method, params) =>
+    session.sendNotification(method, params),
+  ).register(dispatcher);
+  return session;
 }
 
 function fakeService(overrides: Partial<TaskMethodsService> = {}): TaskMethodsService {
@@ -129,6 +184,10 @@ function fakeService(overrides: Partial<TaskMethodsService> = {}): TaskMethodsSe
     listTasks: async () => ({ tasks: [snapshot('task_1')] }),
     cancelTask: async () => snapshot('task_1', 'cancelled'),
     startCouncil: async () => snapshot('task_1'),
+    subscribeTask: async (_taskId, _listener) => ({
+      snapshot: snapshot('task_1'),
+      unsubscribe: () => undefined,
+    }),
     ...overrides,
   };
 }

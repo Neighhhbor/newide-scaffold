@@ -151,7 +151,9 @@ export function startBackendRpcServer(options: BackendRpcServerOptions): Backend
   const runMethods = new RunRpcMethods(service, (method, params) =>
     session.sendNotification(method, params),
   );
-  const taskMethods = new TaskRpcMethods(service);
+  const taskMethods = new TaskRpcMethods(service, (method, params) =>
+    session.sendNotification(method, params),
+  );
   runMethods.register(dispatcher);
   taskMethods.register(dispatcher);
 
@@ -162,11 +164,15 @@ export function startBackendRpcServer(options: BackendRpcServerOptions): Backend
       .then(() => session.handleLine(line))
       .catch((error: unknown) => options.logError?.(String(error)));
   });
-  lines.on('close', () => runMethods.dispose());
+  lines.on('close', () => {
+    runMethods.dispose();
+    taskMethods.dispose();
+  });
 
   return {
     close: () => {
       runMethods.dispose();
+      taskMethods.dispose();
       lines.close();
     },
   };

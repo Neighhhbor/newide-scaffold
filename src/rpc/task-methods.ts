@@ -11,7 +11,9 @@ import {
   TaskNotRunningError,
   type TaskCreateParams,
   type TaskListResult,
+  type TaskSubscription,
 } from '../app/newide-backend-service';
+import type { AppRunEvent } from '../app/run-registry';
 import type { TaskSnapshot } from '../protocol/task-snapshot';
 import { JsonRpcMethodError, type JsonRpcDispatcher } from './json-rpc-dispatcher';
 import { JSON_RPC_ERROR_CODES } from './json-rpc-line-protocol';
@@ -22,6 +24,7 @@ export interface TaskMethodsService {
   listTasks(): Promise<TaskListResult>;
   cancelTask(taskId: string): Promise<TaskSnapshot>;
   startCouncil(taskId: string): Promise<TaskSnapshot>;
+  subscribeTask(taskId: string, listener: (event: AppRunEvent) => void): Promise<TaskSubscription>;
 }
 
 const budgetSchema = z
@@ -55,7 +58,12 @@ const taskIdParamsSchema = z.object({ task_id: z.string().trim().min(1) }).stric
 const emptyParamsSchema = z.object({}).strict();
 
 export class TaskRpcMethods {
-  constructor(private readonly service: TaskMethodsService) {}
+  private readonly subscriptions = new Map<string, () => void>();
+
+  constructor(
+    private readonly service: TaskMethodsService,
+    private readonly notify: (method: string, params: unknown) => void,
+  ) {}
 
   register(dispatcher: JsonRpcDispatcher): void {
     dispatcher.register('task.create', (params) => {
@@ -78,6 +86,28 @@ export class TaskRpcMethods {
       const { task_id } = parseParams(taskIdParamsSchema, params);
       return this.callWithTaskError(() => this.service.startCouncil(task_id));
     });
+    dispatcher.register('task.subscribe', async (params) => {
+      const { task_id } = parseParams(taskIdParamsSchema, params);
+      const subscription = await this.callWithTaskError(() =>
+        this.service.subscribeTask(task_id, (event) =>
+          this.notify('task.event', { task_id, event }),
+        ),
+      );
+      this.subscriptions.get(task_id)?.();
+      this.subscriptions.set(task_id, subscription.unsubscribe);
+      return { subscribed: true, snapshot: subscription.snapshot };
+    });
+    dispatcher.register('task.unsubscribe', (params) => {
+      const { task_id } = parseParams(taskIdParamsSchema, params);
+      this.subscriptions.get(task_id)?.();
+      this.subscriptions.delete(task_id);
+      return { unsubscribed: true };
+    });
+  }
+
+  dispose(): void {
+    for (const unsubscribe of this.subscriptions.values()) unsubscribe();
+    this.subscriptions.clear();
   }
 
   private async callWithTaskError<T>(operation: () => T | Promise<T>): Promise<T> {
