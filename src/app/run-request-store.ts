@@ -14,6 +14,7 @@ import {
   type Timestamp,
 } from '../core';
 import type { AppRunMode } from './run-registry';
+import { runSnapshotSchema, type RunSnapshot } from '../protocol/run-snapshot';
 
 export interface PersistedRunRequest {
   schema_version: SchemaVersion;
@@ -60,6 +61,7 @@ export interface RunRequestStore {
   load(runId: string): Promise<PersistedRunRequest>;
   listHistory(): Promise<RunHistoryEntry[]>;
   readTerminalSessionId(runId: string): Promise<string | undefined>;
+  loadRunSnapshot(runId: string): Promise<RunSnapshot | undefined>;
 }
 
 export class FileRunRequestStore implements RunRequestStore {
@@ -117,6 +119,13 @@ export class FileRunRequestStore implements RunRequestStore {
   async readTerminalSessionId(runId: string): Promise<string | undefined> {
     const terminal = await this.readTerminalState(runId);
     return terminal?.session_id;
+  }
+
+  async loadRunSnapshot(runId: string): Promise<RunSnapshot | undefined> {
+    const value = await readJsonFile(path.join(this.runsRoot, runId, 'frontend-snapshot.json'));
+    if (!value) return undefined;
+    const parsed = runSnapshotSchema.safeParse(value);
+    return parsed.success ? parsed.data : undefined;
   }
 
   private async readHistoryEntry(runId: string): Promise<RunHistoryEntry | undefined> {

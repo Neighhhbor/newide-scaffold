@@ -29,10 +29,32 @@ describe('FileRunRequestStore', () => {
       await writeFile(
         path.join(runsRoot, 'run_done', 'frontend-snapshot.json'),
         JSON.stringify({
+          schema_version: 'v0',
+          run_id: 'run_done',
           status: 'completed',
           task_id: 'task_done',
           mode: 'single_agent',
-          final_output: { status: 'completed', session_id: 'session_terminal' },
+          current: { stage: 'delivery', active_node_code: 'N18' },
+          run: {
+            run_id: 'run_done',
+            task_id: 'task_done',
+            status: 'completed',
+            mode: 'single_agent',
+            session_id: 'session_terminal',
+            event_ids: [],
+            started_at: '2026-07-19T01:00:00.000Z',
+            completed_at: '2026-07-19T01:01:00.000Z',
+          },
+          timeline: [],
+          agent_runs: [],
+          artifacts: [],
+          gates: [],
+          final_output: {
+            status: 'completed',
+            artifact_refs: [],
+            files_written: [],
+            session_id: 'session_terminal',
+          },
           errors: [],
         }),
         'utf-8',
@@ -62,6 +84,15 @@ describe('FileRunRequestStore', () => {
       });
       await expect(store.readTerminalSessionId('run_done')).resolves.toBe('session_terminal');
       await expect(store.readTerminalSessionId('run_interrupted')).resolves.toBeUndefined();
+      await expect(store.loadRunSnapshot('run_done')).resolves.toMatchObject({
+        run_id: 'run_done',
+        status: 'completed',
+        run: {
+          started_at: '2026-07-19T01:00:00.000Z',
+          completed_at: '2026-07-19T01:01:00.000Z',
+        },
+      });
+      await expect(store.loadRunSnapshot('run_interrupted')).resolves.toBeUndefined();
       await expect(store.load('run_missing')).rejects.toBeInstanceOf(RunRequestNotFoundError);
     } finally {
       await rm(runsRoot, { recursive: true, force: true });
