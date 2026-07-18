@@ -22,6 +22,7 @@ import {
 import { BAgentProjectionAdapter, FileMarketEvidenceStore } from '../market';
 import { JsonRpcDispatcher, JsonRpcLineSession } from '../rpc/json-rpc-dispatcher';
 import { RunRpcMethods } from '../rpc/run-methods';
+import { TaskRpcMethods } from '../rpc/task-methods';
 import { DriverRuntimeAgentExecutionFacade } from './driver-runtime-agent-execution-facade';
 import { FileAgentExecutionEvidenceStore } from './agent-execution-evidence-store';
 import { NewideBackendService } from './newide-backend-service';
@@ -146,11 +147,13 @@ function hasDriverRunScript(value: unknown): boolean {
 export function startBackendRpcServer(options: BackendRpcServerOptions): BackendRpcServer {
   const dispatcher = new JsonRpcDispatcher();
   const session = new JsonRpcLineSession(dispatcher, options.writeLine);
-  const methods = new RunRpcMethods(
-    options.service ?? createProductionBackendService(),
-    (method, params) => session.sendNotification(method, params),
+  const service = options.service ?? createProductionBackendService();
+  const runMethods = new RunRpcMethods(service, (method, params) =>
+    session.sendNotification(method, params),
   );
-  methods.register(dispatcher);
+  const taskMethods = new TaskRpcMethods(service);
+  runMethods.register(dispatcher);
+  taskMethods.register(dispatcher);
 
   const lines = createInterface({ input: options.input, crlfDelay: Infinity });
   let pending = Promise.resolve();
@@ -159,11 +162,11 @@ export function startBackendRpcServer(options: BackendRpcServerOptions): Backend
       .then(() => session.handleLine(line))
       .catch((error: unknown) => options.logError?.(String(error)));
   });
-  lines.on('close', () => methods.dispose());
+  lines.on('close', () => runMethods.dispose());
 
   return {
     close: () => {
-      methods.dispose();
+      runMethods.dispose();
       lines.close();
     },
   };
