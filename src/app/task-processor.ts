@@ -16,7 +16,9 @@ import {
   type TaskResumeCursor,
 } from '../persistence';
 import type { RunSnapshot } from '../protocol/run-snapshot';
+import { projectRunEventSource } from '../protocol/run-event';
 import { taskSnapshotSchema, type TaskSnapshot } from '../protocol/task-snapshot';
+import type { AppRunEvent } from './run-registry';
 import { projectTaskSnapshot, type TaskRunFact } from './task-snapshot-projector';
 
 export interface TaskProcessorOptions {
@@ -32,6 +34,9 @@ export interface BeginTaskRunInput {
   mode: PersistedRunMode;
   session_id?: string;
   restarted_from_run_id?: string;
+  task_created_event?: Event;
+  run_created_event?: Event;
+  run_started_event?: Event;
 }
 
 export interface FinishTaskRunInput {
@@ -61,6 +66,16 @@ export class TaskProcessorRunNotFoundError extends Error {
   constructor(readonly runId: string) {
     super(`Run ${runId} was not found in the coordination store`);
     this.name = 'TaskProcessorRunNotFoundError';
+  }
+}
+
+export class TaskEventCursorNotFoundError extends Error {
+  constructor(
+    readonly taskId: string,
+    readonly eventId: string,
+  ) {
+    super(`Task ${taskId} event cursor ${eventId} was not found`);
+    this.name = 'TaskEventCursorNotFoundError';
   }
 }
 
@@ -141,17 +156,20 @@ export class TaskProcessor {
       ...(existing
         ? []
         : [
-            this.createEvent('task.created', input.task_id, input.task_id, input.run_id, {
-              spec: input.task_request.spec,
-              risk_level: input.task_request.risk_level ?? 'low',
-            }),
+            input.task_created_event ??
+              this.createEvent('task.created', input.task_id, input.task_id, input.run_id, {
+                spec: input.task_request.spec,
+                risk_level: input.task_request.risk_level ?? 'low',
+              }),
           ]),
-      this.createEvent('run.created', input.run_id, input.task_id, input.run_id, {
-        mode: input.mode,
-      }),
-      this.createEvent('run.started', input.run_id, input.task_id, input.run_id, {
-        mode: input.mode,
-      }),
+      input.run_created_event ??
+        this.createEvent('run.created', input.run_id, input.task_id, input.run_id, {
+          mode: input.mode,
+        }),
+      input.run_started_event ??
+        this.createEvent('run.started', input.run_id, input.task_id, input.run_id, {
+          mode: input.mode,
+        }),
     ];
 
     this.store.commitState({
@@ -315,6 +333,25 @@ export class TaskProcessor {
 
   listTaskSnapshots(): TaskSnapshot[] {
     return this.store.listTaskAggregates().map(projectAggregate);
+  }
+
+  listTaskEvents(taskId: string, afterEventId?: string): AppRunEvent[] {
+    if (!afterEventId) return [];
+    const aggregate = this.store.getTaskAggregate(taskId);
+    if (!aggregate) throw new TaskProcessorTaskNotFoundError(taskId);
+    const cursorIndex = aggregate.events.findIndex((event) => event.event_id === afterEventId);
+    if (cursorIndex < 0) throw new TaskEventCursorNotFoundError(taskId, afterEventId);
+    return aggregate.events.slice(cursorIndex + 1).map((event) => ({
+      event_id: event.event_id,
+      sequence: event.sequence,
+      run_id: event.run_id ?? event.subject_id,
+      task_id: event.task_id ?? taskId,
+      type: event.event_type,
+      source: projectRunEventSource(event.event_type),
+      created_at: event.created_at,
+      payload: { ...event.payload },
+      schema_version: event.schema_version,
+    }));
   }
 
   getRunSnapshot(runId: string): RunSnapshot | undefined {

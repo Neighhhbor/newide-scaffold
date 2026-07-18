@@ -4,6 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FileRunAuditWriter } from '../../src/app/run-audit-writer';
 import { InMemoryRunRegistry } from '../../src/app/run-registry';
+import type { AppRunEvent } from '../../src/app/run-registry';
 import { FileRunRequestStore } from '../../src/app/run-request-store';
 import { NewideBackendService } from '../../src/app/newide-backend-service';
 import { TaskProcessor } from '../../src/app/task-processor';
@@ -62,6 +63,21 @@ describe('NewideBackendService SQLite lifecycle', () => {
           status: 'completed',
           final_output: { artifact_refs: ['artifact_persisted'] },
         });
+        const firstEventId = reopenedStore.getTaskAggregate(created.task.task_id)?.events[0]
+          ?.event_id;
+        expect(firstEventId).toBeDefined();
+        const subscription = await restarted.subscribeTask(
+          created.task.task_id,
+          () => undefined,
+          firstEventId,
+        );
+        expect(subscription.replay_events).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ event_id: 'event_market_persisted' }),
+            expect.objectContaining({ type: 'run.completed' }),
+          ]),
+        );
+        subscription.unsubscribe();
       } finally {
         reopenedStore.close();
       }
@@ -104,6 +120,10 @@ describe('NewideBackendService SQLite lifecycle', () => {
         await expect(service.getTask(created.task.task_id)).resolves.toMatchObject({
           task: { status: 'completed' },
         });
+        const taskEvents: AppRunEvent[] = [];
+        const subscription = await service.subscribeTask(created.task.task_id, (event) =>
+          taskEvents.push(event),
+        );
         const council = await service.startCouncil(created.task.task_id);
         expect(council).toMatchObject({
           task: { task_id: created.task.task_id, status: 'running' },
@@ -111,6 +131,14 @@ describe('NewideBackendService SQLite lifecycle', () => {
           run_history: [],
         });
         expect(store.getTaskAggregate(created.task.task_id)).toBeDefined();
+        const started = taskEvents.find((event) => event.type === 'run.started');
+        expect(started).toBeDefined();
+        expect(
+          store
+            .getTaskAggregate(created.task.task_id)
+            ?.events.some((event) => event.event_id === started?.event_id),
+        ).toBe(true);
+        subscription.unsubscribe();
       } finally {
         store.close();
       }

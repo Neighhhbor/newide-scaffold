@@ -8,6 +8,7 @@ import { JsonRpcDispatcher, JsonRpcLineSession } from '../../src/rpc/json-rpc-di
 import { TaskRpcMethods, type TaskMethodsService } from '../../src/rpc/task-methods';
 import type { TaskSnapshot } from '../../src/protocol/task-snapshot';
 import type { AppRunEvent } from '../../src/app/run-registry';
+import { TaskEventCursorNotFoundError } from '../../src/app/task-processor';
 
 describe('TaskRpcMethods', () => {
   it('validates task.create and exposes create/get/list', async () => {
@@ -104,6 +105,17 @@ describe('TaskRpcMethods', () => {
     await runningSession.handleLine(
       '{"jsonrpc":"2.0","id":5,"method":"task.cancel","params":{"task_id":"task_done"}}',
     );
+    const cursorSession = sessionWith(
+      fakeService({
+        subscribeTask: async (taskId, _listener, eventId) => {
+          throw new TaskEventCursorNotFoundError(taskId, eventId ?? 'missing');
+        },
+      }),
+      output,
+    );
+    await cursorSession.handleLine(
+      '{"jsonrpc":"2.0","id":6,"method":"task.subscribe","params":{"task_id":"task_done","after_event_id":"event_missing"}}',
+    );
 
     expect(output.map((line) => JSON.parse(line))).toMatchObject([
       { id: 1, result: { task: { task_id: 'task_cancelled', status: 'cancelled' } } },
@@ -111,6 +123,7 @@ describe('TaskRpcMethods', () => {
       { id: 3, error: { code: -32006, message: 'Task not found' } },
       { id: 4, error: { code: -32007, message: 'Task already running' } },
       { id: 5, error: { code: -32008, message: 'Task not running' } },
+      { id: 6, error: { code: -32009, message: 'Task event cursor not found' } },
     ]);
     expect(cancelTask).toHaveBeenCalledWith('task_cancelled');
     expect(startCouncil).toHaveBeenCalledWith('task_council');
@@ -119,21 +132,35 @@ describe('TaskRpcMethods', () => {
   it('subscribes to Task events and returns the current snapshot', async () => {
     const output: string[] = [];
     let listener: ((event: AppRunEvent) => void) | undefined;
-    const service = fakeService({
-      subscribeTask: async (_taskId, next) => {
-        listener = next;
-        return {
-          snapshot: snapshot('task_1'),
-          unsubscribe: () => {
-            listener = undefined;
+    const subscribeTask = vi.fn(async (_taskId: string, next: (event: AppRunEvent) => void) => {
+      listener = next;
+      return {
+        snapshot: snapshot('task_1'),
+        replay_events: [
+          {
+            event_id: 'event_replayed',
+            sequence: 4,
+            run_id: 'run_1',
+            task_id: 'task_1',
+            type: 'gate.result',
+            source: 'gate' as const,
+            created_at: '2026-07-19T00:00:01.000Z',
+            payload: {},
+            schema_version: 'v0',
           },
-        };
-      },
+        ],
+        unsubscribe: () => {
+          listener = undefined;
+        },
+      };
+    });
+    const service = fakeService({
+      subscribeTask,
     });
     const session = sessionWith(service, output);
 
     await session.handleLine(
-      '{"jsonrpc":"2.0","id":1,"method":"task.subscribe","params":{"task_id":"task_1"}}',
+      '{"jsonrpc":"2.0","id":1,"method":"task.subscribe","params":{"task_id":"task_1","after_event_id":"event_previous"}}',
     );
     listener?.({
       event_id: 'event_1',
@@ -153,7 +180,11 @@ describe('TaskRpcMethods', () => {
     expect(output.map((line) => JSON.parse(line))).toMatchObject([
       {
         id: 1,
-        result: { subscribed: true, snapshot: { task: { task_id: 'task_1' } } },
+        result: {
+          subscribed: true,
+          snapshot: { task: { task_id: 'task_1' } },
+          replay_events: [{ event_id: 'event_replayed', type: 'gate.result' }],
+        },
       },
       {
         method: 'task.event',
@@ -165,6 +196,7 @@ describe('TaskRpcMethods', () => {
       { id: 2, result: { unsubscribed: true } },
     ]);
     expect(listener).toBeUndefined();
+    expect(subscribeTask).toHaveBeenCalledWith('task_1', expect.any(Function), 'event_previous');
   });
 });
 
@@ -186,6 +218,7 @@ function fakeService(overrides: Partial<TaskMethodsService> = {}): TaskMethodsSe
     startCouncil: async () => snapshot('task_1'),
     subscribeTask: async (_taskId, _listener) => ({
       snapshot: snapshot('task_1'),
+      replay_events: [],
       unsubscribe: () => undefined,
     }),
     ...overrides,

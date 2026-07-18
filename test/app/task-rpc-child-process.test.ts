@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import type { AppRunEvent } from '../../src/app/run-registry';
 import type { TaskSnapshot } from '../../src/protocol/task-snapshot';
 
 describe('Task-first JSON-RPC child process acceptance', () => {
@@ -15,20 +16,8 @@ describe('Task-first JSON-RPC child process acceptance', () => {
     const createdRunIds = new Set<string>();
     const marketDirectories = new Set<string>();
     writeFakeDriver(runnerDir);
-    const child = spawn(
-      process.execPath,
-      ['--import', 'tsx', path.join(process.cwd(), 'test/fixtures/task-rpc-server.ts')],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          ACP_DRIVER_RUNNER_DIR: runnerDir,
-          NEWIDE_COORDINATION_DB: path.join(runnerDir, 'coordination.sqlite'),
-        },
-        stdio: ['pipe', 'pipe', 'pipe'],
-      },
-    );
-    const client = new RpcChildClient(child);
+    const client = new RpcChildClient(spawnBackend(runnerDir));
+    let restartedClient: RpcChildClient | undefined;
 
     try {
       await expect(client.call('system.ping')).resolves.toMatchObject({ status: 'ok' });
@@ -45,6 +34,7 @@ describe('Task-first JSON-RPC child process acceptance', () => {
       expect(firstTerminal.task.status).toBe('completed');
       expect(firstTerminal.run_history).toHaveLength(1);
       collectEvidence(firstTerminal, createdRunIds, marketDirectories);
+      await client.call('task.subscribe', { task_id: created.task.task_id });
 
       const councilStarted = await client.call<TaskSnapshot>('task.startCouncil', {
         task_id: created.task.task_id,
@@ -70,12 +60,35 @@ describe('Task-first JSON-RPC child process acceptance', () => {
         'COUNCIL_FINAL',
       );
 
-      const listed = await client.call<{ tasks: TaskSnapshot[] }>('task.list', {});
+      const liveCouncilEvents = client.taskEvents(created.task.task_id);
+      const replayCursor = liveCouncilEvents.find((event) => event.type === 'run.created');
+      expect(replayCursor).toBeDefined();
+      expect(liveCouncilEvents.at(-1)).toMatchObject({ type: 'run.completed' });
+
+      await client.close();
+      restartedClient = new RpcChildClient(spawnBackend(runnerDir));
+      await expect(restartedClient.call('system.ping')).resolves.toMatchObject({ status: 'ok' });
+      await expect(
+        restartedClient.call<TaskSnapshot>('task.get', { task_id: created.task.task_id }),
+      ).resolves.toEqual(councilTerminal);
+      const replayed = await restartedClient.call<{ replay_events: AppRunEvent[] }>(
+        'task.subscribe',
+        {
+          task_id: created.task.task_id,
+          after_event_id: replayCursor?.event_id,
+        },
+      );
+      expect(replayed.replay_events).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: 'run.completed' })]),
+      );
+
+      const listed = await restartedClient.call<{ tasks: TaskSnapshot[] }>('task.list', {});
       expect(
         listed.tasks.filter((task) => task.task.task_id === created.task.task_id),
       ).toHaveLength(1);
     } finally {
       await client.close();
+      await restartedClient?.close();
       rmSync(runnerDir, { recursive: true, force: true });
       rmSync(workspace, { recursive: true, force: true });
       for (const runId of createdRunIds) {
@@ -96,15 +109,22 @@ class RpcChildClient {
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
   >();
   private stderr = '';
+  private readonly notifications: Array<{ method: string; params: unknown }> = [];
 
   constructor(private readonly child: ChildProcessWithoutNullStreams) {
     createInterface({ input: child.stdout }).on('line', (line) => {
       const message = JSON.parse(line) as {
         id?: number;
+        method?: string;
+        params?: unknown;
         result?: unknown;
         error?: { code: number; message: string };
       };
-      if (message.id === undefined) return;
+      if (message.id === undefined) {
+        if (message.method)
+          this.notifications.push({ method: message.method, params: message.params });
+        return;
+      }
       const pending = this.pending.get(message.id);
       if (!pending) return;
       this.pending.delete(message.id);
@@ -145,6 +165,30 @@ class RpcChildClient {
     this.child.stdin.end();
     await once(this.child, 'exit');
   }
+
+  taskEvents(taskId: string): AppRunEvent[] {
+    return this.notifications.flatMap((notification) => {
+      if (notification.method !== 'task.event') return [];
+      const params = notification.params as { task_id?: unknown; event?: unknown } | undefined;
+      return params?.task_id === taskId && params.event ? [params.event as AppRunEvent] : [];
+    });
+  }
+}
+
+function spawnBackend(runnerDir: string): ChildProcessWithoutNullStreams {
+  return spawn(
+    process.execPath,
+    ['--import', 'tsx', path.join(process.cwd(), 'test/fixtures/task-rpc-server.ts')],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        ACP_DRIVER_RUNNER_DIR: runnerDir,
+        NEWIDE_COORDINATION_DB: path.join(runnerDir, 'coordination.sqlite'),
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    },
+  );
 }
 
 async function waitForTerminalTask(client: RpcChildClient, taskId: string): Promise<TaskSnapshot> {

@@ -56,6 +56,16 @@ describe('TaskProcessor', () => {
       event('event_agent_done', 'agent.execution_completed'),
     );
     expect(store.getTaskAggregate('task_processor')?.runtime_state.resume_cursor).toBe('gate');
+    expect(processor.listTaskEvents('task_processor', 'event_market')).toEqual([
+      expect.objectContaining({
+        event_id: 'event_agent_done',
+        type: 'agent.execution_completed',
+        source: 'agent',
+      }),
+    ]);
+    expect(() => processor.listTaskEvents('task_processor', 'event_unknown')).toThrow(
+      /event cursor/i,
+    );
     store.close();
   });
 

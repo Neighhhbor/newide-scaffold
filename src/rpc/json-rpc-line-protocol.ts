@@ -45,6 +45,7 @@ export const JSON_RPC_ERROR_CODES = {
   TASK_NOT_FOUND: -32006,
   TASK_ALREADY_RUNNING: -32007,
   TASK_NOT_RUNNING: -32008,
+  TASK_EVENT_CURSOR_NOT_FOUND: -32009,
 } as const;
 
 const requestSchema = z

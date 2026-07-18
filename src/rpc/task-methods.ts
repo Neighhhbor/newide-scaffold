@@ -13,6 +13,7 @@ import {
   type TaskListResult,
   type TaskSubscription,
 } from '../app/newide-backend-service';
+import { TaskEventCursorNotFoundError } from '../app/task-processor';
 import type { AppRunEvent } from '../app/run-registry';
 import type { TaskSnapshot } from '../protocol/task-snapshot';
 import { JsonRpcMethodError, type JsonRpcDispatcher } from './json-rpc-dispatcher';
@@ -24,7 +25,11 @@ export interface TaskMethodsService {
   listTasks(): Promise<TaskListResult>;
   cancelTask(taskId: string): Promise<TaskSnapshot>;
   startCouncil(taskId: string): Promise<TaskSnapshot>;
-  subscribeTask(taskId: string, listener: (event: AppRunEvent) => void): Promise<TaskSubscription>;
+  subscribeTask(
+    taskId: string,
+    listener: (event: AppRunEvent) => void,
+    afterEventId?: string,
+  ): Promise<TaskSubscription>;
 }
 
 const budgetSchema = z
@@ -55,6 +60,12 @@ const createParamsSchema = z
   .strict();
 
 const taskIdParamsSchema = z.object({ task_id: z.string().trim().min(1) }).strict();
+const subscribeParamsSchema = z
+  .object({
+    task_id: z.string().trim().min(1),
+    after_event_id: z.string().trim().min(1).optional(),
+  })
+  .strict();
 const emptyParamsSchema = z.object({}).strict();
 
 export class TaskRpcMethods {
@@ -87,15 +98,21 @@ export class TaskRpcMethods {
       return this.callWithTaskError(() => this.service.startCouncil(task_id));
     });
     dispatcher.register('task.subscribe', async (params) => {
-      const { task_id } = parseParams(taskIdParamsSchema, params);
+      const { task_id, after_event_id } = parseParams(subscribeParamsSchema, params);
       const subscription = await this.callWithTaskError(() =>
-        this.service.subscribeTask(task_id, (event) =>
-          this.notify('task.event', { task_id, event }),
+        this.service.subscribeTask(
+          task_id,
+          (event) => this.notify('task.event', { task_id, event }),
+          after_event_id,
         ),
       );
       this.subscriptions.get(task_id)?.();
       this.subscriptions.set(task_id, subscription.unsubscribe);
-      return { subscribed: true, snapshot: subscription.snapshot };
+      return {
+        subscribed: true,
+        snapshot: subscription.snapshot,
+        replay_events: subscription.replay_events,
+      };
     });
     dispatcher.register('task.unsubscribe', (params) => {
       const { task_id } = parseParams(taskIdParamsSchema, params);
@@ -130,6 +147,13 @@ export class TaskRpcMethods {
         throw new JsonRpcMethodError(JSON_RPC_ERROR_CODES.TASK_NOT_RUNNING, 'Task not running', {
           task_id: error.taskId,
         });
+      }
+      if (error instanceof TaskEventCursorNotFoundError) {
+        throw new JsonRpcMethodError(
+          JSON_RPC_ERROR_CODES.TASK_EVENT_CURSOR_NOT_FOUND,
+          'Task event cursor not found',
+          { task_id: error.taskId, event_id: error.eventId },
+        );
       }
       throw error;
     }

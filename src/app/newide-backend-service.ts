@@ -7,7 +7,7 @@ import type { IntegrationV0Result } from '../coordinator/integration-v0-flow';
 import { realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { CouncilRoleExecutionError } from '../council';
-import { SCHEMA_VERSION, type Event, type TaskCreateRequest } from '../core';
+import { SCHEMA_VERSION, createId, type Event, type TaskCreateRequest } from '../core';
 import {
   IntegrationV0CoordinatorRunner,
   type CoordinatorRunner,
@@ -82,6 +82,7 @@ export interface TaskListResult {
 
 export interface TaskSubscription {
   snapshot: TaskSnapshot;
+  replay_events: AppRunEvent[];
   unsubscribe: () => void;
 }
 
@@ -199,14 +200,22 @@ export class NewideBackendService {
   async subscribeTask(
     taskId: string,
     listener: (event: AppRunEvent) => void,
+    afterEventId?: string,
   ): Promise<TaskSubscription> {
     await this.getTask(taskId);
+    let replayEvents: AppRunEvent[] = [];
+    try {
+      replayEvents = this.taskProcessor?.listTaskEvents(taskId, afterEventId) ?? [];
+    } catch (error) {
+      if (!(error instanceof TaskProcessorTaskNotFoundError)) throw error;
+    }
     const listeners = this.taskListeners.get(taskId) ?? new Set();
     listeners.add(listener);
     this.taskListeners.set(taskId, listeners);
     const snapshot = await this.getTask(taskId);
     return {
       snapshot,
+      replay_events: replayEvents,
       unsubscribe: () => {
         listeners.delete(listener);
         if (listeners.size === 0) this.taskListeners.delete(taskId);
@@ -299,6 +308,13 @@ export class NewideBackendService {
             this.terminalRuns.set(created.run_id, terminalRun);
             this.runWorkspaces.set(created.run_id, workspacePath);
             this.registry.create({ ...created, mode, controller });
+            const runStartedEvent = createRunStartedEvent(created, mode);
+            const taskCreatedEvent = pendingEvents.find(
+              (event) => event.event_type === 'task.created',
+            );
+            const runCreatedEvent = pendingEvents.find(
+              (event) => event.event_type === 'run.created',
+            );
             try {
               this.taskProcessor?.beginRun({
                 ...created,
@@ -307,6 +323,9 @@ export class NewideBackendService {
                 mode,
                 ...(params.session_id ? { session_id: params.session_id } : {}),
                 ...(lineage ? { restarted_from_run_id: lineage.restarted_from_run_id } : {}),
+                ...(taskCreatedEvent ? { task_created_event: taskCreatedEvent } : {}),
+                ...(runCreatedEvent ? { run_created_event: runCreatedEvent } : {}),
+                run_started_event: runStartedEvent,
               });
             } catch (error) {
               controller.abort(error);
@@ -321,7 +340,12 @@ export class NewideBackendService {
               this.notifyTaskListeners(created.task_id, event);
             });
             for (const event of pendingEvents) this.appendDomainEvent(created, event);
-            this.registry.appendEvent(created.run_id, 'run.started', { mode });
+            this.registry.appendEvent(
+              created.run_id,
+              'run.started',
+              { mode },
+              { event_id: runStartedEvent.event_id, created_at: runStartedEvent.created_at },
+            );
             for (const record of pendingTelemetry) this.appendTelemetry(created, record);
             void this.requestStore
               .save({
@@ -642,6 +666,22 @@ const PROCESSOR_CONTROL_EVENTS = new Set([
   'run.failed',
   'run.cancelled',
 ]);
+
+function createRunStartedEvent(
+  identity: { run_id: string; task_id: string },
+  mode: AppRunMode,
+): Event {
+  return {
+    event_id: createId('run_event'),
+    event_type: 'run.started',
+    subject_id: identity.run_id,
+    run_id: identity.run_id,
+    task_id: identity.task_id,
+    payload: { mode },
+    created_at: new Date().toISOString(),
+    schema_version: SCHEMA_VERSION,
+  };
+}
 
 function shouldPersistRuntimeEvent(type: string): boolean {
   return !PROCESSOR_CONTROL_EVENTS.has(type);
