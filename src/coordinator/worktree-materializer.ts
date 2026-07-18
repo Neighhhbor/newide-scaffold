@@ -71,23 +71,16 @@ export class WorktreeMaterializer {
         if (artifact.content) {
           const written = await materializeContent(worktreePath, artifact);
           filesWritten.push(...written);
-          // Only treat in-place patches/diffs (target_path inside the agent's real
-          // workspace) as user-visible file changes. Pure metadata artifacts
-          // (transcripts, summaries, driver_result blobs) are still registered
-          // but must NOT pollute changed_files with worktree-internal paths —
-          // the UI used to display those as if they were workspace files.
-          for (const writtenPath of written) {
-            const inWorktree = path.resolve(writtenPath).startsWith(
-              `${path.resolve(worktreePath)}${path.sep}`,
-            );
-            if (!inWorktree) changedFiles.push(writtenPath);
-          }
+          // changed_files describes files materialized from deliverable content.
+          // Metadata records remain auditable through files_written but are not
+          // user deliverables and therefore must not enter changed_files.
+          if (artifact.content.kind !== 'metadata') changedFiles.push(...written);
         } else if (
           artifact.type === 'patch' ||
           artifact.type === 'diff' ||
           artifact.type === 'driver_result'
         ) {
-          // Metadata blobs: register, but never as a "changed file".
+          // Metadata blobs: register, but never as a changed file.
           const artifactFile = path.join(worktreePath, `${artifact.artifact_id}.json`);
           await fs.writeFile(artifactFile, JSON.stringify(artifact, null, 2), 'utf-8');
           filesWritten.push(artifactFile);

@@ -867,9 +867,12 @@ describe('runIntegrationV0Flow', () => {
     expect(result.frontend_snapshot).toMatchObject({
       run_id: result.run_id,
       task_id: result.task_id,
+      task: {
+        status: 'completed',
+      },
       current: {
         stage: 'delivery',
-        task_status: result.summary.status,
+        task_status: 'completed',
       },
       mailbox: {
         thread_id: result.summary.mailbox_thread_id,
@@ -1051,6 +1054,8 @@ describe('runIntegrationV0Flow', () => {
 
     // Verify run failed
     expect(result.summary.status).toBe('failed');
+    expect(result.frontend_snapshot.task.status).toBe('failed');
+    expect(result.frontend_snapshot.current.task_status).toBe('failed');
 
     // Verify timeline has RunFailed instead of RunCompleted
     const timelineNames = result.timeline.map((t) => t.name);
