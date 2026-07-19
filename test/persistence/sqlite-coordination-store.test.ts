@@ -30,7 +30,6 @@ describe('SqliteCoordinationStore', () => {
     const migration = database
       .prepare('SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1')
       .get();
-    database.close();
 
     expect(tables).toEqual(
       expect.arrayContaining([
@@ -44,7 +43,14 @@ describe('SqliteCoordinationStore', () => {
       ]),
     );
     expect(journalMode).toEqual({ journal_mode: 'wal' });
-    expect(migration).toEqual({ version: 1 });
+    expect(migration).toEqual({ version: 2 });
+
+    const runtimeColumns = database
+      .prepare('PRAGMA table_info(task_runtime_states)')
+      .all()
+      .map((row) => String(row.name));
+    expect(runtimeColumns).toContain('cursor_input_json');
+    database.close();
   });
 
   it('atomically persists task, run, runtime state, and ordered events', () => {
@@ -62,6 +68,41 @@ describe('SqliteCoordinationStore', () => {
       events: [expect.objectContaining({ sequence: 1, event_id: 'event_task_created' })],
     });
     store.close();
+  });
+
+  it('round-trips typed cursor input through runtime state', () => {
+    const { store } = createStore();
+    const commit = initialCommit();
+    const cursorInput = {
+      cursor: 'select_agent' as const,
+      seed: 'seed-42',
+      candidate_ids: ['agent_a', 'agent_b'],
+      market_evidence_ref: 'file:///tmp/market.json',
+    };
+
+    store.commitState({
+      ...commit,
+      runtime_state: { ...commit.runtime_state, cursor_input: cursorInput },
+    });
+
+    expect(store.getTaskAggregate('task_sqlite')?.runtime_state.cursor_input).toEqual(cursorInput);
+    store.close();
+  });
+
+  it('migrates a legacy runtime table and reads missing cursor input as undefined', () => {
+    const { databasePath } = createLegacyV1Database();
+    const store = new SqliteCoordinationStore(databasePath);
+
+    expect(store.getTaskAggregate('task_legacy')?.runtime_state).not.toHaveProperty('cursor_input');
+    store.close();
+
+    const database = new DatabaseSync(databasePath);
+    const runtimeColumns = database
+      .prepare('PRAGMA table_info(task_runtime_states)')
+      .all()
+      .map((row) => String(row.name));
+    database.close();
+    expect(runtimeColumns).toContain('cursor_input_json');
   });
 
   it('rolls back state changes when the event write fails', () => {
@@ -298,6 +339,59 @@ function createStore(): { databasePath: string; store: SqliteCoordinationStore }
   temporaryDirectories.push(directory);
   const databasePath = path.join(directory, 'coordination.sqlite');
   return { databasePath, store: new SqliteCoordinationStore(databasePath) };
+}
+
+function createLegacyV1Database(): { databasePath: string } {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'newide-coordination-legacy-'));
+  temporaryDirectories.push(directory);
+  const databasePath = path.join(directory, 'coordination.sqlite');
+  const database = new DatabaseSync(databasePath);
+  database.exec(`
+    CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+    INSERT INTO schema_migrations(version, applied_at) VALUES (1, '2026-07-19T02:00:00.000Z');
+    CREATE TABLE tasks (
+      task_id TEXT PRIMARY KEY,
+      parent_id TEXT,
+      status TEXT NOT NULL,
+      owner_agent_id TEXT,
+      role_id TEXT,
+      risk_level TEXT NOT NULL,
+      spec TEXT NOT NULL,
+      completion_criteria_json TEXT NOT NULL,
+      affected_paths_json TEXT NOT NULL,
+      budget_json TEXT,
+      workspace_path TEXT NOT NULL,
+      warnings_json TEXT NOT NULL,
+      final_output_json TEXT,
+      error_json TEXT,
+      revision INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      schema_version TEXT NOT NULL
+    );
+    INSERT INTO tasks VALUES (
+      'task_legacy', NULL, 'created', NULL, NULL, 'medium', 'legacy task',
+      '["read legacy state"]', '["src/**"]', NULL, '/workspace', '[]', NULL, NULL,
+      1, '2026-07-19T02:00:00.000Z', '2026-07-19T02:00:00.000Z', 'v0'
+    );
+    CREATE TABLE task_runtime_states (
+      task_id TEXT PRIMARY KEY,
+      current_run_id TEXT,
+      resume_cursor TEXT NOT NULL,
+      waiting_on_json TEXT NOT NULL,
+      interrupt_state_json TEXT,
+      artifact_refs_json TEXT NOT NULL,
+      diagnostics_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      schema_version TEXT NOT NULL
+    );
+    INSERT INTO task_runtime_states VALUES (
+      'task_legacy', NULL, 'select_agent', '[]', NULL, '[]', '{}',
+      '2026-07-19T02:00:00.000Z', 'v0'
+    );
+  `);
+  database.close();
+  return { databasePath };
 }
 
 function initialCommit(): CoordinationStateCommit {

@@ -19,6 +19,43 @@ export type TaskResumeCursor =
   | 'mailbox_wait'
   | 'done';
 
+export type TaskCursorInput =
+  | {
+      cursor: 'select_agent';
+      seed: string;
+      candidate_ids: string[];
+      market_evidence_ref?: string;
+    }
+  | {
+      cursor: 'execute_agent';
+      winner_agent_id: string;
+      execution_evidence_ref?: string;
+    }
+  | {
+      cursor: 'council';
+      trigger: string;
+      primary_evidence_ref?: string;
+      candidate_manifest_ref?: string;
+    }
+  | {
+      cursor: 'gate';
+      subject_ref: string;
+      phase: string;
+    }
+  | {
+      cursor: 'deliver';
+      changeset_ref: string;
+      expected_sha256: string;
+    }
+  | {
+      cursor: 'mailbox_wait';
+      delivery_ids: string[];
+      waiting_reason: string;
+    }
+  | {
+      cursor: 'done';
+    };
+
 export interface PersistedTaskError {
   code: string;
   message: string;
@@ -74,6 +111,7 @@ export interface PersistedTaskRuntimeState {
   task_id: string;
   current_run_id?: string;
   resume_cursor: TaskResumeCursor;
+  cursor_input?: TaskCursorInput;
   waiting_on: Record<string, unknown>[];
   interrupt_state?: Record<string, unknown>;
   artifact_refs: string[];

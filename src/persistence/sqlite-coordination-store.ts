@@ -17,6 +17,7 @@ import {
   type PersistedTaskAggregate,
   type PersistedTaskRuntimeState,
   type PersistedTaskState,
+  type TaskCursorInput,
   type TaskResumeCursor,
 } from './coordination-state-store';
 import type {
@@ -382,6 +383,7 @@ export class SqliteCoordinationStore implements CoordinationStateStore, MailboxS
           task_id TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE CASCADE,
           current_run_id TEXT REFERENCES runs(run_id) ON DELETE SET NULL,
           resume_cursor TEXT NOT NULL CHECK (resume_cursor IN (${sqlList(RESUME_CURSORS)})),
+          cursor_input_json TEXT,
           waiting_on_json TEXT NOT NULL,
           interrupt_state_json TEXT,
           artifact_refs_json TEXT NOT NULL,
@@ -464,6 +466,10 @@ export class SqliteCoordinationStore implements CoordinationStateStore, MailboxS
       this.database
         .prepare('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)')
         .run(1, new Date().toISOString());
+      ensureRuntimeCursorInputColumn(this.database);
+      this.database
+        .prepare('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)')
+        .run(2, new Date().toISOString());
       this.database.exec('COMMIT');
     } catch (error) {
       this.database.exec('ROLLBACK');
@@ -531,12 +537,13 @@ export class SqliteCoordinationStore implements CoordinationStateStore, MailboxS
     this.database
       .prepare(
         `INSERT INTO task_runtime_states (
-          task_id, current_run_id, resume_cursor, waiting_on_json, interrupt_state_json,
+          task_id, current_run_id, resume_cursor, cursor_input_json, waiting_on_json, interrupt_state_json,
           artifact_refs_json, diagnostics_json, updated_at, schema_version
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(task_id) DO UPDATE SET
           current_run_id = excluded.current_run_id,
           resume_cursor = excluded.resume_cursor,
+          cursor_input_json = excluded.cursor_input_json,
           waiting_on_json = excluded.waiting_on_json,
           interrupt_state_json = excluded.interrupt_state_json,
           artifact_refs_json = excluded.artifact_refs_json,
@@ -548,6 +555,7 @@ export class SqliteCoordinationStore implements CoordinationStateStore, MailboxS
         state.task_id,
         state.current_run_id ?? null,
         state.resume_cursor,
+        state.cursor_input ? toJson(state.cursor_input) : null,
         toJson(state.waiting_on),
         state.interrupt_state ? toJson(state.interrupt_state) : null,
         toJson(state.artifact_refs),
@@ -863,12 +871,14 @@ function readRun(row: SqlRow): PersistedRunState {
 
 function readRuntimeState(row: SqlRow): PersistedTaskRuntimeState {
   const interruptState = readOptionalJson<Record<string, unknown>>(row, 'interrupt_state_json');
+  const cursorInput = readOptionalJson<TaskCursorInput>(row, 'cursor_input_json');
   return {
     task_id: readString(row, 'task_id'),
     ...(readOptionalString(row, 'current_run_id')
       ? { current_run_id: readString(row, 'current_run_id') }
       : {}),
     resume_cursor: readEnum(row, 'resume_cursor', RESUME_CURSORS) as TaskResumeCursor,
+    ...(cursorInput ? { cursor_input: cursorInput } : {}),
     waiting_on: readJson<Record<string, unknown>[]>(row, 'waiting_on_json'),
     ...(interruptState ? { interrupt_state: interruptState } : {}),
     artifact_refs: readJson<string[]>(row, 'artifact_refs_json'),
@@ -1103,6 +1113,16 @@ function toJson(value: unknown): string {
 
 function sqlList(values: readonly string[]): string {
   return values.map((value) => `'${value.replaceAll("'", "''")}'`).join(', ');
+}
+
+function ensureRuntimeCursorInputColumn(database: DatabaseSync): void {
+  const columns = database
+    .prepare('PRAGMA table_info(task_runtime_states)')
+    .all()
+    .map((row) => String((row as SqlRow).name));
+  if (!columns.includes('cursor_input_json')) {
+    database.exec('ALTER TABLE task_runtime_states ADD COLUMN cursor_input_json TEXT');
+  }
 }
 
 function isActiveRun(status: PersistedRunState['status']): boolean {
