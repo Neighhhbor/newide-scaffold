@@ -21,7 +21,11 @@ export interface RunStageEvidence extends RunStageEvidenceReference {
 
 export interface RunEvidenceStore {
   writeStage(input: RunStageEvidenceInput): Promise<RunStageEvidenceReference>;
+  writeFailure(input: RunStageEvidenceInput): Promise<RunStageEvidenceReference>;
   readStage(
+    input: Pick<RunStageEvidenceInput, 'run_id' | 'stage'>,
+  ): Promise<RunStageEvidence | undefined>;
+  readFailure(
     input: Pick<RunStageEvidenceInput, 'run_id' | 'stage'>,
   ): Promise<RunStageEvidence | undefined>;
 }
@@ -39,7 +43,30 @@ export class FileRunEvidenceStore implements RunEvidenceStore {
   }
 
   async writeStage(input: RunStageEvidenceInput): Promise<RunStageEvidenceReference> {
-    const target = this.stagePath(input.run_id, input.stage);
+    return this.writeEvidence(input, 'result');
+  }
+
+  async writeFailure(input: RunStageEvidenceInput): Promise<RunStageEvidenceReference> {
+    return this.writeEvidence(input, 'failure');
+  }
+
+  async readStage(
+    input: Pick<RunStageEvidenceInput, 'run_id' | 'stage'>,
+  ): Promise<RunStageEvidence | undefined> {
+    return this.readEvidence(input, 'result');
+  }
+
+  async readFailure(
+    input: Pick<RunStageEvidenceInput, 'run_id' | 'stage'>,
+  ): Promise<RunStageEvidence | undefined> {
+    return this.readEvidence(input, 'failure');
+  }
+
+  private async writeEvidence(
+    input: RunStageEvidenceInput,
+    kind: 'result' | 'failure',
+  ): Promise<RunStageEvidenceReference> {
+    const target = this.stagePath(input.run_id, input.stage, kind);
     const serialized = JSON.stringify(input.evidence, null, 2);
     if (serialized === undefined) throw new Error('Stage evidence must be JSON serializable');
     const bytes = Buffer.from(`${serialized}\n`, 'utf8');
@@ -57,10 +84,11 @@ export class FileRunEvidenceStore implements RunEvidenceStore {
     return { uri: pathToFileURL(target).href, sha256: hash(bytes) };
   }
 
-  async readStage(
+  private async readEvidence(
     input: Pick<RunStageEvidenceInput, 'run_id' | 'stage'>,
+    kind: 'result' | 'failure',
   ): Promise<RunStageEvidence | undefined> {
-    const target = this.stagePath(input.run_id, input.stage);
+    const target = this.stagePath(input.run_id, input.stage, kind);
     let bytes: Buffer;
     try {
       bytes = await fs.readFile(target);
@@ -76,10 +104,15 @@ export class FileRunEvidenceStore implements RunEvidenceStore {
     };
   }
 
-  private stagePath(runId: string, stage: TaskResumeCursor): string {
+  private stagePath(
+    runId: string,
+    stage: TaskResumeCursor,
+    kind: 'result' | 'failure',
+  ): string {
     assertPathSegment(runId, 'run_id');
     assertPathSegment(stage, 'stage');
-    return path.join(this.root, runId, 'stages', `${stage}.json`);
+    const suffix = kind === 'failure' ? '.failure' : '';
+    return path.join(this.root, runId, 'stages', `${stage}${suffix}.json`);
   }
 }
 

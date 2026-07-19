@@ -43,7 +43,12 @@ import { projectRunSnapshot } from './run-snapshot-projector';
 import type { RunSnapshot } from '../protocol/run-snapshot';
 import { projectTaskSnapshot, type TaskRunFact } from './task-snapshot-projector';
 import { councilResultEvidenceSchema, type TaskSnapshot } from '../protocol/task-snapshot';
-import { TaskProcessorTaskNotFoundError, type TaskProcessor } from './task-processor';
+import {
+  TaskProcessorRunNotFoundError,
+  TaskProcessorTaskNotFoundError,
+  type BeginTaskRunIntent,
+  type TaskProcessor,
+} from './task-processor';
 import type {
   PersistentMailboxService,
   MailboxReplyInput,
@@ -133,7 +138,9 @@ export class TaskNotBlockedError extends Error {
 }
 
 interface RunLineage {
-  restarted_from_run_id: string;
+  run_intent?: BeginTaskRunIntent;
+  restarted_from_run_id?: string;
+  persist_restarted_from_run_id?: boolean;
   resume_checkpoint_id?: string;
   requested_resume_cursor?: TaskResumeCursor;
 }
@@ -222,7 +229,18 @@ export class NewideBackendService {
 
   async startCouncil(taskId: string): Promise<TaskSnapshot> {
     const task = await this.getTask(taskId);
-    if (task.current_run) throw new TaskAlreadyRunningError(taskId);
+    if (task.current_run) {
+      if (!this.taskProcessor) throw new TaskAlreadyRunningError(taskId);
+      try {
+        this.taskProcessor.setCouncilOverride(task.current_run.run_id);
+      } catch (error) {
+        if (error instanceof TaskProcessorRunNotFoundError) {
+          throw new TaskAlreadyRunningError(taskId);
+        }
+        throw error;
+      }
+      return this.getTask(taskId);
+    }
     let durableLaunch;
     try {
       durableLaunch = this.taskProcessor?.getTaskLaunchContext(taskId);
@@ -230,14 +248,17 @@ export class NewideBackendService {
       if (!(error instanceof TaskProcessorTaskNotFoundError)) throw error;
     }
     if (durableLaunch) {
-      await this.startRun({
-        prompt: durableLaunch.task_request.spec,
-        task_id: taskId,
-        task_request: durableLaunch.task_request,
-        workspace_path: durableLaunch.workspace_path,
-        mode: 'council',
-        ...(durableLaunch.session_id ? { session_id: durableLaunch.session_id } : {}),
-      });
+      await this.startRun(
+        {
+          prompt: durableLaunch.task_request.spec,
+          task_id: taskId,
+          task_request: durableLaunch.task_request,
+          workspace_path: durableLaunch.workspace_path,
+          mode: 'council',
+          ...(durableLaunch.session_id ? { session_id: durableLaunch.session_id } : {}),
+        },
+        { run_intent: { type: 'council_refinement' } },
+      );
       return this.getTask(taskId);
     }
     const history = await this.requestStore.listHistory();
@@ -245,14 +266,17 @@ export class NewideBackendService {
       (entry) => entry.task_id === taskId && entry.task_request && entry.workspace_path,
     );
     if (!launch?.task_request || !launch.workspace_path) throw new TaskNotFoundError(taskId);
-    await this.startRun({
-      prompt: launch.task_request.spec,
-      task_id: taskId,
-      task_request: launch.task_request,
-      workspace_path: launch.workspace_path,
-      mode: 'council',
-      ...(launch.session_id ? { session_id: launch.session_id } : {}),
-    });
+    await this.startRun(
+      {
+        prompt: launch.task_request.spec,
+        task_id: taskId,
+        task_request: launch.task_request,
+        workspace_path: launch.workspace_path,
+        mode: 'council',
+        ...(launch.session_id ? { session_id: launch.session_id } : {}),
+      },
+      { run_intent: { type: 'create' } },
+    );
     return this.getTask(taskId);
   }
 
@@ -274,6 +298,7 @@ export class NewideBackendService {
         ...(resume.session_id ? { session_id: resume.session_id } : {}),
       },
       {
+        run_intent: { type: 'checkpoint_resume', strategy: 'restart_from_beginning' },
         restarted_from_run_id: resume.interrupted_run_id,
         resume_checkpoint_id: resume.checkpoint_id,
         requested_resume_cursor: resume.resume_cursor,
@@ -327,6 +352,7 @@ export class NewideBackendService {
       .readTerminalSessionId(runId)
       .catch(() => undefined);
     const sessionId = terminalSessionId ?? request.session_id;
+    const persistRestartLineage = this.hasPersistedRun(runId);
     const created = await this.startRun(
       {
         prompt: request.prompt,
@@ -338,7 +364,11 @@ export class NewideBackendService {
         ...(request.client_task_id ? { client_task_id: request.client_task_id } : {}),
         ...(request.title ? { title: request.title } : {}),
       },
-      { restarted_from_run_id: runId },
+      {
+        run_intent: { type: 'create' },
+        restarted_from_run_id: runId,
+        persist_restarted_from_run_id: persistRestartLineage,
+      },
     );
     return { ...created, restarted_from_run_id: runId };
   }
@@ -406,8 +436,12 @@ export class NewideBackendService {
                 task_request: taskRequest,
                 workspace_path: workspacePath,
                 mode,
+                run_intent: lineage?.run_intent ?? { type: 'create' },
                 ...(params.session_id ? { session_id: params.session_id } : {}),
-                ...(lineage ? { restarted_from_run_id: lineage.restarted_from_run_id } : {}),
+                ...(lineage?.restarted_from_run_id &&
+                  lineage.persist_restarted_from_run_id !== false
+                  ? { restarted_from_run_id: lineage.restarted_from_run_id }
+                  : {}),
                 ...(lineage?.resume_checkpoint_id
                   ? { resume_checkpoint_id: lineage.resume_checkpoint_id }
                   : {}),
@@ -450,7 +484,9 @@ export class NewideBackendService {
                 ...(params.project_id ? { project_id: params.project_id } : {}),
                 ...(params.client_task_id ? { client_task_id: params.client_task_id } : {}),
                 ...(params.title ? { title: params.title } : {}),
-                ...(lineage ? { restarted_from_run_id: lineage.restarted_from_run_id } : {}),
+                ...(lineage?.restarted_from_run_id
+                  ? { restarted_from_run_id: lineage.restarted_from_run_id }
+                  : {}),
               })
               .then(() => resolve({ ...created, status: 'running' }))
               .catch((error: unknown) => {
@@ -506,6 +542,17 @@ export class NewideBackendService {
       void terminalRun.then(() => this.terminalRuns.delete(identity?.run_id ?? ''));
       void terminalRun.then(() => this.runWorkspaces.delete(identity?.run_id ?? ''));
     });
+  }
+
+  private hasPersistedRun(runId: string): boolean {
+    if (!this.taskProcessor) return false;
+    try {
+      this.taskProcessor.getRunExecutionState(runId);
+      return true;
+    } catch (error) {
+      if (error instanceof TaskProcessorRunNotFoundError) return false;
+      throw error;
+    }
   }
 
   getSnapshot(runId: string): AppRunSnapshot {

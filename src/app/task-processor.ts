@@ -5,15 +5,22 @@ import {
   type EventType,
   type TaskCreateRequest,
 } from '../core';
-import { assertTaskStatusTransition } from '../coordinator/task-state-machine';
 import {
+  assertTaskRunStartTransition,
+  assertTaskStatusTransition,
+} from '../coordinator/task-state-machine';
+import {
+  parseTaskCursorInput,
   type CoordinationStateStore,
   type PersistedRunMode,
   type PersistedRunState,
   type PersistedTaskAggregate,
+  type PersistedCoordinationEvent,
   type PersistedTaskFinalOutput,
   type PersistedFullCheckpoint,
   type PersistedTaskState,
+  type RunStageEvidenceReference,
+  type TaskCursorInput,
   type TaskResumeCursor,
 } from '../persistence';
 import type { RunSnapshot } from '../protocol/run-snapshot';
@@ -37,9 +44,61 @@ export interface BeginTaskRunInput {
   restarted_from_run_id?: string;
   resume_checkpoint_id?: string;
   requested_resume_cursor?: TaskResumeCursor;
+  cursor_input?: TaskCursorInput;
+  run_intent?: BeginTaskRunIntent;
   task_created_event?: Event;
   run_created_event?: Event;
   run_started_event?: Event;
+}
+
+export type BeginTaskRunIntent =
+  | { type: 'create' }
+  | {
+      type: 'checkpoint_resume';
+      strategy: 'from_checkpoint' | 'restart_from_beginning';
+    }
+  | { type: 'council_refinement' };
+
+export interface StartTaskStageInput {
+  run_id: string;
+  expected_cursor: TaskResumeCursor;
+  invocation_id: string;
+  event?: Event;
+}
+
+export interface AdvanceTaskStageInput extends StartTaskStageInput {
+  evidence_ref: RunStageEvidenceReference;
+  next_input: TaskCursorInput;
+  council_override_input?: Extract<TaskCursorInput, { cursor: 'council' }>;
+  artifact_refs?: string[];
+  owner_agent_id?: string;
+  session_id?: string;
+  final_output?: PersistedTaskFinalOutput;
+  warnings?: string[];
+}
+
+export interface FailTaskStageInput extends StartTaskStageInput {
+  error: { code: string; message: string; details?: Record<string, unknown> };
+  evidence_ref?: RunStageEvidenceReference;
+  artifact_refs?: string[];
+  owner_agent_id?: string;
+  session_id?: string;
+}
+
+export interface TaskStageCommitResult {
+  snapshot: TaskSnapshot;
+  committed_events: PersistedCoordinationEvent[];
+}
+
+export interface TaskRunExecutionState {
+  task_id: string;
+  run_id: string;
+  mode: PersistedRunMode;
+  task_request: TaskCreateRequest;
+  workspace_path: string;
+  resume_cursor: TaskResumeCursor;
+  cursor_input?: TaskCursorInput;
+  council_override: boolean;
 }
 
 export interface FinishTaskRunInput {
@@ -89,6 +148,16 @@ export class TaskEventCursorNotFoundError extends Error {
   }
 }
 
+export class TaskProcessorStageCommitError extends Error {
+  constructor(
+    readonly operation: string,
+    readonly originalError: unknown,
+  ) {
+    super(`Task coordination commit failed during ${operation}: ${errorMessage(originalError)}`);
+    this.name = 'TaskProcessorStageCommitError';
+  }
+}
+
 export class TaskProcessor {
   private readonly now: () => string;
   private readonly createEventId: () => string;
@@ -110,6 +179,15 @@ export class TaskProcessor {
     if (existing) {
       assertImmutableTaskDefinition(existing.task, input.task_request, input.workspace_path);
     }
+    const runIntent = input.run_intent ?? { type: 'create' as const };
+    const cursorInput = input.cursor_input ?? defaultCursorInput(input.run_id);
+    assertBeginRunIntent(
+      existing,
+      input,
+      cursorInput,
+      runIntent,
+      existing ? this.store.getLatestCheckpoint(input.task_id) : undefined,
+    );
 
     const timestamp = this.now();
     const task: PersistedTaskState = existing
@@ -189,11 +267,16 @@ export class TaskProcessor {
       runtime_state: {
         task_id: input.task_id,
         current_run_id: input.run_id,
-        resume_cursor: input.mode === 'single_agent' ? 'select_agent' : 'execute_agent',
+        resume_cursor: cursorInput.cursor,
+        cursor_input: cursorInput,
         waiting_on: [],
         artifact_refs: [],
         diagnostics: {
           mode: input.mode,
+          run_intent: runIntent.type,
+          ...(runIntent.type === 'checkpoint_resume'
+            ? { resume_strategy: runIntent.strategy }
+            : {}),
           ...(input.resume_checkpoint_id
             ? { resume_checkpoint_id: input.resume_checkpoint_id }
             : {}),
@@ -207,6 +290,334 @@ export class TaskProcessor {
       events,
     });
     return this.getTaskSnapshot(input.task_id);
+  }
+
+  startStage(input: StartTaskStageInput): TaskStageCommitResult {
+    const aggregate = this.requireAggregateForRun(input.run_id);
+    const run = requireRun(aggregate, input.run_id);
+    assertActiveStageTarget(aggregate, run, input.expected_cursor);
+    if (readActiveStage(aggregate.runtime_state.diagnostics)) {
+      throw new Error(`Run ${input.run_id} already has an active stage invocation`);
+    }
+
+    const timestamp = input.event?.created_at ?? this.now();
+    const event =
+      input.event ??
+      this.createEvent('handler.started', input.run_id, aggregate.task.task_id, input.run_id, {
+        cursor: input.expected_cursor,
+        invocation_id: input.invocation_id,
+      });
+    assertStageEvent(event, 'handler.started', aggregate.task.task_id, input.run_id);
+    const committed = this.store.commitState({
+      expected_task_revision: aggregate.task.revision,
+      task: {
+        ...aggregate.task,
+        revision: aggregate.task.revision + 1,
+        updated_at: timestamp,
+      },
+      run: {
+        ...run,
+        revision: run.revision + 1,
+        updated_at: timestamp,
+      },
+      runtime_state: {
+        ...aggregate.runtime_state,
+        diagnostics: {
+          ...aggregate.runtime_state.diagnostics,
+          active_stage: {
+            cursor: input.expected_cursor,
+            invocation_id: input.invocation_id,
+            started_at: timestamp,
+            started_event_id: event.event_id,
+          },
+        },
+        updated_at: timestamp,
+      },
+      events: [event],
+    });
+    return {
+      snapshot: this.getTaskSnapshot(aggregate.task.task_id),
+      committed_events: committed,
+    };
+  }
+
+  advanceStage(input: AdvanceTaskStageInput): TaskStageCommitResult {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        return this.advanceStageOnce(input);
+      } catch (error) {
+        if (
+          error instanceof TaskProcessorStageCommitError &&
+          isRevisionConflict(error.originalError) &&
+          attempt < 3
+        ) {
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new Error('Unreachable stage commit retry state');
+  }
+
+  private advanceStageOnce(input: AdvanceTaskStageInput): TaskStageCommitResult {
+    const aggregate = this.requireAggregateForRun(input.run_id);
+    const run = requireRun(aggregate, input.run_id);
+    assertActiveStageTarget(aggregate, run, input.expected_cursor);
+    assertInvocation(aggregate, input.expected_cursor, input.invocation_id);
+    assertEvidenceReference(input.evidence_ref);
+    const nextInput = parseTaskCursorInput(resolveStageNextInput(aggregate, input));
+    assertCursorTransition(input.expected_cursor, nextInput.cursor);
+    assertChangesetIdentity(
+      aggregate.runtime_state.cursor_input,
+      nextInput,
+      input.final_output,
+    );
+    const completing = nextInput.cursor === 'done';
+    if (completing && !input.final_output) {
+      throw new Error('Advancing deliver to done requires final_output');
+    }
+    if (completing) assertFinalOutputEvidence(input.final_output!);
+
+    const timestamp = input.event?.created_at ?? this.now();
+    const event =
+      input.event ??
+      this.createEvent('handler.completed', input.run_id, aggregate.task.task_id, input.run_id, {
+        cursor: input.expected_cursor,
+        invocation_id: input.invocation_id,
+        next_cursor: nextInput.cursor,
+        evidence_ref: input.evidence_ref.uri,
+        evidence_sha256: input.evidence_ref.sha256,
+      });
+    assertStageEvent(event, 'handler.completed', aggregate.task.task_id, input.run_id);
+    if (aggregate.events.some((candidate) => candidate.event_id === event.event_id)) {
+      throw new Error(`Stage event ${event.event_id} already exists`);
+    }
+    const terminalEvent = completing
+      ? this.createEvent('run.completed', input.run_id, aggregate.task.task_id, input.run_id, {
+          status: 'completed',
+          final_artifact_ref: input.final_output?.artifact_ref,
+        })
+      : undefined;
+    if (completing) assertTaskStatusTransition(aggregate.task.status, 'completed');
+
+    const { active_stage: _activeStage, ...diagnosticsWithoutActiveStage } =
+      aggregate.runtime_state.diagnostics;
+    const stageEvidence = readStageEvidence(diagnosticsWithoutActiveStage);
+    const artifactRefs = appendUnique(aggregate.runtime_state.artifact_refs, [
+      input.evidence_ref.uri,
+      ...(input.artifact_refs ?? []),
+    ]);
+    const task: PersistedTaskState = {
+      ...aggregate.task,
+      ...(input.owner_agent_id
+        ? { owner_agent_id: input.owner_agent_id }
+        : nextInput.cursor === 'execute_agent'
+          ? { owner_agent_id: nextInput.winner_agent_id }
+          : {}),
+      ...(completing
+        ? {
+            status: 'completed' as const,
+            warnings: [...(input.warnings ?? [])],
+            final_output: { ...input.final_output! },
+          }
+        : {}),
+      revision: aggregate.task.revision + 1,
+      updated_at: timestamp,
+    };
+    const nextRun: PersistedRunState = {
+      ...run,
+      ...(input.session_id ? { session_id: input.session_id } : {}),
+      ...(completing ? { status: 'completed' as const, completed_at: timestamp } : {}),
+      revision: run.revision + 1,
+      updated_at: timestamp,
+    };
+    const runtimeState = {
+      ...aggregate.runtime_state,
+      ...(!completing ? { current_run_id: input.run_id } : {}),
+      resume_cursor: nextInput.cursor,
+      cursor_input: nextInput,
+      waiting_on: [],
+      artifact_refs: artifactRefs,
+      diagnostics: {
+        ...diagnosticsWithoutActiveStage,
+        stage_evidence: {
+          ...stageEvidence,
+          [input.expected_cursor]: { ...input.evidence_ref },
+        },
+        last_completed_stage: input.expected_cursor,
+        last_completed_invocation_id: input.invocation_id,
+      },
+      updated_at: timestamp,
+    };
+    if (completing) delete runtimeState.current_run_id;
+
+    let committed: PersistedCoordinationEvent[];
+    try {
+      committed = this.store.commitState({
+        expected_task_revision: aggregate.task.revision,
+        task,
+        run: nextRun,
+        runtime_state: runtimeState,
+        events: [event, ...(terminalEvent ? [terminalEvent] : [])],
+      });
+    } catch (error) {
+      throw new TaskProcessorStageCommitError('handler.completed', error);
+    }
+    return {
+      snapshot: this.getTaskSnapshot(aggregate.task.task_id),
+      committed_events: committed,
+    };
+  }
+
+  failStage(input: FailTaskStageInput): TaskStageCommitResult {
+    const aggregate = this.requireAggregateForRun(input.run_id);
+    const run = requireRun(aggregate, input.run_id);
+    assertActiveStageTarget(aggregate, run, input.expected_cursor);
+    assertInvocation(aggregate, input.expected_cursor, input.invocation_id);
+    if (input.evidence_ref) assertEvidenceReference(input.evidence_ref);
+    assertTaskStatusTransition(aggregate.task.status, 'failed');
+
+    const timestamp = input.event?.created_at ?? this.now();
+    const event =
+      input.event ??
+      this.createEvent('handler.failed', input.run_id, aggregate.task.task_id, input.run_id, {
+        cursor: input.expected_cursor,
+        invocation_id: input.invocation_id,
+        code: input.error.code,
+        message: input.error.message,
+      });
+    assertStageEvent(event, 'handler.failed', aggregate.task.task_id, input.run_id);
+    const terminalEvent = this.createEvent(
+      'run.failed',
+      input.run_id,
+      aggregate.task.task_id,
+      input.run_id,
+      { status: 'failed', code: input.error.code, message: input.error.message },
+    );
+    const { active_stage: _activeStage, ...diagnosticsWithoutActiveStage } =
+      aggregate.runtime_state.diagnostics;
+    const { current_run_id: _currentRunId, ...runtimeWithoutCurrentRun } = aggregate.runtime_state;
+    const artifactRefs = appendUnique(aggregate.runtime_state.artifact_refs, [
+      ...(input.evidence_ref ? [input.evidence_ref.uri] : []),
+      ...(input.artifact_refs ?? []),
+    ]);
+    const committed = this.store.commitState({
+      expected_task_revision: aggregate.task.revision,
+      task: {
+        ...aggregate.task,
+        status: 'failed',
+        ...(input.owner_agent_id ? { owner_agent_id: input.owner_agent_id } : {}),
+        error: { ...input.error },
+        revision: aggregate.task.revision + 1,
+        updated_at: timestamp,
+      },
+      run: {
+        ...run,
+        status: 'failed',
+        ...(input.session_id ? { session_id: input.session_id } : {}),
+        error: { ...input.error },
+        revision: run.revision + 1,
+        completed_at: timestamp,
+        updated_at: timestamp,
+      },
+      runtime_state: {
+        ...runtimeWithoutCurrentRun,
+        resume_cursor: 'done',
+        cursor_input: { cursor: 'done' },
+        waiting_on: [],
+        artifact_refs: artifactRefs,
+        diagnostics: {
+          ...diagnosticsWithoutActiveStage,
+          failed_stage: input.expected_cursor,
+          failed_invocation_id: input.invocation_id,
+          ...(input.evidence_ref ? { failed_stage_evidence: { ...input.evidence_ref } } : {}),
+        },
+        updated_at: timestamp,
+      },
+      events: [event, terminalEvent],
+    });
+    return {
+      snapshot: this.getTaskSnapshot(aggregate.task.task_id),
+      committed_events: committed,
+    };
+  }
+
+  getRunExecutionState(runId: string): TaskRunExecutionState {
+    const aggregate = this.requireAggregateForRun(runId);
+    const run = requireRun(aggregate, runId);
+    return {
+      task_id: aggregate.task.task_id,
+      run_id: runId,
+      mode: run.mode,
+      task_request: {
+        spec: aggregate.task.spec,
+        ...(aggregate.task.role_id ? { role_id: aggregate.task.role_id } : {}),
+        ...(aggregate.task.parent_id ? { parent_task_id: aggregate.task.parent_id } : {}),
+        risk_level: aggregate.task.risk_level,
+        affected_paths: [...aggregate.task.affected_paths],
+        completion_criteria: [...aggregate.task.completion_criteria],
+        ...(aggregate.task.budget ? { budget: { ...aggregate.task.budget } } : {}),
+      },
+      workspace_path: aggregate.task.workspace_path,
+      resume_cursor: aggregate.runtime_state.resume_cursor,
+      ...(aggregate.runtime_state.cursor_input
+        ? { cursor_input: aggregate.runtime_state.cursor_input }
+        : {}),
+      council_override: aggregate.runtime_state.diagnostics.council_override === true,
+    };
+  }
+
+  setCouncilOverride(runId: string): TaskStageCommitResult {
+    const aggregate = this.requireAggregateForRun(runId);
+    const run = requireRun(aggregate, runId);
+    assertActiveRunOwnership(aggregate, run);
+    if (!['select_agent', 'execute_agent'].includes(aggregate.runtime_state.resume_cursor)) {
+      throw new Error(
+        `Council override is too late at ${aggregate.runtime_state.resume_cursor}; it must be requested before Gate`,
+      );
+    }
+    if (aggregate.runtime_state.diagnostics.council_override === true) {
+      return {
+        snapshot: projectAggregate(aggregate),
+        committed_events: [],
+      };
+    }
+
+    const timestamp = this.now();
+    const event = this.createEvent(
+      'task.council_override_set',
+      runId,
+      aggregate.task.task_id,
+      runId,
+      { council_override: true },
+    );
+    const committed = this.store.commitState({
+      expected_task_revision: aggregate.task.revision,
+      task: {
+        ...aggregate.task,
+        revision: aggregate.task.revision + 1,
+        updated_at: timestamp,
+      },
+      run: {
+        ...run,
+        revision: run.revision + 1,
+        updated_at: timestamp,
+      },
+      runtime_state: {
+        ...aggregate.runtime_state,
+        diagnostics: {
+          ...aggregate.runtime_state.diagnostics,
+          council_override: true,
+          council_override_event_id: event.event_id,
+        },
+        updated_at: timestamp,
+      },
+      events: [event],
+    });
+    return {
+      snapshot: this.getTaskSnapshot(aggregate.task.task_id),
+      committed_events: committed,
+    };
   }
 
   recordRunEvent(runId: string, event: Event): TaskSnapshot {
@@ -227,6 +638,17 @@ export class TaskProcessor {
       aggregate.runtime_state.artifact_refs,
       readPayloadStringArray(event.payload, 'artifact_refs'),
     );
+    const nextCursor = cursorAfterEvent(
+      event.event_type,
+      event.payload,
+      run.mode,
+      aggregate.runtime_state.resume_cursor,
+    );
+    const cursorMoved = nextCursor !== aggregate.runtime_state.resume_cursor;
+    const hasActiveStage = readActiveStage(aggregate.runtime_state.diagnostics) !== undefined;
+    const shouldProjectCursor = cursorMoved && !hasActiveStage;
+    const { cursor_input: _legacyCursorInput, ...runtimeWithoutCursorInput } =
+      aggregate.runtime_state;
     this.store.commitState({
       expected_task_revision: aggregate.task.revision,
       task: {
@@ -242,16 +664,17 @@ export class TaskProcessor {
         updated_at: timestamp,
       },
       runtime_state: {
-        ...aggregate.runtime_state,
-        resume_cursor: cursorAfterEvent(
-          event.event_type,
-          event.payload,
-          run.mode,
-          aggregate.runtime_state.resume_cursor,
-        ),
+        ...(shouldProjectCursor ? runtimeWithoutCursorInput : aggregate.runtime_state),
+        resume_cursor: shouldProjectCursor
+          ? nextCursor
+          : aggregate.runtime_state.resume_cursor,
         artifact_refs: artifactRefs,
         diagnostics: {
           ...aggregate.runtime_state.diagnostics,
+          ...(shouldProjectCursor ? { legacy_cursor_projection: true } : {}),
+          ...(cursorMoved && hasActiveStage
+            ? { legacy_cursor_projection_suppressed: true }
+            : {}),
           last_event_id: event.event_id,
           last_event_type: event.event_type,
         },
@@ -338,6 +761,7 @@ export class TaskProcessor {
       runtime_state: {
         ...runtimeWithoutCurrentRun,
         resume_cursor: 'done',
+        cursor_input: { cursor: 'done' },
         waiting_on: [],
         artifact_refs: artifactRefs,
         diagnostics: {
@@ -646,6 +1070,268 @@ function assertImmutableTaskDefinition(
 
 function isActiveRun(run: PersistedRunState): boolean {
   return run.status === 'created' || run.status === 'running';
+}
+
+const CURSOR_TRANSITIONS: Readonly<Record<TaskResumeCursor, readonly TaskResumeCursor[]>> = {
+  select_agent: ['execute_agent'],
+  execute_agent: ['council', 'gate'],
+  council: ['gate'],
+  gate: ['deliver'],
+  deliver: ['done'],
+  mailbox_wait: [],
+  done: [],
+};
+
+function defaultCursorInput(runId: string): TaskCursorInput {
+  return {
+    cursor: 'select_agent',
+    seed: runId,
+    candidate_ids: [],
+  };
+}
+
+function resolveStageNextInput(
+  aggregate: PersistedTaskAggregate,
+  input: AdvanceTaskStageInput,
+): TaskCursorInput {
+  const overrideRequested = aggregate.runtime_state.diagnostics.council_override === true;
+  if (
+    overrideRequested &&
+    input.expected_cursor === 'execute_agent' &&
+    input.next_input.cursor === 'gate' &&
+    !input.council_override_input
+  ) {
+    throw new Error('Council override requires a Council input before execute_agent can advance');
+  }
+  if (!input.council_override_input) return input.next_input;
+  if (
+    input.expected_cursor !== 'execute_agent' ||
+    input.next_input.cursor !== 'gate' ||
+    input.council_override_input.trigger !== 'persistent_override'
+  ) {
+    throw new Error(
+      'Council override input is only valid for execute_agent -> gate with persistent_override',
+    );
+  }
+  return overrideRequested
+    ? input.council_override_input
+    : input.next_input;
+}
+
+function assertBeginRunIntent(
+  existing: PersistedTaskAggregate | undefined,
+  input: BeginTaskRunInput,
+  cursorInput: TaskCursorInput,
+  intent: BeginTaskRunIntent,
+  latestCheckpoint: PersistedFullCheckpoint | undefined,
+): void {
+  parseTaskCursorInput(cursorInput);
+  if (intent.type === 'create') {
+    if (existing) {
+      throw new Error(
+        `Create run intent cannot restart existing Task ${input.task_id}; use checkpoint resume or Council refinement`,
+      );
+    }
+    if (cursorInput.cursor !== 'select_agent') {
+      throw new Error(`Fresh Task ${input.task_id} must begin at select_agent`);
+    }
+    if (input.resume_checkpoint_id || input.requested_resume_cursor) {
+      throw new Error('Create run intent cannot include checkpoint resume fields');
+    }
+    return;
+  }
+  if (!existing) {
+    throw new Error(
+      `Run intent ${intent.type} requires an existing Task ${input.task_id}`,
+    );
+  }
+
+  if (intent.type === 'council_refinement') {
+    assertTaskRunStartTransition(existing.task.status, intent.type);
+    if (input.mode !== 'council' || cursorInput.cursor !== 'select_agent') {
+      throw new Error('Council refinement must use Council mode and begin at select_agent');
+    }
+    if (
+      input.resume_checkpoint_id ||
+      input.requested_resume_cursor ||
+      input.restarted_from_run_id
+    ) {
+      throw new Error('Council refinement cannot include checkpoint resume lineage');
+    }
+    return;
+  }
+
+  if (
+    !latestCheckpoint ||
+    input.resume_checkpoint_id !== latestCheckpoint.checkpoint_id ||
+    input.requested_resume_cursor !== latestCheckpoint.resume_cursor
+  ) {
+    throw new Error(
+      `Task ${input.task_id} checkpoint resume must match its latest checkpoint and requested cursor`,
+    );
+  }
+  assertTaskRunStartTransition(existing.task.status, intent.type);
+  if (input.restarted_from_run_id !== latestCheckpoint.run_id) {
+    throw new Error(
+      `Task ${input.task_id} restarted_from_run_id must match checkpoint run ${latestCheckpoint.run_id}`,
+    );
+  }
+  const interruptedRun = existing.runs.find(
+    (candidate) => candidate.run_id === latestCheckpoint.run_id,
+  );
+  if (!interruptedRun || interruptedRun.status !== 'interrupted') {
+    throw new Error(
+      `Task ${input.task_id} checkpoint source Run ${latestCheckpoint.run_id} must be interrupted`,
+    );
+  }
+  if (input.mode !== interruptedRun.mode) {
+    throw new Error('Checkpoint resume must preserve the interrupted Run mode');
+  }
+  if (
+    (intent.strategy === 'from_checkpoint' &&
+      cursorInput.cursor !== latestCheckpoint.resume_cursor) ||
+    (intent.strategy === 'restart_from_beginning' && cursorInput.cursor !== 'select_agent')
+  ) {
+    throw new Error(
+      `Checkpoint resume cursor does not match strategy ${intent.strategy}`,
+    );
+  }
+}
+
+function assertFinalOutputEvidence(output: PersistedTaskFinalOutput): void {
+  if (
+    !output.artifact_ref ||
+    !output.workspace_path ||
+    !/^[a-f0-9]{64}$/.test(output.sha256)
+  ) {
+    throw new Error(
+      'Final output requires a non-empty artifact, workspace path, and lowercase SHA256',
+    );
+  }
+}
+
+function isRevisionConflict(error: unknown): boolean {
+  return error instanceof Error && /\brevision conflict\b/i.test(error.message);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function assertChangesetIdentity(
+  currentInput: TaskCursorInput | undefined,
+  nextInput: TaskCursorInput,
+  finalOutput: PersistedTaskFinalOutput | undefined,
+): void {
+  if (currentInput?.cursor === 'gate' && nextInput.cursor === 'deliver') {
+    if (
+      nextInput.changeset_ref !== currentInput.changeset_ref ||
+      nextInput.expected_sha256 !== currentInput.expected_sha256
+    ) {
+      throw new Error('Gate changeset identity cannot change during delivery handoff');
+    }
+  }
+  if (currentInput?.cursor === 'deliver' && nextInput.cursor === 'done') {
+    if (
+      finalOutput?.artifact_ref !== currentInput.changeset_ref ||
+      finalOutput.sha256 !== currentInput.expected_sha256
+    ) {
+      throw new Error('Final output identity must match the bound delivery changeset and hash');
+    }
+  }
+}
+
+function assertActiveRunOwnership(aggregate: PersistedTaskAggregate, run: PersistedRunState): void {
+  if (!isActiveRun(run)) throw new Error(`Run ${run.run_id} is already ${run.status}`);
+  if (aggregate.task.status !== 'running') {
+    throw new Error(`Task ${aggregate.task.task_id} is ${aggregate.task.status}`);
+  }
+  if (aggregate.runtime_state.current_run_id !== run.run_id) {
+    throw new Error(`Run ${run.run_id} is not the current run for Task ${aggregate.task.task_id}`);
+  }
+}
+
+function assertActiveStageTarget(
+  aggregate: PersistedTaskAggregate,
+  run: PersistedRunState,
+  expectedCursor: TaskResumeCursor,
+): void {
+  assertActiveRunOwnership(aggregate, run);
+  if (aggregate.runtime_state.resume_cursor !== expectedCursor) {
+    throw new Error(
+      `Run ${run.run_id} cursor mismatch: expected ${expectedCursor}, current ${aggregate.runtime_state.resume_cursor}`,
+    );
+  }
+  if (aggregate.runtime_state.cursor_input?.cursor !== expectedCursor) {
+    throw new Error(`Run ${run.run_id} has no matching cursor input for ${expectedCursor}`);
+  }
+}
+
+function assertCursorTransition(current: TaskResumeCursor, next: TaskResumeCursor): void {
+  if (!CURSOR_TRANSITIONS[current].includes(next)) {
+    throw new Error(`Invalid task cursor transition: ${current} -> ${next}`);
+  }
+}
+
+function assertEvidenceReference(reference: RunStageEvidenceReference): void {
+  if (!reference.uri || !/^[a-f0-9]{64}$/.test(reference.sha256)) {
+    throw new Error('Stage evidence reference requires a URI and lowercase SHA256');
+  }
+}
+
+function assertInvocation(
+  aggregate: PersistedTaskAggregate,
+  expectedCursor: TaskResumeCursor,
+  invocationId: string,
+): void {
+  const active = readActiveStage(aggregate.runtime_state.diagnostics);
+  if (!active) {
+    throw new Error(
+      `Run ${aggregate.runtime_state.current_run_id ?? 'unknown'} has no active stage`,
+    );
+  }
+  if (active.cursor !== expectedCursor || active.invocation_id !== invocationId) {
+    throw new Error(
+      `Stage invocation mismatch: expected ${expectedCursor}/${invocationId}, current ${active.cursor}/${active.invocation_id}`,
+    );
+  }
+}
+
+function readActiveStage(
+  diagnostics: Record<string, unknown>,
+): { cursor: TaskResumeCursor; invocation_id: string } | undefined {
+  const value = diagnostics.active_stage;
+  if (!value || typeof value !== 'object') return undefined;
+  const cursor = Reflect.get(value, 'cursor');
+  const invocationId = Reflect.get(value, 'invocation_id');
+  if (!isTaskResumeCursor(cursor) || typeof invocationId !== 'string' || !invocationId) {
+    throw new Error('Persisted active_stage diagnostics are invalid');
+  }
+  return { cursor, invocation_id: invocationId };
+}
+
+function readStageEvidence(
+  diagnostics: Record<string, unknown>,
+): Partial<Record<TaskResumeCursor, RunStageEvidenceReference>> {
+  const value = diagnostics.stage_evidence;
+  return value && typeof value === 'object'
+    ? (value as Partial<Record<TaskResumeCursor, RunStageEvidenceReference>>)
+    : {};
+}
+
+function isTaskResumeCursor(value: unknown): value is TaskResumeCursor {
+  return (
+    typeof value === 'string' && Object.prototype.hasOwnProperty.call(CURSOR_TRANSITIONS, value)
+  );
+}
+
+function assertStageEvent(event: Event, expectedType: string, taskId: string, runId: string): void {
+  if (event.event_type !== expectedType) {
+    throw new Error(`Stage event must have type ${expectedType}`);
+  }
+  if (event.task_id !== taskId || event.run_id !== runId) {
+    throw new Error(`Stage event ${event.event_id} does not belong to run ${runId}`);
+  }
 }
 
 function cursorAfterEvent(

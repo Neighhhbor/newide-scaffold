@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TASK_STATUSES } from '../../src/core';
 import {
+  assertTaskRunStartTransition,
   assertTaskStatusTransition,
   isTerminalTaskStatus,
   listNonTerminalTaskStatuses,
@@ -101,5 +102,12 @@ describe('coordinator task state machine', () => {
   it('allows an active run to fail during review or merge', () => {
     expect(transitionTaskStatus('reviewing', 'failed').next_status).toBe('failed');
     expect(transitionTaskStatus('merging', 'failed').next_status).toBe('failed');
+  });
+
+  it('allows completed -> running only for an explicit Council refinement Run', () => {
+    expect(() => assertTaskStatusTransition('completed', 'running')).toThrow();
+    expect(() => assertTaskRunStartTransition('completed', 'council_refinement')).not.toThrow();
+    expect(() => assertTaskRunStartTransition('failed', 'council_refinement')).toThrow();
+    expect(() => assertTaskRunStartTransition('blocked', 'checkpoint_resume')).not.toThrow();
   });
 });

@@ -19,6 +19,8 @@ export type TaskResumeCursor =
   | 'mailbox_wait'
   | 'done';
 
+export type TaskCouncilTrigger = 'explicit_mode' | 'persistent_override' | 'agent_request';
+
 export type TaskCursorInput =
   | {
       cursor: 'select_agent';
@@ -33,7 +35,7 @@ export type TaskCursorInput =
     }
   | {
       cursor: 'council';
-      trigger: string;
+      trigger: TaskCouncilTrigger;
       primary_evidence_ref?: string;
       candidate_manifest_ref?: string;
     }
@@ -41,6 +43,8 @@ export type TaskCursorInput =
       cursor: 'gate';
       subject_ref: string;
       phase: string;
+      changeset_ref: string;
+      expected_sha256: string;
     }
   | {
       cursor: 'deliver';
@@ -55,6 +59,114 @@ export type TaskCursorInput =
   | {
       cursor: 'done';
     };
+
+export function parseTaskCursorInput(value: unknown): TaskCursorInput {
+  if (!isRecord(value) || typeof value.cursor !== 'string') {
+    throw new Error('Task cursor input must be an object with a cursor');
+  }
+  switch (value.cursor) {
+    case 'select_agent': {
+      const marketEvidenceRef = optionalString(value.market_evidence_ref, 'market_evidence_ref');
+      return {
+        cursor: value.cursor,
+        seed: requireString(value.seed, 'seed'),
+        candidate_ids: requireStringArray(value.candidate_ids, 'candidate_ids'),
+        ...(marketEvidenceRef ? { market_evidence_ref: marketEvidenceRef } : {}),
+      };
+    }
+    case 'execute_agent': {
+      const executionEvidenceRef = optionalString(
+        value.execution_evidence_ref,
+        'execution_evidence_ref',
+      );
+      return {
+        cursor: value.cursor,
+        winner_agent_id: requireString(value.winner_agent_id, 'winner_agent_id'),
+        ...(executionEvidenceRef ? { execution_evidence_ref: executionEvidenceRef } : {}),
+      };
+    }
+    case 'council': {
+      if (!isTaskCouncilTrigger(value.trigger)) {
+        throw new Error(`Invalid Council cursor trigger: ${String(value.trigger)}`);
+      }
+      const primaryEvidenceRef = optionalString(value.primary_evidence_ref, 'primary_evidence_ref');
+      const candidateManifestRef = optionalString(
+        value.candidate_manifest_ref,
+        'candidate_manifest_ref',
+      );
+      return {
+        cursor: value.cursor,
+        trigger: value.trigger,
+        ...(primaryEvidenceRef ? { primary_evidence_ref: primaryEvidenceRef } : {}),
+        ...(candidateManifestRef ? { candidate_manifest_ref: candidateManifestRef } : {}),
+      };
+    }
+    case 'gate': {
+      const subjectRef = requireString(value.subject_ref, 'subject_ref');
+      const changesetRef = requireString(value.changeset_ref, 'changeset_ref');
+      if (subjectRef !== changesetRef) {
+        throw new Error('Task Gate cursor subject_ref must equal changeset_ref');
+      }
+      return {
+        cursor: value.cursor,
+        subject_ref: subjectRef,
+        phase: requireString(value.phase, 'phase'),
+        changeset_ref: changesetRef,
+        expected_sha256: requireSha256(value.expected_sha256, 'expected_sha256'),
+      };
+    }
+    case 'deliver':
+      return {
+        cursor: value.cursor,
+        changeset_ref: requireString(value.changeset_ref, 'changeset_ref'),
+        expected_sha256: requireSha256(value.expected_sha256, 'expected_sha256'),
+      };
+    case 'mailbox_wait':
+      return {
+        cursor: value.cursor,
+        delivery_ids: requireStringArray(value.delivery_ids, 'delivery_ids'),
+        waiting_reason: requireString(value.waiting_reason, 'waiting_reason'),
+      };
+    case 'done':
+      return { cursor: value.cursor };
+    default:
+      throw new Error(`Unsupported Task cursor input: ${value.cursor}`);
+  }
+}
+
+function isTaskCouncilTrigger(value: unknown): value is TaskCouncilTrigger {
+  return value === 'explicit_mode' || value === 'persistent_override' || value === 'agent_request';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function requireString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`Task cursor input ${field} must be a non-empty string`);
+  }
+  return value;
+}
+
+function optionalString(value: unknown, field: string): string | undefined {
+  return value === undefined ? undefined : requireString(value, field);
+}
+
+function requireStringArray(value: unknown, field: string): string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+    throw new Error(`Task cursor input ${field} must be a string array`);
+  }
+  return [...value];
+}
+
+function requireSha256(value: unknown, field: string): string {
+  const hash = requireString(value, field);
+  if (!/^[a-f0-9]{64}$/.test(hash)) {
+    throw new Error(`Task cursor input ${field} must be a lowercase SHA256`);
+  }
+  return hash;
+}
 
 export interface PersistedTaskError {
   code: string;

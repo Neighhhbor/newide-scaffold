@@ -17,6 +17,44 @@ import type { IntegrationV0Result } from '../../src/coordinator/integration-v0-f
 import { SqliteCoordinationStore } from '../../src/persistence';
 
 describe('NewideBackendService SQLite lifecycle', () => {
+  it('persists a Council override on the active Run without starting another Run', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'newide-service-override-'));
+    const runsRoot = path.join(root, 'runs');
+    const requestStore = new FileRunRequestStore(runsRoot);
+    const store = new SqliteCoordinationStore(path.join(root, 'coordination.sqlite'));
+    let runnerCalls = 0;
+    const service = createService(new TaskProcessor(store), requestStore, runsRoot, {
+      run: async (request) => {
+        runnerCalls += 1;
+        request.onRunCreated?.({ run_id: 'run_override_live', task_id: 'task_override_live' });
+        return new Promise<IntegrationV0Result>(() => undefined);
+      },
+    });
+
+    try {
+      const created = await service.createTask({
+        spec: 'Escalate the active task to Council',
+        completion_criteria: ['The same Run observes a persistent Council override'],
+        workspace_path: root,
+      });
+      const overridden = await service.startCouncil(created.task.task_id);
+
+      expect(overridden.current_run?.run_id).toBe('run_override_live');
+      expect(runnerCalls).toBe(1);
+      expect(store.getTaskAggregate(created.task.task_id)?.runtime_state.diagnostics).toMatchObject({
+        council_override: true,
+      });
+      expect(
+        store
+          .listEvents(created.task.task_id)
+          .filter((event) => event.event_type === 'task.council_override_set'),
+      ).toHaveLength(1);
+    } finally {
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('queries the same completed Task and Run after reconstructing the backend service', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'newide-service-sqlite-'));
     const runsRoot = path.join(root, 'runs');
@@ -253,6 +291,50 @@ describe('NewideBackendService SQLite lifecycle', () => {
         store.close();
       }
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('restarts a legacy file Run with SQLite enabled without creating an invalid Run foreign key', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'newide-service-legacy-restart-'));
+    const runsRoot = path.join(root, 'runs');
+    const requestStore = new FileRunRequestStore(runsRoot);
+    await requestStore.save({
+      run_id: 'run_legacy_only',
+      task_id: 'task_legacy_only',
+      prompt: 'Restart a legacy file run',
+      workspace_path: root,
+      mode: 'single_agent',
+      session_id: 'session_legacy',
+      task_request: {
+        spec: 'Restart a legacy file run',
+        completion_criteria: ['The SQLite service accepts the new Run'],
+      },
+    });
+    const store = new SqliteCoordinationStore(path.join(root, 'coordination.sqlite'));
+    const service = createService(new TaskProcessor(store), requestStore, runsRoot, {
+      run: async (request) => {
+        request.onRunCreated?.({
+          run_id: 'run_after_legacy',
+          task_id: 'task_after_legacy',
+        });
+        return new Promise<IntegrationV0Result>(() => undefined);
+      },
+    });
+
+    try {
+      await expect(service.restartRun('run_legacy_only')).resolves.toMatchObject({
+        run_id: 'run_after_legacy',
+        restarted_from_run_id: 'run_legacy_only',
+      });
+      expect(
+        store.getTaskAggregate('task_after_legacy')?.runs[0]?.restarted_from_run_id,
+      ).toBeUndefined();
+      await expect(requestStore.load('run_after_legacy')).resolves.toMatchObject({
+        restarted_from_run_id: 'run_legacy_only',
+      });
+    } finally {
+      store.close();
       await rm(root, { recursive: true, force: true });
     }
   });

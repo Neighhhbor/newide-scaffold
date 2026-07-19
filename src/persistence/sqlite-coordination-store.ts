@@ -17,7 +17,7 @@ import {
   type PersistedTaskAggregate,
   type PersistedTaskRuntimeState,
   type PersistedTaskState,
-  type TaskCursorInput,
+  parseTaskCursorInput,
   type TaskResumeCursor,
 } from './coordination-state-store';
 import type {
@@ -690,6 +690,12 @@ function validateCommit(input: CoordinationStateCommit): void {
   if (input.runtime_state.task_id !== input.task.task_id) {
     throw new Error('Runtime state belongs to another task');
   }
+  if (input.runtime_state.cursor_input) {
+    const cursorInput = parseTaskCursorInput(input.runtime_state.cursor_input);
+    if (cursorInput.cursor !== input.runtime_state.resume_cursor) {
+      throw new Error('Runtime cursor input does not match resume cursor');
+    }
+  }
   if (input.run && input.run.task_id !== input.task.task_id) {
     throw new Error('Run belongs to another task');
   }
@@ -871,7 +877,9 @@ function readRun(row: SqlRow): PersistedRunState {
 
 function readRuntimeState(row: SqlRow): PersistedTaskRuntimeState {
   const interruptState = readOptionalJson<Record<string, unknown>>(row, 'interrupt_state_json');
-  const cursorInput = readOptionalJson<TaskCursorInput>(row, 'cursor_input_json');
+  const rawCursorInput = readOptionalJson<unknown>(row, 'cursor_input_json');
+  const cursorInput =
+    rawCursorInput === undefined ? undefined : parseTaskCursorInput(rawCursorInput);
   return {
     task_id: readString(row, 'task_id'),
     ...(readOptionalString(row, 'current_run_id')

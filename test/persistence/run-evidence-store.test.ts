@@ -62,6 +62,28 @@ describe('FileRunEvidenceStore', () => {
     expect(entries).toEqual(['done.json']);
   });
 
+  it('keeps failure evidence separate from an already persisted stage result', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'newide-run-evidence-'));
+    temporaryDirectories.push(root);
+    const store = new FileRunEvidenceStore({ root });
+    const result = { status: 'completed', artifact_ref: 'artifact_1' };
+    const failure = { status: 'failed', code: 'invalid_contract' };
+
+    await store.writeStage({ run_id: 'run_failure', stage: 'deliver', evidence: result });
+    await store.writeFailure({ run_id: 'run_failure', stage: 'deliver', evidence: failure });
+
+    await expect(store.readStage({ run_id: 'run_failure', stage: 'deliver' })).resolves.toMatchObject(
+      { evidence: result },
+    );
+    await expect(
+      store.readFailure({ run_id: 'run_failure', stage: 'deliver' }),
+    ).resolves.toMatchObject({ evidence: failure });
+    expect(await readdir(path.join(root, 'run_failure', 'stages'))).toEqual([
+      'deliver.failure.json',
+      'deliver.json',
+    ]);
+  });
+
   it('rejects path segments that could escape the run evidence root', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'newide-run-evidence-'));
     temporaryDirectories.push(root);

@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 describe('SqliteCoordinationStore', () => {
-  it('creates the v1 coordination schema in WAL mode', () => {
+  it('creates the v2 coordination schema in WAL mode', () => {
     const { databasePath, store } = createStore();
     store.close();
 
@@ -86,6 +86,54 @@ describe('SqliteCoordinationStore', () => {
     });
 
     expect(store.getTaskAggregate('task_sqlite')?.runtime_state.cursor_input).toEqual(cursorInput);
+    store.close();
+  });
+
+  it('rejects an invalid persisted Council cursor trigger on read', () => {
+    const { databasePath, store } = createStore();
+    const commit = initialCommit();
+    store.commitState({
+      ...commit,
+      runtime_state: {
+        ...commit.runtime_state,
+        resume_cursor: 'council',
+        cursor_input: { cursor: 'council', trigger: 'agent_request' },
+      },
+    });
+    store.close();
+
+    const database = new DatabaseSync(databasePath);
+    database
+      .prepare('UPDATE task_runtime_states SET cursor_input_json = ? WHERE task_id = ?')
+      .run(JSON.stringify({ cursor: 'council', trigger: 'model_said_maybe' }), 'task_sqlite');
+    database.close();
+
+    const reopened = new SqliteCoordinationStore(databasePath);
+    expect(() => reopened.getTaskAggregate('task_sqlite')).toThrow(/Council cursor trigger/i);
+    reopened.close();
+  });
+
+  it('rejects a Gate cursor whose subject differs from its bound changeset', () => {
+    const { store } = createStore();
+    const commit = initialCommit();
+
+    expect(() =>
+      store.commitState({
+        ...commit,
+        runtime_state: {
+          ...commit.runtime_state,
+          resume_cursor: 'gate',
+          cursor_input: {
+            cursor: 'gate',
+            subject_ref: 'artifact_subject',
+            phase: 'post_primary',
+            changeset_ref: 'artifact_changeset',
+            expected_sha256: 'a'.repeat(64),
+          },
+        },
+      }),
+    ).toThrow(/subject_ref.*changeset_ref/i);
+    expect(store.getTaskAggregate('task_sqlite')).toBeUndefined();
     store.close();
   });
 
