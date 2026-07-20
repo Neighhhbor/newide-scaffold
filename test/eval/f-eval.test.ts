@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -24,6 +25,7 @@ describe('F eval utilities', () => {
   const tempDirs: string[] = [];
 
   afterEach(() => {
+    delete process.env.NEWIDE_SCAFFOLD_ROOT;
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -151,6 +153,86 @@ describe('F eval utilities', () => {
     expect(predictions).toContain('F-direction pipeline stub');
   });
 
+  it('collects a backend worktree diff and prepares the SWE-EVO harness automatically', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'f-eval-worktree-'));
+    tempDirs.push(dir);
+    const worktreePath = join(dir, 'worktree');
+    const datasetPath = join(dir, 'test.jsonl');
+    const backendSummaryPath = join(dir, 'backend-summary.json');
+    const outRoot = join(dir, 'runs');
+    mkdirSync(worktreePath, { recursive: true });
+    execFileSync('git', ['init'], { cwd: worktreePath });
+    writeFileSync(join(worktreePath, 'README.md'), 'before\n', 'utf-8');
+    writeFileSync(join(worktreePath, 'staged-file.txt'), 'before staged\n', 'utf-8');
+    writeFileSync(join(worktreePath, 'delete-me.txt'), 'delete me\n', 'utf-8');
+    execFileSync('git', ['add', '.'], { cwd: worktreePath });
+    execFileSync(
+      'git',
+      ['-c', 'user.name=F Eval', '-c', 'user.email=f-eval@example.test', 'commit', '-m', 'base'],
+      { cwd: worktreePath },
+    );
+    const baseCommit = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+    }).trim();
+    writeFileSync(join(worktreePath, 'README.md'), 'after\n', 'utf-8');
+    writeFileSync(join(worktreePath, 'staged-file.txt'), 'after staged\n', 'utf-8');
+    execFileSync('git', ['add', 'staged-file.txt'], { cwd: worktreePath });
+    rmSync(join(worktreePath, 'delete-me.txt'));
+    writeFileSync(join(worktreePath, 'new-file.txt'), 'new\n', 'utf-8');
+    writeFileSync(join(worktreePath, 'binary.dat'), Buffer.from([0x00, 0xff, 0x10, 0x80]));
+    const originalIndexDiff = execFileSync('git', ['diff', '--cached'], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+    });
+
+    const instance = { ...SAMPLE_INSTANCE, base_commit: baseCommit };
+    writeFileSync(datasetPath, `${JSON.stringify(instance)}\n`, 'utf-8');
+    writeFileSync(backendSummaryPath, JSON.stringify({ worktree_path: worktreePath }), 'utf-8');
+    mkdirSync(join(dir, 'eval'), { recursive: true });
+    writeFileSync(
+      join(dir, 'eval', 'manifest.json'),
+      JSON.stringify({
+        dataset_version: 'unit',
+        dataset_jsonl: 'test.jsonl',
+        smoke_instance_ids: [instance.instance_id],
+        default_model_name: 'mock',
+      }),
+      'utf-8',
+    );
+    process.env.NEWIDE_SCAFFOLD_ROOT = dir;
+
+    const result = await runEvalInstance({
+      instanceId: instance.instance_id,
+      runId: 'backend_patch_run',
+      datasetPath,
+      outRoot,
+      predictionMode: 'real',
+      backendSummaryPath,
+      skipScaffold: true,
+      runSweEvoHarness: true,
+      harnessDryRun: true,
+      sweEvoRoot: dir,
+    });
+
+    const prediction = JSON.parse(
+      readFileSync(result.summary.predictions_path, 'utf-8').trim(),
+    ) as { model_patch: string };
+    expect(prediction.model_patch).toContain('diff --git a/README.md b/README.md');
+    expect(prediction.model_patch).toContain('diff --git a/staged-file.txt b/staged-file.txt');
+    expect(prediction.model_patch).toContain('diff --git a/delete-me.txt b/delete-me.txt');
+    expect(prediction.model_patch).toContain('deleted file mode');
+    expect(prediction.model_patch).toContain('diff --git a/new-file.txt b/new-file.txt');
+    expect(prediction.model_patch).toContain('diff --git a/binary.dat b/binary.dat');
+    expect(prediction.model_patch).toContain('GIT binary patch');
+    expect(result.summary.patch_source).toBe('worktree_git_diff');
+    expect(result.summary.prediction_semantics).toBe('worktree_git_diff_collected');
+    expect(result.harness?.commandPath).toBeTruthy();
+    expect(
+      execFileSync('git', ['diff', '--cached'], { cwd: worktreePath, encoding: 'utf-8' }),
+    ).toBe(originalIndexDiff);
+  });
+
   it('prepares SWE-EVO OpenHands-compatible harness artifacts', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'f-eval-harness-'));
     tempDirs.push(dir);
@@ -192,7 +274,6 @@ describe('F eval utilities', () => {
     ).toContain(SAMPLE_INSTANCE.instance_id);
     expect(readFileSync(result.commandPath, 'utf-8')).toContain('evaluate_instance.py');
     expect(JSON.parse(readFileSync(result.harnessReportPath, 'utf-8'))).toEqual({});
-    delete process.env.NEWIDE_SCAFFOLD_ROOT;
   });
 
   it('runs smoke eval end-to-end for a pinned instance list', async () => {

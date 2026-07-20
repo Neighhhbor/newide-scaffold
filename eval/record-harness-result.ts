@@ -96,6 +96,7 @@ async function main(): Promise<void> {
     telemetryPath,
     predictionsPath,
     datasetManifestPath,
+    patchSource: 'harness_import',
     harnessReport,
     harnessReportPath,
     telemetrySink: memorySink,

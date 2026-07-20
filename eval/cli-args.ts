@@ -29,6 +29,12 @@ export function buildRunInstanceOptions(args: {
   outRoot?: string;
   harnessReportPath?: string;
   patchFile?: string;
+  worktreePath?: string;
+  backendSummaryPath?: string;
+  runSweEvoHarness: boolean;
+  harnessDryRun: boolean;
+  sweEvoRoot?: string;
+  harnessMaxWorkers?: number;
   skipScaffold: boolean;
 }): RunInstanceOptions {
   const options: RunInstanceOptions = {
@@ -57,6 +63,24 @@ export function buildRunInstanceOptions(args: {
   }
   if (args.patchFile) {
     options.patchFile = args.patchFile;
+  }
+  if (args.worktreePath) {
+    options.worktreePath = args.worktreePath;
+  }
+  if (args.backendSummaryPath) {
+    options.backendSummaryPath = args.backendSummaryPath;
+  }
+  if (args.runSweEvoHarness) {
+    options.runSweEvoHarness = true;
+  }
+  if (args.harnessDryRun) {
+    options.harnessDryRun = true;
+  }
+  if (args.sweEvoRoot) {
+    options.sweEvoRoot = args.sweEvoRoot;
+  }
+  if (args.harnessMaxWorkers) {
+    options.harnessMaxWorkers = args.harnessMaxWorkers;
   }
   if (args.skipScaffold) {
     options.skipScaffold = true;

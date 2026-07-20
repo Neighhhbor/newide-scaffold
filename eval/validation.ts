@@ -1,4 +1,4 @@
-import type { MemoryAblation, PredictionMode } from './types';
+import type { MemoryAblation, PatchSource, PredictionMode } from './types';
 
 const PREDICTION_MODES = ['stub', 'oracle', 'gold', 'real'] as const;
 const MEMORY_ABLATIONS = ['B0', 'B1', 'B2', 'B3'] as const;
@@ -21,12 +21,14 @@ export function parseMemoryAblation(value: string | undefined): MemoryAblation {
   );
 }
 
-export function describePredictionMode(mode: PredictionMode): string {
+export function describePredictionMode(mode: PredictionMode, patchSource?: PatchSource): string {
   if (mode === 'stub') {
     return 'deterministic_stub_baseline';
   }
   if (mode === 'real') {
-    return 'caller_supplied_model_patch';
+    return patchSource === 'worktree_git_diff'
+      ? 'worktree_git_diff_collected'
+      : 'caller_supplied_model_patch';
   }
   return 'oracle_gold_patch_replay';
 }

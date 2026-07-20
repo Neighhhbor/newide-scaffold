@@ -2,6 +2,14 @@ export type MemoryAblation = 'B0' | 'B1' | 'B2' | 'B3';
 
 export type PredictionMode = 'stub' | 'oracle' | 'gold' | 'real';
 
+export type PatchSource =
+  | 'stub'
+  | 'oracle'
+  | 'model_patch'
+  | 'patch_file'
+  | 'worktree_git_diff'
+  | 'harness_import';
+
 export interface EvalDatasetSubset {
   subset_id: string;
   description: string;
@@ -63,6 +71,9 @@ export interface EvalRunMeta {
   dataset_jsonl: string;
   dataset_subset?: string;
   dataset_manifest_path: string;
+  patch_source: PatchSource;
+  worktree_path?: string;
+  backend_summary_path?: string;
   started_at: string;
   scaffold_baseline: boolean;
 }
@@ -77,6 +88,9 @@ export interface EvalSummary {
   telemetry_path: string;
   predictions_path: string;
   dataset_manifest_path: string;
+  patch_source: PatchSource;
+  worktree_path?: string;
+  backend_summary_path?: string;
   dataset_subset?: string;
   harness_report_path?: string;
   resolved_count: number;

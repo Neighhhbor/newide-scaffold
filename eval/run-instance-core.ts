@@ -9,8 +9,17 @@ import { loadDatasetSubset, loadManifest, resolveDatasetJsonl, resolveRunDir } f
 import { buildPrediction, writePredictionsJsonl } from './prediction-writer';
 import { getInstanceReport, hasP2pRegression, readHarnessReport } from './harness-report';
 import { buildEvalSummary, writeJson, writeRunMeta } from './run-summary';
-import type { EvalRunMeta, EvalSummary, MemoryAblation, PredictionMode } from './types';
+import { runSweEvoHarnessAdapter, type SweEvoHarnessAdapterResult } from './sweevo-harness-adapter';
+import type {
+  EvalRunMeta,
+  EvalSummary,
+  MemoryAblation,
+  PatchSource,
+  PredictionMode,
+  SweEvoInstance,
+} from './types';
 import { describePredictionMode, normalizePredictionMode } from './validation';
+import { collectWorktreePatch, readBackendWorktreePath } from './worktree-patch';
 
 export interface RunInstanceOptions {
   instanceId: string;
@@ -26,12 +35,19 @@ export interface RunInstanceOptions {
   instanceSeq?: number;
   patchFile?: string;
   modelPatch?: string;
+  worktreePath?: string;
+  backendSummaryPath?: string;
+  runSweEvoHarness?: boolean;
+  harnessDryRun?: boolean;
+  sweEvoRoot?: string;
+  harnessMaxWorkers?: number;
 }
 
 export interface RunInstanceResult {
   runDir: string;
   summary: EvalSummary;
   runMeta: EvalRunMeta;
+  harness?: SweEvoHarnessAdapterResult;
 }
 
 function createRunId(instanceId: string): string {
@@ -46,12 +62,13 @@ export async function runEvalInstance(options: RunInstanceOptions): Promise<RunI
   const instance = getInstanceOrThrow(instances, options.instanceId);
 
   const predictionMode = normalizePredictionMode(options.predictionMode ?? 'stub');
-  const predictionSemantics = describePredictionMode(predictionMode);
   const memoryAblation = options.memoryAblation ?? 'B2';
   const modelName = options.modelName ?? manifest.default_model_name;
   const runId = options.runId ?? createRunId(instance.instance_id);
   const runDir = resolveRunDir(runId, options.outRoot);
   mkdirSync(runDir, { recursive: true });
+  const patchInput = await resolvePatchInput(instance, predictionMode, options);
+  const predictionSemantics = describePredictionMode(predictionMode, patchInput.patchSource);
 
   const telemetryPath = join(runDir, 'telemetry.jsonl');
   const predictionsPath = join(runDir, 'predictions.jsonl');
@@ -59,9 +76,6 @@ export async function runEvalInstance(options: RunInstanceOptions): Promise<RunI
   const runMetaPath = join(runDir, 'run-meta.json');
   const summaryPath = join(runDir, 'summary.json');
   const datasetSubset = options.datasetSubset;
-  const realPatch =
-    options.modelPatch ??
-    (options.patchFile ? readFileSync(options.patchFile, 'utf-8') : undefined);
 
   writeFileSync(telemetryPath, '', { flag: 'a' });
   writeJson(datasetManifestPath, {
@@ -85,6 +99,9 @@ export async function runEvalInstance(options: RunInstanceOptions): Promise<RunI
     model_name: modelName,
     dataset_jsonl: datasetPath,
     dataset_manifest_path: datasetManifestPath,
+    patch_source: patchInput.patchSource,
+    ...(patchInput.worktreePath ? { worktree_path: patchInput.worktreePath } : {}),
+    ...(options.backendSummaryPath ? { backend_summary_path: options.backendSummaryPath } : {}),
     started_at: new Date().toISOString(),
     scaffold_baseline: !options.skipScaffold,
   };
@@ -97,7 +114,7 @@ export async function runEvalInstance(options: RunInstanceOptions): Promise<RunI
     await runBasicFlow({ telemetry: sink });
   }
 
-  const prediction = buildPrediction(instance, modelName, predictionMode, realPatch);
+  const prediction = buildPrediction(instance, modelName, predictionMode, patchInput.realPatch);
   writePredictionsJsonl(predictionsPath, [prediction]);
 
   const harnessPort = createFHarnessTelemetryPort(sink);
@@ -127,6 +144,9 @@ export async function runEvalInstance(options: RunInstanceOptions): Promise<RunI
     telemetryPath,
     predictionsPath,
     datasetManifestPath,
+    patchSource: patchInput.patchSource,
+    ...(patchInput.worktreePath ? { worktreePath: patchInput.worktreePath } : {}),
+    ...(options.backendSummaryPath ? { backendSummaryPath: options.backendSummaryPath } : {}),
     telemetrySink: memorySink,
   };
 
@@ -141,7 +161,56 @@ export async function runEvalInstance(options: RunInstanceOptions): Promise<RunI
   );
   writeJson(summaryPath, summary);
 
-  return { runDir, summary, runMeta };
+  const harness = options.runSweEvoHarness
+    ? await runSweEvoHarnessAdapter({
+        predictionsPath,
+        runId,
+        ...(options.outRoot ? { outRoot: options.outRoot } : {}),
+        ...(options.sweEvoRoot ? { sweEvoRoot: options.sweEvoRoot } : {}),
+        ...(options.harnessMaxWorkers ? { maxWorkers: options.harnessMaxWorkers } : {}),
+        dryRun: options.harnessDryRun ?? false,
+      })
+    : undefined;
+
+  return { runDir, summary, runMeta, ...(harness ? { harness } : {}) };
+}
+
+interface ResolvedPatchInput {
+  patchSource: PatchSource;
+  realPatch?: string;
+  worktreePath?: string;
+}
+
+async function resolvePatchInput(
+  instance: SweEvoInstance,
+  predictionMode: PredictionMode,
+  options: RunInstanceOptions,
+): Promise<ResolvedPatchInput> {
+  if (predictionMode === 'stub') return { patchSource: 'stub' };
+  if (predictionMode === 'oracle') return { patchSource: 'oracle' };
+  if (options.modelPatch) {
+    return { patchSource: 'model_patch', realPatch: options.modelPatch };
+  }
+  if (options.patchFile) {
+    return {
+      patchSource: 'patch_file',
+      realPatch: readFileSync(options.patchFile, 'utf-8'),
+    };
+  }
+
+  const worktreePath =
+    options.worktreePath ??
+    (options.backendSummaryPath ? readBackendWorktreePath(options.backendSummaryPath) : undefined);
+  if (!worktreePath) {
+    throw new Error(
+      'Prediction mode "real" requires --patch-file, --worktree-path, or --backend-summary.',
+    );
+  }
+  return {
+    patchSource: 'worktree_git_diff',
+    realPatch: await collectWorktreePatch(worktreePath, { baseRef: instance.base_commit }),
+    worktreePath,
+  };
 }
 
 export interface RunSmokeOptions {

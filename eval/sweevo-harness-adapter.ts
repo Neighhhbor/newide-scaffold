@@ -109,7 +109,10 @@ export async function runSweEvoHarnessAdapter(
   const maxWorkers = options.maxWorkers ?? 4;
 
   mkdirSync(runDir, { recursive: true });
-  copyFileSync(options.predictionsPath, join(runDir, 'predictions.jsonl'));
+  const storedPredictionsPath = join(runDir, 'predictions.jsonl');
+  if (resolve(options.predictionsPath) !== resolve(storedPredictionsPath)) {
+    copyFileSync(options.predictionsPath, storedPredictionsPath);
+  }
   writeOpenHandsTrajectory(trajectoryPath, predictions);
   await writeOutputFinalInstances(outputFinalDir, predictions);
 

@@ -2,6 +2,23 @@
 
 这个目录放 NewIDE 的 F 方向初步评测管线。当前阶段不自建完整数据集，先直接使用 SWE-EVO 作为数据源；`newide-scaffold` 只记录固定子集和评测产物，不复制完整 SWE-EVO 数据。
 
+## 埋点：结果层最低要求
+
+与 `src/telemetry/埋点清单.md` §0 对齐——本目录服务**先出分**：
+
+| 必达                                      | 说明                                                              |
+| ----------------------------------------- | ----------------------------------------------------------------- |
+| `run-meta.json` / `dataset-manifest.json` | `run_id`、subset、mode、instance 列表可复现                       |
+| `predictions.jsonl`                       | 交给 harness 的答案                                               |
+| `summary.json`                            | 评测摘要；接入 harness 后应含 resolved/applied/f2p/p2p 等 L1 字段 |
+
+| 推荐非阻塞                  | 说明                                      |
+| --------------------------- | ----------------------------------------- |
+| `telemetry.jsonl`           | 联调与归因；**没有也能先出 summary 分数** |
+| Proxy / memory-cycle 细事件 | 经济性或 §1 消融时再要求                  |
+
+`stub` 验管线，`oracle` 验判卷（**不等于** NewIDE 能力），`real` 才用于能力向出分。全量 §2/§3/§4 埋点见清单归因层，不作为本目录冒烟验收项。
+
 ## 数据集子集
 
 - `v0-smoke`：最小冒烟子集，用来确认评测链路能跑通。
@@ -14,7 +31,9 @@
 - `stub`：默认基线，生成一个固定的假 patch，只用来验管线。
 - `oracle`：回放 SWE-EVO 金标 patch，只用来检查 harness 和数据链路。
 - `gold`：`oracle` 的兼容别名，不建议新命令继续使用。
-- `real`：使用调用方通过 `--patch-file` 传入的真实 patch。
+- `real`：使用真实 patch。可通过 `--patch-file` 直接传入，也可从后端
+  `summary.json` 的 `worktree_path`（或显式 `--worktree-path`）自动执行
+  `git diff` 收集。
 
 注意：`oracle` / `gold` 是“拿标准答案去判卷”，不能当作 NewIDE 能力指标。真正看能力时应使用 `real`，或者后续接入 NewIDE 实际生成的 patch。
 
@@ -57,6 +76,21 @@ pnpm eval:sweevo-harness -- --predictions .newide/eval/<run>/predictions.jsonl -
 ```
 
 去掉 `--dry-run` 后会真正调用 SWE-EVO harness。真实执行需要本机 SWE-EVO 环境和 Docker 可用。
+
+从后端运行结果自动收集 patch，并直接交给 SWE-EVO：
+
+```powershell
+pnpm eval:instance -- --instance-id <instance-id> --mode real --backend-summary .newide/runs/<backend-run>/summary.json --skip-scaffold --run-harness
+```
+
+联调时可加 `--harness-dry-run`，只生成 `predictions.jsonl`、OpenHands trajectory
+和 harness 命令，不启动 Docker。也可以用 `--worktree-path <dir>` 跳过
+`summary.json` 解析。
+
+自动收集使用临时 Git index，相对数据集实例的 `base_commit` 生成 binary diff；
+它会包含已修改、已删除和未跟踪（但未被 `.gitignore` 忽略）的文件，同时不会改动
+后端 worktree 的真实 Git index。worktree 必须位于 Git 仓库中，并且仓库中能解析
+该 `base_commit`。
 
 ## 怎么理解这套系统
 

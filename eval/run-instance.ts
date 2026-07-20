@@ -6,7 +6,7 @@ async function main(): Promise<void> {
   const instanceId = readFlag('--instance-id');
   if (!instanceId) {
     console.error(
-      'Usage: pnpm eval:instance -- --instance-id <id> [--mode stub|oracle|real] [--patch-file <path>] [--ablation B0|B1|B2|B3] [--subset <id>] [--run-id <id>] [--skip-scaffold] [--harness-report <path>]',
+      'Usage: pnpm eval:instance -- --instance-id <id> [--mode stub|oracle|real] [--patch-file <path> | --worktree-path <dir> | --backend-summary <summary.json>] [--run-harness] [--harness-dry-run] [--swe-evo-root <dir>] [--max-workers 4] [--ablation B0|B1|B2|B3] [--subset <id>] [--run-id <id>] [--skip-scaffold] [--harness-report <path>]',
     );
     process.exitCode = 1;
     return;
@@ -28,6 +28,16 @@ async function main(): Promise<void> {
       ...(readFlag('--out-root') ? { outRoot: readFlag('--out-root')! } : {}),
       ...(readFlag('--harness-report') ? { harnessReportPath: readFlag('--harness-report')! } : {}),
       ...(readFlag('--patch-file') ? { patchFile: readFlag('--patch-file')! } : {}),
+      ...(readFlag('--worktree-path') ? { worktreePath: readFlag('--worktree-path')! } : {}),
+      ...(readFlag('--backend-summary')
+        ? { backendSummaryPath: readFlag('--backend-summary')! }
+        : {}),
+      runSweEvoHarness: hasFlag('--run-harness'),
+      harnessDryRun: hasFlag('--harness-dry-run'),
+      ...(readFlag('--swe-evo-root') ? { sweEvoRoot: readFlag('--swe-evo-root')! } : {}),
+      ...(readFlag('--max-workers')
+        ? { harnessMaxWorkers: readPositiveInteger('--max-workers') }
+        : {}),
     }),
   );
 
@@ -36,6 +46,19 @@ async function main(): Promise<void> {
   console.log(`[F-Eval] predictions=${result.summary.predictions_path}`);
   console.log(`[F-Eval] summary=${result.runDir}/summary.json`);
   console.log(`[F-Eval] telemetry_events=${result.summary.telemetry_event_types.join(', ')}`);
+  if (result.harness) {
+    console.log(`[F-Eval] harness_command=${result.harness.commandPath}`);
+    console.log(`[F-Eval] harness_report=${result.harness.harnessReportPath}`);
+  }
+}
+
+function readPositiveInteger(flag: string): number {
+  const raw = readFlag(flag);
+  const value = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`Invalid ${flag} "${raw ?? ''}". Expected a positive integer.`);
+  }
+  return value;
 }
 
 main().catch((error: unknown) => {

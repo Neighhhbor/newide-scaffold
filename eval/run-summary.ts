@@ -4,6 +4,7 @@ import type {
   EvalRunMeta,
   EvalSummary,
   MemoryAblation,
+  PatchSource,
   PredictionMode,
   SweBenchHarnessReport,
 } from './types';
@@ -19,6 +20,9 @@ export interface BuildSummaryInput {
   telemetryPath: string;
   predictionsPath: string;
   datasetManifestPath: string;
+  patchSource: PatchSource;
+  worktreePath?: string;
+  backendSummaryPath?: string;
   datasetSubset?: string;
   harnessReport?: SweBenchHarnessReport;
   harnessReportPath?: string;
@@ -60,6 +64,7 @@ export function buildEvalSummary(input: BuildSummaryInput): EvalSummary {
     telemetry_path: input.telemetryPath,
     predictions_path: input.predictionsPath,
     dataset_manifest_path: input.datasetManifestPath,
+    patch_source: input.patchSource,
     resolved_count: resolvedCount,
     unresolved_count: unresolvedCount,
     applied_count: appliedCount,
@@ -73,6 +78,12 @@ export function buildEvalSummary(input: BuildSummaryInput): EvalSummary {
   }
   if (input.datasetSubset) {
     summary.dataset_subset = input.datasetSubset;
+  }
+  if (input.worktreePath) {
+    summary.worktree_path = input.worktreePath;
+  }
+  if (input.backendSummaryPath) {
+    summary.backend_summary_path = input.backendSummaryPath;
   }
 
   return summary;
