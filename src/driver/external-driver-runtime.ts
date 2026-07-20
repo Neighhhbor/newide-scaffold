@@ -4,12 +4,14 @@ import type {
   DriverPrompt,
   DriverRunResult,
   DriverRuntimeHandle,
+  DriverStreamEventListener,
 } from './contract';
 
 export interface ExternalDriverTransport {
   invoke(input: DriverPrompt): Promise<DriverRunResult>;
   interrupt?(reason: string, runId?: string): Promise<void>;
   shutdown?(): Promise<void>;
+  subscribeToEvents?(listener: DriverStreamEventListener): () => void;
 }
 
 export interface ExternalDriverRuntimeOptions {
@@ -79,6 +81,10 @@ export class ExternalDriverRuntime implements DriverRuntimeHandle {
 
   async shutdown(): Promise<void> {
     await this.transport.shutdown?.();
+  }
+
+  subscribeToEvents(listener: DriverStreamEventListener): () => void {
+    return this.transport.subscribeToEvents?.(listener) ?? (() => undefined);
   }
 }
 

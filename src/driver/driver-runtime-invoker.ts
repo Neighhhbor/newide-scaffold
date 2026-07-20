@@ -1,6 +1,6 @@
 import { SCHEMA_VERSION, createId, nowTimestamp, type ArtifactRef } from '../core';
 import { runDriverPromptWithSignal } from './abortable-driver-run';
-import type { DriverRunResult, DriverRuntimeHandle } from './contract';
+import type { DriverRunResult, DriverRuntimeHandle, DriverStreamEventListener } from './contract';
 
 export interface DriverRuntimeInvokerMemoryItem {
   id: string;
@@ -24,6 +24,7 @@ export interface DriverRuntimeInvokerInput {
 
 export interface DriverRuntimeInvokerOptions {
   signal?: AbortSignal;
+  onDriverEvent?: DriverStreamEventListener;
 }
 
 export interface DriverRuntimeReport {
@@ -61,13 +62,14 @@ export function createDriverRuntimeInvoker(driver: DriverRuntimeHandle) {
       );
     }
 
+    const runId = input.run_id ?? input.call_id;
     let execution: DriverRunResult;
     try {
       execution = await runDriverPromptWithSignal(
         driver,
         {
           task_id: input.task_id,
-          run_id: input.run_id ?? input.call_id,
+          run_id: runId,
           ...(input.workspace_path ? { workspace_path: input.workspace_path } : {}),
           ...(input.session_id ? { session_id: input.session_id } : {}),
           prompt: deterministicJson({
@@ -79,6 +81,7 @@ export function createDriverRuntimeInvoker(driver: DriverRuntimeHandle) {
           schema_version: SCHEMA_VERSION,
         },
         options?.signal,
+        options?.onDriverEvent,
       );
     } catch (error) {
       if (isAbort(error, options?.signal)) throw error;

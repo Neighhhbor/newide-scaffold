@@ -41,4 +41,27 @@ describe('runDriverPromptWithSignal', () => {
     ).resolves.toMatchObject({ status: 'succeeded' });
     expect(interrupt).not.toHaveBeenCalled();
   });
+
+  it('preserves cancellation when the external runtime converts transport shutdown to failure', async () => {
+    const controller = new AbortController();
+    let rejectInvoke!: (error: Error) => void;
+    const driver = new ExternalDriverRuntime({
+      driver_id: 'external-driver',
+      transport: {
+        invoke: () =>
+          new Promise<DriverRunResult>((_resolve, reject) => {
+            rejectInvoke = reject;
+          }),
+        interrupt: async () => rejectInvoke(new Error('child exited with SIGTERM')),
+      },
+    });
+
+    const running = runDriverPromptWithSignal(driver, PROMPT, controller.signal);
+    controller.abort(new DOMException('cancelled by user', 'AbortError'));
+
+    await expect(running).rejects.toMatchObject({
+      name: 'AbortError',
+      message: 'cancelled by user',
+    });
+  });
 });
