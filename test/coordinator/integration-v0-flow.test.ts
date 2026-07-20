@@ -136,6 +136,19 @@ describe('runIntegrationV0Flow', () => {
     expect(driverRequestedDelivery.ack_at).toBeDefined();
   });
 
+  it('publishes task.completed only after the final delivery boundary', async () => {
+    const events: string[] = [];
+    const result = await runFlow({ onEvent: (event) => events.push(event.event_type) });
+
+    expect(events.filter((event) => event === 'task.completed')).toHaveLength(1);
+    expect(events).toContain('agent.primary_completed');
+    expect(events.indexOf('agent.primary_completed')).toBeLessThan(
+      events.indexOf('task.completed'),
+    );
+    expect(events.indexOf('task.completed')).toBeLessThan(events.indexOf('run.completed'));
+    expect(result.summary.status).toBe('completed');
+  });
+
   it('creates the runtime task from the supplied task definition', async () => {
     const result = await runFlow({
       taskRequest: {

@@ -583,17 +583,17 @@ export async function runIntegrationV0Flow(
 
   // 11. Run gates (D: Gate)
   task = orchestrator.updateTaskStatus(task.task_id, 'reviewing');
-  const taskCompletedEvent = orchestrator.appendEvent({
-    event_type: 'task.completed',
-    subject_id: task.task_id,
+  const primaryCompletedEvent = orchestrator.appendEvent({
+    event_type: 'agent.primary_completed',
+    subject_id: driverResult.driver_run_result_id,
     run_id: run.run_id,
     task_id: task.task_id,
     payload: {
-      summary: 'Driver completed the task.',
+      summary: 'Primary Agent completed its execution stage.',
       artifact_refs: driverResult.artifacts.map((a) => a.artifact_id),
     },
   });
-  timeline.push({ name: 'TaskCompleted', id: taskCompletedEvent.event_id });
+  timeline.push({ name: 'PrimaryAgentCompleted', id: primaryCompletedEvent.event_id });
 
   const hookEngine =
     options?.hookEngine ??
@@ -623,14 +623,14 @@ export async function runIntegrationV0Flow(
     });
 
   const hookResult = await hookEngine.handleEvent({
-    ...taskCompletedEvent,
+    ...primaryCompletedEvent,
     event_type: 'task.completed',
   });
   options?.signal?.throwIfAborted();
 
   const hookEvent = orchestrator.appendEvent({
     event_type: 'hook.matched',
-    subject_id: taskCompletedEvent.event_id,
+    subject_id: primaryCompletedEvent.event_id,
     run_id: run.run_id,
     task_id: task.task_id,
     payload: {
@@ -1077,6 +1077,24 @@ export async function runIntegrationV0Flow(
   const finalRunStatus = flowCompleted ? 'completed' : 'failed';
   task = orchestrator.updateTaskStatus(task.task_id, finalTaskStatus);
   orchestrator.updateRunStatus(run.run_id, finalRunStatus);
+  const taskTerminalEvent = orchestrator.appendEvent({
+    event_type: flowCompleted ? 'task.completed' : 'task.failed',
+    subject_id: task.task_id,
+    run_id: run.run_id,
+    task_id: task.task_id,
+    payload: {
+      status: finalTaskStatus,
+      outcome,
+      artifact_refs: selectionResult.selected_artifacts.map((artifact) => artifact.artifact_id),
+      ...(failure
+        ? { code: failure.code, message: failure.message, details: failure.details }
+        : {}),
+    },
+  });
+  timeline.push({
+    name: flowCompleted ? 'TaskCompleted' : 'TaskFailed',
+    id: taskTerminalEvent.event_id,
+  });
   const runCompletedEvent = orchestrator.appendEvent({
     event_type: flowCompleted ? 'run.completed' : 'run.failed',
     subject_id: run.run_id,
