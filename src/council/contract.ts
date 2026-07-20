@@ -7,6 +7,7 @@ import type {
   TaskId,
   Timestamp,
 } from '../core';
+import type { DriverStreamEventListener } from '../driver/contract';
 
 export type CouncilDecisionMode =
   | 'advisory'
@@ -187,6 +188,7 @@ export interface CouncilLifecycleEvent {
 
 export interface CouncilExecutionOptions {
   signal?: AbortSignal;
+  onDriverEvent?: DriverStreamEventListener;
   onLifecycleEvent?: (event: CouncilLifecycleEvent) => void | Promise<void>;
 }
 

@@ -11,6 +11,7 @@ import {
   type DriverPrompt,
   type DriverRunResult,
   type DriverRuntimeHandle,
+  type DriverStreamEventListener,
 } from '../../src/driver';
 import {
   InMemoryBufferRepository,
@@ -81,6 +82,20 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
     expect(driver.prompts).toHaveLength(0);
   });
 
+  it('tags streamed A events with the executing Council role', async () => {
+    const driver = new CapturingDriver('succeeded');
+    const { facade } = createFacade(driver);
+    const events: Array<{ role_id?: string; event_type: string }> = [];
+
+    await facade.runAgent(request('task_stream_role', 'reviewer'), {
+      onDriverEvent: (event) => events.push(event),
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({ event_type: 'agent_message_chunk', role_id: 'reviewer' }),
+    ]);
+  });
+
   it('wakes a sleeping mailbox recipient without dispatching a Driver task', async () => {
     const driver = new CapturingDriver('succeeded');
     const { facade } = createFacade(driver);
@@ -98,9 +113,7 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
       task_id: 'task_after_wake',
       spec: 'Confirm the recipient is loaded into the B runtime.',
     });
-    expect(batch.claims).toEqual([
-      expect.objectContaining({ role_id: 'role_mailbox_recipient' }),
-    ]);
+    expect(batch.claims).toEqual([expect.objectContaining({ role_id: 'role_mailbox_recipient' })]);
     expect(driver.prompts).toHaveLength(0);
   });
 
@@ -608,12 +621,27 @@ class CapturingDriver implements DriverRuntimeHandle {
     supports_permission_events: false,
   };
   readonly prompts: DriverPrompt[] = [];
+  private readonly eventListeners = new Set<DriverStreamEventListener>();
 
   constructor(private readonly status: DriverRunResult['status']) {}
 
   async sendPrompt(input: DriverPrompt): Promise<DriverRunResult> {
     this.prompts.push(input);
+    for (const listener of this.eventListeners) {
+      listener({
+        schema_version: 'driver-event.v1',
+        event_type: 'agent_message_chunk',
+        task_id: input.task_id,
+        run_id: input.run_id,
+        payload: { text: 'working' },
+      });
+    }
     return driverResult(this, this.status, input.session_id);
+  }
+
+  subscribeToEvents(listener: DriverStreamEventListener): () => void {
+    this.eventListeners.add(listener);
+    return () => this.eventListeners.delete(listener);
   }
 
   async interrupt(_reason: string): Promise<void> {}

@@ -268,7 +268,12 @@ export class SynthesisAgentCouncilProvider implements CouncilProvider {
           context_policy: 'council_synthesis_default',
           schema_version: SCHEMA_VERSION,
         },
-        options?.signal ? { signal: options.signal } : undefined,
+        options?.signal || options?.onDriverEvent
+          ? {
+              ...(options.signal ? { signal: options.signal } : {}),
+              ...(options.onDriverEvent ? { onDriverEvent: options.onDriverEvent } : {}),
+            }
+          : undefined,
       );
     } catch (error) {
       if (options?.signal?.aborted) throw error;

@@ -19,6 +19,7 @@ import {
 } from '../council';
 import { buildCouncilProposalFromDriverResult } from '../council/proposal-adapter';
 import type { AutonomousCouncilHandler } from './handlers/autonomous-council-handler';
+import type { DriverStreamEventListener } from '../driver/contract';
 
 export type SelectionMode = 'single_agent' | 'council';
 
@@ -49,6 +50,7 @@ export interface ArtifactSelectionInput {
 
 export interface ArtifactSelectionExecutionOptions {
   signal?: AbortSignal;
+  onDriverEvent?: DriverStreamEventListener;
   onCouncilLifecycleEvent?: (event: CouncilLifecycleEvent) => void | Promise<void>;
 }
 
@@ -146,6 +148,7 @@ export class ArtifactSelector {
     const councilOptions = execution
         ? {
             ...(execution.signal ? { signal: execution.signal } : {}),
+            ...(execution.onDriverEvent ? { onDriverEvent: execution.onDriverEvent } : {}),
             ...(execution.onCouncilLifecycleEvent
               ? { onLifecycleEvent: execution.onCouncilLifecycleEvent }
               : {}),

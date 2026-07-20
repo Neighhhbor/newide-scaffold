@@ -28,7 +28,12 @@ import type {
   AgentMailboxWakePort,
   AgentMailboxWakeRequestV1,
 } from '../protocol/agent-mailbox-wake';
-import type { DriverRunResult, DriverRunStatus, DriverRuntimeHandle } from '../driver/contract';
+import type {
+  DriverRunResult,
+  DriverRunStatus,
+  DriverRuntimeHandle,
+  DriverStreamEvent,
+} from '../driver/contract';
 import { createDriverRuntimeInvoker } from '../driver/driver-runtime-invoker';
 import type {
   AgentContextPackEvidence,
@@ -50,6 +55,7 @@ interface InvocationContext {
   workspace_path?: string;
   session_id?: string;
   signal?: AbortSignal;
+  onDriverEvent?: AgentExecutionOptions['onDriverEvent'];
   execution?: DriverRunResult;
   driver_attempts: number;
   abortObserved: boolean;
@@ -148,6 +154,12 @@ export class DriverRuntimeAgentExecutionFacade
       driver_attempts: 0,
       abortObserved: false,
       ...(options?.signal ? { signal: options.signal } : {}),
+      ...(options?.onDriverEvent
+        ? {
+            onDriverEvent: (event: DriverStreamEvent) =>
+              options.onDriverEvent?.({ ...event, role_id: input.role_id }),
+          }
+        : {}),
     };
     const dispatched = await this.invocationContext.run(invocation, () =>
       manager.dispatchTask(runtimeRoleId, {
@@ -243,7 +255,12 @@ export class DriverRuntimeAgentExecutionFacade
               ],
             },
           },
-          invocation.signal ? { signal: invocation.signal } : undefined,
+          invocation.signal || invocation.onDriverEvent
+            ? {
+                ...(invocation.signal ? { signal: invocation.signal } : {}),
+                ...(invocation.onDriverEvent ? { onDriverEvent: invocation.onDriverEvent } : {}),
+              }
+            : undefined,
         );
       };
       let result = await invoke();

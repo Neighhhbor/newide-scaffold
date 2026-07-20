@@ -11,6 +11,51 @@ import { IntegrationV0CoordinatorRunner } from '../../src/coordinator/coordinato
 import { runSnapshotSchema } from '../../src/protocol/run-snapshot';
 
 describe('NewideBackendService', () => {
+  it('publishes incremental driver events before the runner completes', async () => {
+    let finish: ((result: IntegrationV0Result) => void) | undefined;
+    const runnerResult = new Promise<IntegrationV0Result>((resolve) => {
+      finish = resolve;
+    });
+    const service = new NewideBackendService({
+      run: async (request) => {
+        request.onRunCreated?.({ run_id: 'run_stream', task_id: 'task_stream' });
+        request.onDriverEvent?.({
+          schema_version: 'driver-event.v1',
+          event_type: 'agent_message_chunk',
+          task_id: 'task_stream',
+          run_id: 'run_stream',
+          session_id: 'session_stream',
+          sequence: 1,
+          created_at: '2026-07-20T00:00:01.000Z',
+          payload: { text: 'working' },
+        });
+        return runnerResult;
+      },
+    });
+
+    await service.createRun({ prompt: 'Stream progress', workspace_path: process.cwd() });
+
+    expect(service.getSnapshot('run_stream')).toMatchObject({
+      status: 'running',
+      events: [
+        { type: 'run.started' },
+        {
+          type: 'driver.stream_event',
+          source: 'driver',
+          payload: {
+            driver_event_type: 'agent_message_chunk',
+            session_id: 'session_stream',
+            event_sequence: 1,
+            event_payload: { text: 'working' },
+          },
+        },
+      ],
+    });
+
+    finish?.(completedResult('run_stream', 'task_stream'));
+    await viWaitFor(() => service.getSnapshot('run_stream').status === 'completed');
+  });
+
   it('returns real ids before the runner completes and records telemetry', async () => {
     let receivedRequest: Parameters<IntegrationV0CoordinatorRunner['run']>[0] | undefined;
     let finish: ((result: IntegrationV0Result) => void) | undefined;

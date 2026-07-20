@@ -73,6 +73,11 @@ export function createProductionBackendService(
   const driverEnv = loadEnvFile(env.ACP_DRIVER_ENV_FILE ?? path.join(runnerDir, '.env'));
   const driver = new ExternalDriverRuntime({
     driver_id: 'acp-external',
+    capabilities: {
+      supports_acp_extension: true,
+      supports_session_load: true,
+      supports_tool_events: true,
+    },
     transport: new CommandDriverTransport({
       command: 'pnpm',
       args: ['--dir', runnerDir, 'driver:run'],

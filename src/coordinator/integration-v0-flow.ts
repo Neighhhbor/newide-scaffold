@@ -32,6 +32,7 @@ import { DecisionAggregator, type GateResult } from '../gate';
 import { MockMemoryProvider } from '../memory';
 import { RuntimeOrchestrator } from './orchestrator';
 import type { TelemetrySink } from '../telemetry/telemetry-sink';
+import type { DriverStreamEventListener } from '../driver/contract';
 import {
   ArtifactSelector,
   type ArtifactSelectionResult,
@@ -163,6 +164,7 @@ export interface IntegrationV0Options {
   runsRoot?: string;
   telemetry?: TelemetrySink;
   signal?: AbortSignal;
+  onDriverEvent?: DriverStreamEventListener;
   onEvent?: (event: Event) => void;
   onRunCreated?: (identity: { run_id: string; task_id: string }) => void;
 }
@@ -443,6 +445,7 @@ export async function runIntegrationV0Flow(
       new ExecuteAgentHandler({ agentExecutionFacade: options.agentExecutionFacade });
     agentExecutionResult = await executeAgentHandler.execute(agentExecutionRequest, {
       ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.onDriverEvent ? { onDriverEvent: options.onDriverEvent } : {}),
     });
     contextPackId = agentExecutionResult.context_pack_ref;
     const contextEvent = orchestrator.appendEvent({
@@ -478,6 +481,7 @@ export async function runIntegrationV0Flow(
         schema_version: SCHEMA_VERSION,
       },
       options?.signal,
+      options?.onDriverEvent,
     );
   }
   let workspaceChangedFiles =
@@ -714,6 +718,7 @@ export async function runIntegrationV0Flow(
     },
     {
       ...(options?.signal ? { signal: options.signal } : {}),
+      ...(options?.onDriverEvent ? { onDriverEvent: options.onDriverEvent } : {}),
       ...(options?.enableCouncil
         ? {
             onCouncilLifecycleEvent: (event) => {

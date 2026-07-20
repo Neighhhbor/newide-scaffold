@@ -55,6 +55,7 @@ import type {
   MailboxSendInput,
   MailboxSendResult,
 } from './persistent-mailbox-service';
+import type { DriverStreamEvent } from '../driver/contract';
 import type {
   PersistedMailboxDelivery,
   PersistedMailboxEnvelope,
@@ -410,6 +411,14 @@ export class NewideBackendService {
           task_request: taskRequest,
           telemetry,
           signal: controller.signal,
+          onDriverEvent: (event) => {
+            const driverEvent = toDriverStreamDomainEvent(event);
+            if (!identity) {
+              pendingEvents.push(driverEvent);
+              return;
+            }
+            this.appendDomainEvent(identity, driverEvent);
+          },
           onEvent: (event) => {
             if (!identity) {
               pendingEvents.push(event);
@@ -842,6 +851,28 @@ function toDomainEvent(event: AppRunEvent): Event {
     task_id: event.task_id,
     payload: { ...event.payload },
     created_at: event.created_at,
+    schema_version: SCHEMA_VERSION,
+  };
+}
+
+function toDriverStreamDomainEvent(event: DriverStreamEvent): Event {
+  const payload: Record<string, unknown> = {
+    driver_event_type: event.event_type,
+    event_payload: event.payload ?? null,
+    ...(event.session_id ? { session_id: event.session_id } : {}),
+    ...(event.role_id ? { role_id: event.role_id } : {}),
+    ...(event.sequence !== undefined ? { event_sequence: event.sequence } : {}),
+    ...(event.run_id ? { driver_run_id: event.run_id } : {}),
+    ...(event.task_id ? { driver_task_id: event.task_id } : {}),
+  };
+  return {
+    event_id: createId('run_event'),
+    event_type: 'driver.stream_event',
+    subject_id: event.run_id ?? event.session_id ?? event.event_type,
+    ...(event.run_id ? { run_id: event.run_id } : {}),
+    ...(event.task_id ? { task_id: event.task_id } : {}),
+    payload,
+    created_at: event.created_at ?? new Date().toISOString(),
     schema_version: SCHEMA_VERSION,
   };
 }

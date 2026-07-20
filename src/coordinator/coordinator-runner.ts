@@ -11,6 +11,7 @@ import {
 } from './integration-v0-flow';
 import type { TelemetrySink } from '../telemetry/telemetry-sink';
 import type { Event, TaskCreateRequest } from '../core';
+import type { DriverStreamEventListener } from '../driver/contract';
 
 export interface CoordinatorRunRequest {
   prompt: string;
@@ -21,6 +22,7 @@ export interface CoordinatorRunRequest {
   task_request?: TaskCreateRequest;
   telemetry?: TelemetrySink;
   signal?: AbortSignal;
+  onDriverEvent?: DriverStreamEventListener;
   onEvent?: (event: Event) => void;
   onRunCreated?: (identity: { run_id: string; task_id: string }) => void;
 }
@@ -39,6 +41,7 @@ type RunnerDefaults = Omit<
   | 'taskRequest'
   | 'telemetry'
   | 'signal'
+  | 'onDriverEvent'
   | 'onEvent'
   | 'onRunCreated'
 >;
@@ -60,6 +63,7 @@ export class IntegrationV0CoordinatorRunner implements CoordinatorRunner {
       ...(request.task_request ? { taskRequest: request.task_request } : {}),
       ...(request.telemetry ? { telemetry: request.telemetry } : {}),
       ...(request.signal ? { signal: request.signal } : {}),
+      ...(request.onDriverEvent ? { onDriverEvent: request.onDriverEvent } : {}),
       ...(request.onEvent ? { onEvent: request.onEvent } : {}),
       ...(request.onRunCreated ? { onRunCreated: request.onRunCreated } : {}),
     });

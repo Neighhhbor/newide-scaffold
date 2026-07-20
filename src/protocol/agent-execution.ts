@@ -9,7 +9,7 @@ import type {
   TaskId,
   Timestamp,
 } from '../core';
-import type { DriverToolEvent } from '../driver/contract';
+import type { DriverStreamEventListener, DriverToolEvent } from '../driver/contract';
 
 export const AGENT_EXECUTION_STATUSES = [
   'completed',
@@ -54,6 +54,7 @@ export interface AgentExecutionResult {
 
 export interface AgentExecutionOptions {
   signal?: AbortSignal;
+  onDriverEvent?: DriverStreamEventListener;
 }
 
 export interface AgentExecutionFacade {
