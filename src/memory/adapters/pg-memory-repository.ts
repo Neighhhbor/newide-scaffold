@@ -156,7 +156,7 @@ export class PgMemoryRepository implements MemoryRepository {
          AND payload->>'review_status' = 'approved'
          AND COALESCE(payload->>'market_status', '') <> 'superseded'
          AND (1 - (description_embedding <=> $2::vector)) >= $3
-       ORDER BY description_embedding <=> $2::vector ASC
+       ORDER BY description_embedding <=> $2::vector ASC, id ASC
        LIMIT $4`,
       [role_id, toPgVector(options.query_embedding), min_similarity, options.top_k],
     );
@@ -181,7 +181,7 @@ export class PgMemoryRepository implements MemoryRepository {
          AND payload->>'promoted_to' IS NULL
          AND (payload->>'confidence')::double precision >= $2
          AND (1 - (description_embedding <=> $3::vector)) >= $4
-       ORDER BY description_embedding <=> $3::vector ASC
+       ORDER BY description_embedding <=> $3::vector ASC, id ASC
        LIMIT $5`,
       [role_id, min_confidence, toPgVector(options.query_embedding), min_similarity, options.top_k],
     );

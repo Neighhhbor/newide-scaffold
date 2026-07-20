@@ -313,6 +313,68 @@ describe('retrieveMemoriesForTask', () => {
     expect(result.skills.length + result.experiences.length).toBe(3);
   });
 
+  it('replays equal-relevance records in stable ID order before the total limit', async () => {
+    const query = 'deterministic runtime ordering';
+    const queryEmbedding = await testEmbedding.embed(query);
+    const skillIds = [
+      '00000000-0000-4000-8000-000000000002',
+      '00000000-0000-4000-8000-000000000004',
+    ];
+    const experienceIds = [
+      '00000000-0000-4000-8000-000000000001',
+      '00000000-0000-4000-8000-000000000003',
+    ];
+
+    const retrieve = async (reverseInsertion: boolean) => {
+      const repository = new InMemoryRepository(testEmbedding);
+      const role_id = 'role_tie_replay';
+      await repository.initializeAgent({ role_id, name: role_id });
+      const skills = skillIds.map((id) =>
+        createSkill(role_id, {
+          id,
+          description: 'Equal relevance runtime skill',
+          description_embedding: queryEmbedding,
+          tags: ['runtime'],
+        }),
+      );
+      const experiences = experienceIds.map((id) =>
+        createExperience(role_id, {
+          id,
+          description: 'Equal relevance runtime experience',
+          description_embedding: queryEmbedding,
+          tags: ['runtime'],
+        }),
+      );
+      for (const skill of reverseInsertion ? [...skills].reverse() : skills) {
+        await repository.saveSkill(role_id, skill);
+      }
+      for (const experience of reverseInsertion ? [...experiences].reverse() : experiences) {
+        await repository.saveExperience(role_id, experience);
+      }
+
+      return retrieveMemoriesForTask(
+        createScope(repository, role_id),
+        { task_query: query },
+        {
+          ...retrievalOptions,
+          selection: { max_memory_items: 3, min_tag_overlap: 99 },
+        },
+      );
+    };
+
+    const forward = await retrieve(false);
+    const reverse = await retrieve(true);
+
+    expect(reverse.skills.map((record) => record.id)).toEqual(
+      forward.skills.map((record) => record.id),
+    );
+    expect(reverse.experiences.map((record) => record.id)).toEqual(
+      forward.experiences.map((record) => record.id),
+    );
+    expect(forward.skills.map((record) => record.id)).toEqual([skillIds[0]]);
+    expect(forward.experiences.map((record) => record.id)).toEqual(experienceIds);
+  });
+
   it('auto-writes description_embedding on save', async () => {
     const repository = new InMemoryRepository(testEmbedding);
     const role_id = 'role_embed_save';
@@ -383,5 +445,42 @@ describe('InMemoryRepository vector search', () => {
     });
 
     expect(hits).toEqual([]);
+  });
+
+  it('uses record ID before top-K truncation when similarity ties', async () => {
+    const embedding = new HashEmbeddingProvider();
+    const repository = new InMemoryRepository(embedding);
+    const role_id = 'role_search_tie';
+    await repository.initializeAgent({ role_id, name: 'Search Tie Agent' });
+    const queryEmbedding = await embedding.embed('equal vector query');
+    const lowerSkillId = '00000000-0000-4000-8000-000000000010';
+    const higherSkillId = '00000000-0000-4000-8000-000000000020';
+    const lowerExperienceId = '00000000-0000-4000-8000-000000000030';
+    const higherExperienceId = '00000000-0000-4000-8000-000000000040';
+
+    for (const id of [higherSkillId, lowerSkillId]) {
+      await repository.saveSkill(
+        role_id,
+        createSkill(role_id, { id, description_embedding: queryEmbedding }),
+      );
+    }
+    for (const id of [higherExperienceId, lowerExperienceId]) {
+      await repository.saveExperience(
+        role_id,
+        createExperience(role_id, { id, description_embedding: queryEmbedding }),
+      );
+    }
+
+    const skills = await repository.searchSkills(role_id, {
+      query_embedding: queryEmbedding,
+      top_k: 1,
+    });
+    const experiences = await repository.searchExperiences(role_id, {
+      query_embedding: queryEmbedding,
+      top_k: 1,
+    });
+
+    expect(skills.map((record) => record.id)).toEqual([lowerSkillId]);
+    expect(experiences.map((record) => record.id)).toEqual([lowerExperienceId]);
   });
 });

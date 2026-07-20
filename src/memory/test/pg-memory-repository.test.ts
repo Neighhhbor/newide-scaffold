@@ -5,7 +5,7 @@
  * 示例：MEMORY_PG_TEST_URL=postgres://user:pass@localhost:5432/newide_test pnpm test
  */
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Pool } from 'pg';
 import { nowTimestamp } from '../../core';
 import { HashEmbeddingProvider } from '../adapters/hash-embedding-provider';
@@ -15,6 +15,36 @@ import type { ExperienceRecord, SkillRecord } from '../schemas';
 
 const pgTestUrl = process.env.MEMORY_PG_TEST_URL;
 const describePg = pgTestUrl ? describe : describe.skip;
+
+describe('PgMemoryRepository query ordering', () => {
+  it('uses record ID as the final tie-break for skill and experience vector searches', async () => {
+    const query = vi.fn(async (statement: string) => {
+      if (statement.includes('SELECT handle, persona, metrics')) {
+        return { rows: [{ handle: {}, persona: {}, metrics: {} }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    const pool = { query } as unknown as Pool;
+    const repository = new PgMemoryRepository({ pool, autoMigrate: false });
+
+    await repository.searchSkills('role_pg_query_order', {
+      query_embedding: [1, 0],
+      top_k: 5,
+    });
+    await repository.searchExperiences('role_pg_query_order', {
+      query_embedding: [1, 0],
+      top_k: 5,
+    });
+
+    const statements = query.mock.calls.map(([statement]) => statement.replace(/\s+/g, ' '));
+    expect(statements.find((statement) => statement.includes('FROM memory_skills'))).toContain(
+      'ORDER BY description_embedding <=> $2::vector ASC, id ASC',
+    );
+    expect(statements.find((statement) => statement.includes('FROM memory_experiences'))).toContain(
+      'ORDER BY description_embedding <=> $3::vector ASC, id ASC',
+    );
+  });
+});
 
 function createExperience(
   role_id: string,

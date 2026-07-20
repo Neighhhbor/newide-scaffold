@@ -290,7 +290,21 @@ function compareRelevance(left: ScoredMemoryItem, right: ScoredMemoryItem): numb
   if (right.embedding_similarity !== left.embedding_similarity) {
     return right.embedding_similarity - left.embedding_similarity;
   }
-  return right.tag_overlap - left.tag_overlap;
+  if (right.tag_overlap !== left.tag_overlap) {
+    return right.tag_overlap - left.tag_overlap;
+  }
+  const byId = compareCodeUnits(memoryRecordId(left), memoryRecordId(right));
+  return byId || compareCodeUnits(left.kind, right.kind);
+}
+
+function memoryRecordId(item: ScoredMemoryItem): string {
+  return item.skill?.id ?? item.experience?.id ?? '';
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 /** 将 tag 命中数映射到 0~1，便于与 embedding 分数联合排序 */

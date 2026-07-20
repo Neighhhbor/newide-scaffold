@@ -24,6 +24,8 @@ import { createId, nowTimestamp } from '../../core';
  */
 export interface AgentManagerOptions {
   tools: AgentToolConfig;
+  /** Disable only when the caller deterministically retrieves memory before the Agent loop. */
+  autoInjectQueryMemoryTool?: boolean;
 }
 
 /**
@@ -130,13 +132,7 @@ export class AgentManager {
       if (!this.agents.has(role_id)) {
         await this.repository.ensureAgent(role_id);
         await this.bufferRepository.ensureAgent(role_id);
-        const memory = createAgentMemoryScope(this.repository, this.bufferRepository, role_id);
-        const tools = {
-          ...this.options.tools,
-          tools: [new QueryMemoryTool(memory), ...this.options.tools.tools],
-        };
-        const agent = new Agent(memory, tools);
-        this.agents.set(role_id, agent);
+        this.agents.set(role_id, this.instantiateAgent(role_id));
       }
     }
   }
@@ -144,17 +140,29 @@ export class AgentManager {
   async createAgent(spec: CreateAgentSpec): Promise<AgentHandle> {
     await this.repository.initializeAgent(spec);
     await this.bufferRepository.ensureAgent(spec.role_id);
-    const memory = createAgentMemoryScope(this.repository, this.bufferRepository, spec.role_id);
-
-    // 自动注入 QueryMemoryTool（需要 AgentMemoryScope，只能在这里创建）
-    const tools = {
-      ...this.options.tools,
-      tools: [new QueryMemoryTool(memory), ...this.options.tools.tools],
-    };
-
-    const agent = new Agent(memory, tools);
+    const agent = this.instantiateAgent(spec.role_id);
     this.agents.set(spec.role_id, agent);
     return agent.getHandle();
+  }
+
+  /** Rebuild one Agent's volatile loop state while preserving its repositories. */
+  async reloadAgent(role_id: string): Promise<AgentHandle> {
+    await this.repository.ensureAgent(role_id);
+    await this.bufferRepository.ensureAgent(role_id);
+    const agent = this.instantiateAgent(role_id);
+    this.agents.set(role_id, agent);
+    return agent.getHandle();
+  }
+
+  private instantiateAgent(role_id: string): Agent {
+    const memory = createAgentMemoryScope(this.repository, this.bufferRepository, role_id);
+    const builtInTools =
+      this.options.autoInjectQueryMemoryTool === false ? [] : [new QueryMemoryTool(memory)];
+    const tools = {
+      ...this.options.tools,
+      tools: [...builtInTools, ...this.options.tools.tools],
+    };
+    return new Agent(memory, tools);
   }
 
   /**

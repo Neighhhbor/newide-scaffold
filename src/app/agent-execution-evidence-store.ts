@@ -16,6 +16,8 @@ export interface AgentContextPackEvidence {
     skills: unknown[];
   };
   driver_context: unknown;
+  /** Exact merged context serialized into A's DriverPrompt. */
+  driver_invocation_context?: unknown;
   created_at: string;
   schema_version: string;
 }

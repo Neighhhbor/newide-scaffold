@@ -5,9 +5,13 @@ import { SCHEMA_VERSION, createId, nowTimestamp, type ArtifactRef } from '../cor
 import {
   AgentManager,
   InvokeDriverTool,
+  createAgentMemoryScope,
+  repositoryRetrieveMemoryForTask,
   type BufferRepository,
   type DispatchTaskResult,
+  type DriverContext,
   type DriverTask,
+  type MemoryRetrievalResult,
   type MemoryRepository,
   type ToolCallingClient,
 } from '../memory';
@@ -34,7 +38,10 @@ import type {
   DriverRuntimeHandle,
   DriverStreamEvent,
 } from '../driver/contract';
-import { createDriverRuntimeInvoker } from '../driver/driver-runtime-invoker';
+import {
+  createDriverRuntimeInvoker,
+  type DriverRuntimeInvokerInput,
+} from '../driver/driver-runtime-invoker';
 import type {
   AgentContextPackEvidence,
   AgentExecutionEvidenceStore,
@@ -57,16 +64,22 @@ interface InvocationContext {
   signal?: AbortSignal;
   onDriverEvent?: AgentExecutionOptions['onDriverEvent'];
   execution?: DriverRunResult;
+  retrieval: MemoryRetrievalResult;
+  driver_invocation_context?: DriverRuntimeInvokerInput['driver_context'];
   driver_attempts: number;
   abortObserved: boolean;
 }
 
 const AGENT_SYSTEM_PROMPT = [
   'You execute one role in a Coordinator-managed workflow.',
-  'You may call query_memory before delegating when prior context is useful.',
   'Call invoke_driver exactly once with the complete concrete task.',
   'After invoke_driver returns, do not call more tools. Summarize the result and include "[done]".',
 ].join('\n');
+
+const TOP_LEVEL_MEMORY_ITEM_LIMIT = 5;
+const TOP_LEVEL_MEMORY_ID_LIMIT = 120;
+const TOP_LEVEL_MEMORY_DESCRIPTION_LIMIT = 240;
+const TOP_LEVEL_MEMORY_CONTENT_LIMIT = 1_000;
 
 export class DriverRuntimeAgentExecutionFacade
   implements AgentExecutionFacade, AgentCompetitionQuery, AgentMailboxWakePort
@@ -85,6 +98,7 @@ export class DriverRuntimeAgentExecutionFacade
 
   private createManager(): Promise<AgentManager> {
     return AgentManager.create(this.options.repository, this.options.bufferRepository, {
+      autoInjectQueryMemoryTool: false,
       tools: {
         llm: {
           completeWithTools: (input) => this.completeWithTools(input),
@@ -121,15 +135,13 @@ export class DriverRuntimeAgentExecutionFacade
     const normalizedInput = input.workspace_path
       ? { ...input, workspace_path: path.resolve(input.workspace_path) }
       : input;
-    const runtimeRoleId = scopedRuntimeRole(
-      normalizedInput.role_id,
-      normalizedInput.workspace_path,
-    );
-    const queueKey = normalizedInput.workspace_path
-      ? `workspace:${normalizedInput.workspace_path}`
-      : `role:${normalizedInput.role_id}`;
+    const runtimeRoleId = normalizedInput.role_id;
+    const queueKeys = [
+      `role:${runtimeRoleId}`,
+      ...(normalizedInput.workspace_path ? [`workspace:${normalizedInput.workspace_path}`] : []),
+    ];
     return this.enqueue(
-      queueKey,
+      queueKeys,
       async () => {
         throwIfAborted(options?.signal);
         const manager = await this.ensureRole(runtimeRoleId);
@@ -145,12 +157,33 @@ export class DriverRuntimeAgentExecutionFacade
     runtimeRoleId: string,
     options?: AgentExecutionOptions,
   ): Promise<AgentExecutionResult> {
+    throwIfAborted(options?.signal);
+    const task: AgentTaskRequest = {
+      spec: input.instruction,
+      task_id: input.task_id,
+      call_id: createId('call'),
+      source_driver: this.options.driver.driver_id,
+    };
+    const retrieval = await withAbort(
+      repositoryRetrieveMemoryForTask(
+        createAgentMemoryScope(
+          this.options.repository,
+          this.options.bufferRepository,
+          runtimeRoleId,
+        ),
+        task,
+        input.task_id,
+      ),
+      options?.signal,
+    );
+    throwIfAborted(options?.signal);
     const invocation: InvocationContext = {
       task_id: input.task_id,
       run_id: input.run_id,
       instruction: input.instruction,
       ...(input.workspace_path ? { workspace_path: input.workspace_path } : {}),
       ...(input.session_id ? { session_id: input.session_id } : {}),
+      retrieval,
       driver_attempts: 0,
       abortObserved: false,
       ...(options?.signal ? { signal: options.signal } : {}),
@@ -161,14 +194,10 @@ export class DriverRuntimeAgentExecutionFacade
           }
         : {}),
     };
-    const dispatched = await this.invocationContext.run(invocation, () =>
-      manager.dispatchTask(runtimeRoleId, {
-        spec: input.instruction,
-        task_id: input.task_id,
-        call_id: createId('call'),
-        source_driver: this.options.driver.driver_id,
-      }),
+    const rawDispatch = await this.invocationContext.run(invocation, () =>
+      manager.dispatchTask(runtimeRoleId, task),
     );
+    const dispatched = withRetrievedMemory(rawDispatch, retrieval, input.instruction);
 
     if (invocation.abortObserved || (invocation.signal?.aborted && !invocation.execution)) {
       await this.recoverRole(runtimeRoleId);
@@ -180,6 +209,7 @@ export class DriverRuntimeAgentExecutionFacade
       runtimeRoleId,
       invocation.execution,
       invocation.driver_attempts,
+      invocation.driver_invocation_context,
     );
   }
 
@@ -187,10 +217,11 @@ export class DriverRuntimeAgentExecutionFacade
     const existing = this.roleReady.get(role_id);
     if (existing) return existing;
 
-    const manager = this.invalidatedRoles.has(role_id) ? this.createManager() : this.manager;
-    const creating = manager
+    const creating = this.manager
       .then(async (manager) => {
-        if (!manager.getAgent(role_id)) {
+        if (this.invalidatedRoles.has(role_id)) {
+          await manager.reloadAgent(role_id);
+        } else if (!manager.getAgent(role_id)) {
           await manager.createAgent({ role_id, name: role_id, tags: [] });
         }
         this.invalidatedRoles.delete(role_id);
@@ -219,7 +250,10 @@ export class DriverRuntimeAgentExecutionFacade
     }
     try {
       throwIfAborted(invocation.signal);
-      return await withAbort(this.options.llm.completeWithTools(input), invocation.signal);
+      return await withAbort(
+        this.options.llm.completeWithTools(withTopLevelMemoryContext(input, invocation.retrieval)),
+        invocation.signal,
+      );
     } catch (error) {
       if (invocation.signal?.aborted) invocation.abortObserved = true;
       throw error;
@@ -236,6 +270,19 @@ export class DriverRuntimeAgentExecutionFacade
     }
     throwIfAborted(invocation.signal);
     try {
+      const driverInvocationContext: DriverRuntimeInvokerInput['driver_context'] = {
+        task_instruction: invocation.instruction,
+        skills: deduplicateMemoryItems([
+          ...toDriverMemoryItems(invocation.retrieval.skills),
+          ...toMemoryItems('skill', task.context?.skills),
+        ]),
+        experiences: deduplicateMemoryItems([
+          ...toDriverMemoryItems(invocation.retrieval.experiences),
+          ...toMemoryItems('experience', task.context?.experiences),
+          ...delegationContext(invocation.instruction, task.instruction),
+        ]),
+      };
+      invocation.driver_invocation_context = driverInvocationContext;
       const invoke = () => {
         invocation.driver_attempts += 1;
         return this.invokeDriverRuntime(
@@ -246,14 +293,7 @@ export class DriverRuntimeAgentExecutionFacade
             ...(invocation.session_id ? { session_id: invocation.session_id } : {}),
             call_id: createId('call'),
             source_driver: this.options.driver.driver_id,
-            driver_context: {
-              task_instruction: invocation.instruction,
-              skills: toMemoryItems('skill', task.context?.skills),
-              experiences: [
-                ...toMemoryItems('experience', task.context?.experiences),
-                ...delegationContext(invocation.instruction, task.instruction),
-              ],
-            },
+            driver_context: driverInvocationContext,
           },
           invocation.signal || invocation.onDriverEvent
             ? {
@@ -282,12 +322,18 @@ export class DriverRuntimeAgentExecutionFacade
     runtimeRoleId: string,
     execution: DriverRunResult | undefined,
     driverAttempts: number,
+    driverInvocationContext: DriverRuntimeInvokerInput['driver_context'] | undefined,
   ): Promise<AgentExecutionResult> {
     if (!execution) {
-      return this.buildNoExecutionResult(input, dispatched, runtimeRoleId);
+      return this.buildNoExecutionResult(input, dispatched, runtimeRoleId, driverInvocationContext);
     }
 
-    const contextEvidence = await this.persistContextEvidence(input, dispatched, runtimeRoleId);
+    const contextEvidence = await this.persistContextEvidence(
+      input,
+      dispatched,
+      runtimeRoleId,
+      driverInvocationContext,
+    );
 
     const dispatchFailed = dispatched.status !== 'completed';
     const dispatchError = dispatchFailed
@@ -341,6 +387,7 @@ export class DriverRuntimeAgentExecutionFacade
     input: AgentExecutionRequest,
     dispatched: DispatchTaskResult,
     runtimeRoleId: string,
+    driverInvocationContext: DriverRuntimeInvokerInput['driver_context'] | undefined,
   ): Promise<AgentExecutionResult> {
     const created_at = nowTimestamp();
     const errorCode = `B_${dispatched.status.toUpperCase()}`;
@@ -355,7 +402,12 @@ export class DriverRuntimeAgentExecutionFacade
       created_at,
       schema_version: SCHEMA_VERSION,
     };
-    const contextEvidence = await this.persistContextEvidence(input, dispatched, runtimeRoleId);
+    const contextEvidence = await this.persistContextEvidence(
+      input,
+      dispatched,
+      runtimeRoleId,
+      driverInvocationContext,
+    );
 
     return {
       agent_run_id: createId('agent_run'),
@@ -381,6 +433,10 @@ export class DriverRuntimeAgentExecutionFacade
         context_policy: input.context_policy,
         input_artifact_refs: [...input.input_artifact_refs],
         buffer_seq: dispatched.cycle.buffer_seq,
+        retrieval: {
+          experiences: dispatched.cycle.retrieval.experiences.length,
+          skills: dispatched.cycle.retrieval.skills.length,
+        },
         context_pack_persisted: contextEvidence.persisted,
         ...(contextEvidence.uri ? { context_pack_uri: contextEvidence.uri } : {}),
       },
@@ -395,6 +451,7 @@ export class DriverRuntimeAgentExecutionFacade
     input: AgentExecutionRequest,
     dispatched: DispatchTaskResult,
     runtimeRoleId: string,
+    driverInvocationContext: DriverRuntimeInvokerInput['driver_context'] | undefined,
   ): Promise<{
     context_pack_ref: string;
     memory_buffer_ref: string;
@@ -412,6 +469,7 @@ export class DriverRuntimeAgentExecutionFacade
       memory_buffer_ref: memoryBufferRef,
       retrieval: dispatched.cycle.retrieval,
       driver_context: dispatched.cycle.driver_context,
+      ...(driverInvocationContext ? { driver_invocation_context: driverInvocationContext } : {}),
     });
     const contextPackRef = `context_pack_${createHash('sha256').update(identity).digest('hex').slice(0, 24)}`;
     const evidence: AgentContextPackEvidence = {
@@ -428,6 +486,7 @@ export class DriverRuntimeAgentExecutionFacade
         skills: [...dispatched.cycle.retrieval.skills],
       },
       driver_context: dispatched.cycle.driver_context,
+      ...(driverInvocationContext ? { driver_invocation_context: driverInvocationContext } : {}),
       created_at: nowTimestamp(),
       schema_version: SCHEMA_VERSION,
     };
@@ -448,31 +507,34 @@ export class DriverRuntimeAgentExecutionFacade
   }
 
   private enqueue<T>(
-    queueKey: string,
+    queueKeys: string[],
     operation: () => Promise<T>,
     signal?: AbortSignal,
   ): Promise<T> {
-    const previous = this.executionQueues.get(queueKey) ?? Promise.resolve();
+    const previous = queueKeys.map(
+      (queueKey) => this.executionQueues.get(queueKey) ?? Promise.resolve(),
+    );
     let started = false;
-    const running = previous.then(() => {
+    const running = Promise.all(previous).then(() => {
       started = true;
       return operation();
     });
-    this.executionQueues.set(
-      queueKey,
-      running.then(
-        () => undefined,
-        () => undefined,
-      ),
+    const completed = running.then(
+      () => undefined,
+      () => undefined,
     );
+    for (const queueKey of queueKeys) {
+      this.executionQueues.set(queueKey, completed);
+    }
+    void completed.then(() => {
+      for (const queueKey of queueKeys) {
+        if (this.executionQueues.get(queueKey) === completed) {
+          this.executionQueues.delete(queueKey);
+        }
+      }
+    });
     return rejectWhileQueued(running, signal, () => started);
   }
-}
-
-function scopedRuntimeRole(roleId: string, workspacePath?: string): string {
-  if (!workspacePath) return roleId;
-  const scope = createHash('sha256').update(workspacePath).digest('hex').slice(0, 12);
-  return `${roleId}@${scope}`;
 }
 
 function mapStatus(
@@ -499,6 +561,103 @@ function toMemoryItems(prefix: string, values: string[] | undefined) {
   }));
 }
 
+function toDriverMemoryItems(values: Array<{ id: string; description: string; content: string }>) {
+  return values.map(({ id, description, content }) => ({ id, description, content }));
+}
+
+function deduplicateMemoryItems<T extends { content: string }>(values: T[]): T[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    if (seen.has(value.content)) return false;
+    seen.add(value.content);
+    return true;
+  });
+}
+
+function withRetrievedMemory(
+  dispatched: DispatchTaskResult,
+  retrieval: MemoryRetrievalResult,
+  taskInstruction: string,
+): DispatchTaskResult {
+  const driverContext: DriverContext = {
+    task_instruction: taskInstruction,
+    skills: [...retrieval.skills],
+    experiences: [...retrieval.experiences],
+  };
+  return {
+    ...dispatched,
+    cycle: {
+      ...dispatched.cycle,
+      retrieval: {
+        skills: [...retrieval.skills],
+        experiences: [...retrieval.experiences],
+      },
+      driver_context: driverContext,
+    },
+  };
+}
+
+function withTopLevelMemoryContext(
+  input: Parameters<ToolCallingClient['completeWithTools']>[0],
+  retrieval: MemoryRetrievalResult,
+): Parameters<ToolCallingClient['completeWithTools']>[0] {
+  const memoryContext = renderTopLevelMemoryContext(retrieval);
+  if (!memoryContext) return input;
+
+  let injected = false;
+  return {
+    ...input,
+    messages: input.messages.map((message) => {
+      if (injected || message.role !== 'user' || message.content === null) return message;
+      injected = true;
+      return { ...message, content: `${message.content}\n\n${memoryContext}` };
+    }),
+  };
+}
+
+function renderTopLevelMemoryContext(retrieval: MemoryRetrievalResult): string {
+  if (retrieval.skills.length === 0 && retrieval.experiences.length === 0) return '';
+
+  const visibleSkills = retrieval.skills.slice(0, TOP_LEVEL_MEMORY_ITEM_LIMIT);
+  const visibleExperiences = retrieval.experiences.slice(
+    0,
+    TOP_LEVEL_MEMORY_ITEM_LIMIT - visibleSkills.length,
+  );
+  const visibleCount = visibleSkills.length + visibleExperiences.length;
+  const totalCount = retrieval.skills.length + retrieval.experiences.length;
+  const sections = [
+    renderMemorySection('Approved skills', visibleSkills, retrieval.skills.length),
+    renderMemorySection('Eligible experiences', visibleExperiences, retrieval.experiences.length),
+  ].filter((section) => section.length > 0);
+  return [
+    'Retrieved memory selected by B before execution:',
+    ...sections,
+    ...(visibleCount < totalCount
+      ? [`Omitted memory records: ${String(totalCount - visibleCount)}.`]
+      : []),
+  ].join('\n');
+}
+
+function renderMemorySection(
+  heading: string,
+  records: Array<{ id: string; description: string; content: string }>,
+  totalCount: number,
+): string {
+  if (records.length === 0) return '';
+  return [
+    `${heading} (shown ${String(records.length)} of ${String(totalCount)}):`,
+    ...records.map(
+      (record) =>
+        `- ${truncate(record.id, TOP_LEVEL_MEMORY_ID_LIMIT)}: ${truncate(record.description, TOP_LEVEL_MEMORY_DESCRIPTION_LIMIT)}\n  ${truncate(record.content, TOP_LEVEL_MEMORY_CONTENT_LIMIT)}`,
+    ),
+  ].join('\n');
+}
+
+function truncate(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  return `${value.slice(0, Math.max(0, limit - 3))}...`;
+}
+
 function delegationContext(original: string, delegated: string) {
   if (delegated.trim() === original.trim()) return [];
   return [{ id: 'b_delegation', description: 'B runtime delegation guidance', content: delegated }];
@@ -515,6 +674,7 @@ function isArtifactFreeRetryableFailure(execution: DriverRunResult): boolean {
 
 function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(abortReason(signal));
   return new Promise<T>((resolve, reject) => {
     const abort = () => reject(abortReason(signal));
     signal.addEventListener('abort', abort, { once: true });

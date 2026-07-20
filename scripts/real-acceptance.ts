@@ -184,7 +184,7 @@ async function runMarketScenario(): Promise<ScenarioReport> {
       }
       if (
         typeof executionCompleted?.agent_id !== 'string' ||
-        !executionCompleted.agent_id.startsWith(`${String(market.winner_agent_id)}@`)
+        executionCompleted.agent_id !== market.winner_agent_id
       ) {
         errors.push('completed B Agent identity does not match Market winner');
       }
