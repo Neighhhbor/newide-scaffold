@@ -86,6 +86,7 @@ const TASK: AgentTaskRequest = {
 };
 
 const DRIVER_RETURN: DriverReturn = {
+  artifacts: [],
   summary: '成功实现文件上传功能，使用 multer 中间件处理 multipart/form-data',
   decisions: [
     {
@@ -118,18 +119,23 @@ const DRIVER_RETURN: DriverReturn = {
   referenced_experiences: [],
 };
 
-const AGENT_CONTEXT: AgentContextSnapshot = {
+const AGENT_CONTEXT = {
+  snapshot_id: crypto.randomUUID(),
+  source_task_id: TASK.task_id!,
   agent_id: ROLE_ID,
   thinking_trace: '先确认存储方案，再实现上传接口，最后处理边界情况',
+  planning_trace: '分步实施：1.存储方案选型 2.上传接口实现 3.边界处理',
   driver_calls: [
     {
+      call_id: 'call-e2e-001',
+      driver_id: 'code-driver',
       driver_return_ref: 'report_1.json',
-      driver_name: 'code-driver',
-      driver_return: DRIVER_RETURN,
     },
   ],
-  pending_buffer_snapshot_ref: 'report_1.json',
-  saved_at: nowTimestamp(),
+  cleaned_at: nowTimestamp(),
+  original_token_count: 1000,
+  cleaned_token_count: 500,
+  compression_ratio: 0.5,
 };
 
 // ═══════════════════════════════════════════
@@ -151,7 +157,7 @@ suitePg('E2E: FileBuffer → 提取 → PG 入库 → BoardQuery', () => {
 
     // 2. 连接 PG，建表
     pool = new Pool({ connectionString: pgTestUrl });
-    repository = new PgMemoryRepository(pool);
+    repository = new PgMemoryRepository({ pool });
     await ensurePgMemorySchema(pool, 1024);
 
     // 3. 创建 FileBufferRepository
@@ -192,9 +198,9 @@ suitePg('E2E: FileBuffer → 提取 → PG 入库 → BoardQuery', () => {
 
     const { seq, snapshot } = await ingestTaskBuffer(memory, {
       task: TASK,
-      task_id: TASK.task_id,
-      call_id: TASK.call_id,
-      source_driver: TASK.source_driver,
+      task_id: TASK.task_id!,
+      call_id: TASK.call_id!,
+      source_driver: TASK.source_driver!,
       driver_return: DRIVER_RETURN,
       agentContext: AGENT_CONTEXT,
     });
@@ -342,6 +348,7 @@ suitePg('E2E: FileBuffer → 提取 → PG 入库 → BoardQuery', () => {
       call_id: 'call-e2e-002',
       source_driver: 'perf-driver',
       driver_return: {
+        artifacts: [],
         summary: '分析慢查询日志，为 users 表添加 email 索引，查询时间从 2s 降到 50ms',
         decisions: [
           {
@@ -370,7 +377,14 @@ suitePg('E2E: FileBuffer → 提取 → PG 入库 → BoardQuery', () => {
     const result = await processPendingBuffer(memory, seq, {
       task: TASK,
       extractor,
-      promote: async () => ({ skill: undefined }),
+      promote: async (_memory, _task, _exps) => ({
+        check: {
+          eligible: false,
+          auto_approved: false,
+          reasons: [] as string[],
+          blocking_rules: ['test'],
+        },
+      }),
     });
 
     console.log(`\n⚡ processPendingBuffer 结果:`);
@@ -406,7 +420,7 @@ suiteFull('E2E: 向量检索验证 (PG + Embedding)', () => {
   beforeAll(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'memory-e2e-vec-'));
     pool = new Pool({ connectionString: pgTestUrl });
-    repository = new PgMemoryRepository(pool);
+    repository = new PgMemoryRepository({ pool });
     bufferRepo = new FileBufferRepository({ agentStateRoot: tempDir });
     embedding = new LiteLLMEmbeddingProvider();
 
@@ -501,7 +515,7 @@ suiteFull('E2E: 向量检索验证 (PG + Embedding)', () => {
 
     expect(results.length).toBeGreaterThanOrEqual(1);
     // 第一条应该是文件上传相关的
-    expect(results[0].description).toContain('multer');
+    expect(results[0]!.description).toContain('multer');
   });
 
   it('searchExperiences 区分正负经验', async () => {
