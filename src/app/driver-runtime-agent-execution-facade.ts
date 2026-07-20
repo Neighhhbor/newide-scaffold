@@ -12,6 +12,7 @@ import {
   type DriverContext,
   type DriverTask,
   type MemoryRetrievalResult,
+  type MemoryMaintenanceQueue,
   type MemoryRepository,
   type ToolCallingClient,
 } from '../memory';
@@ -53,6 +54,7 @@ export interface DriverRuntimeAgentExecutionFacadeOptions {
   bufferRepository: BufferRepository;
   llm: ToolCallingClient;
   evidenceStore?: AgentExecutionEvidenceStore;
+  memoryMaintenance?: MemoryMaintenanceQueue;
 }
 
 interface InvocationContext {
@@ -324,8 +326,19 @@ export class DriverRuntimeAgentExecutionFacade
     driverAttempts: number,
     driverInvocationContext: DriverRuntimeInvokerInput['driver_context'] | undefined,
   ): Promise<AgentExecutionResult> {
+    const memoryMaintenanceRef = await this.enqueueMemoryMaintenance(
+      input,
+      runtimeRoleId,
+      dispatched.cycle.buffer_seq,
+    );
     if (!execution) {
-      return this.buildNoExecutionResult(input, dispatched, runtimeRoleId, driverInvocationContext);
+      return this.buildNoExecutionResult(
+        input,
+        dispatched,
+        runtimeRoleId,
+        driverInvocationContext,
+        memoryMaintenanceRef,
+      );
     }
 
     const contextEvidence = await this.persistContextEvidence(
@@ -378,6 +391,7 @@ export class DriverRuntimeAgentExecutionFacade
       },
       status: mapStatus(dispatched.status, execution.status),
       memory_buffer_ref: contextEvidence.memory_buffer_ref,
+      ...(memoryMaintenanceRef ? { memory_maintenance_ref: memoryMaintenanceRef } : {}),
       created_at: nowTimestamp(),
       schema_version: SCHEMA_VERSION,
     };
@@ -388,6 +402,7 @@ export class DriverRuntimeAgentExecutionFacade
     dispatched: DispatchTaskResult,
     runtimeRoleId: string,
     driverInvocationContext: DriverRuntimeInvokerInput['driver_context'] | undefined,
+    memoryMaintenanceRef: string | undefined,
   ): Promise<AgentExecutionResult> {
     const created_at = nowTimestamp();
     const errorCode = `B_${dispatched.status.toUpperCase()}`;
@@ -442,9 +457,25 @@ export class DriverRuntimeAgentExecutionFacade
       },
       status: dispatched.status === 'cancelled' ? 'cancelled' : 'failed',
       memory_buffer_ref: contextEvidence.memory_buffer_ref,
+      ...(memoryMaintenanceRef ? { memory_maintenance_ref: memoryMaintenanceRef } : {}),
       created_at,
       schema_version: SCHEMA_VERSION,
     };
+  }
+
+  private async enqueueMemoryMaintenance(
+    input: AgentExecutionRequest,
+    runtimeRoleId: string,
+    bufferSeq: number,
+  ): Promise<string | undefined> {
+    if (!this.options.memoryMaintenance || bufferSeq <= 0) return undefined;
+    const receipt = await this.options.memoryMaintenance.enqueue({
+      role_id: runtimeRoleId,
+      buffer_seq: bufferSeq,
+      task_id: input.task_id,
+      run_id: input.run_id,
+    });
+    return receipt.ref;
   }
 
   private async persistContextEvidence(

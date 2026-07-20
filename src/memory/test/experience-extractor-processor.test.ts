@@ -191,10 +191,33 @@ describe('ExperienceExtractorProcessor', () => {
         createMockExtractor(1),
       );
 
+      await expect(processor.extractOne(memory, 999)).rejects.toThrow(
+        'Pending buffer not found: seq=999',
+      );
+    });
+
+    it('rejects conflicting content for a deterministic replay id', async () => {
+      const { memory } = await createTestInfra('role_extract_collision');
+      const processor = new ExperienceExtractorProcessor(
+        new AlwaysExtractPolicy(),
+        createMockExtractor(1),
+      );
+      const { seq } = await writePendingBuffer(memory, 'task_collision');
+      const first = await processor.extractOne(memory, seq);
+      const conflicting: ExtractionOutput = {
+        experiences: first.extraction.experiences.map((experience) => ({
+          ...experience,
+          content: 'Different replay content',
+        })),
+        result: { ...first.extraction.result },
+      };
+
       await expect(
-        // @ts-expect-error — extractOne 是 private 方法，测试中直接访问
-        processor.extractOne(memory, 999),
-      ).rejects.toThrow('Pending buffer not found: seq=999');
+        processor.extractOne(memory, seq, {
+          preparedExtraction: conflicting,
+          allowMissingPending: true,
+        }),
+      ).rejects.toThrow('Experience id collision with different content');
     });
   });
 });

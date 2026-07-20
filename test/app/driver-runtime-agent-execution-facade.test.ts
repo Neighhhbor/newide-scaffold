@@ -17,11 +17,59 @@ import {
 import {
   InMemoryBufferRepository,
   InMemoryRepository,
+  type MemoryMaintenanceQueue,
   type ToolCallingClient,
 } from '../../src/memory';
 import type { ExperienceRecord, SkillRecord } from '../../src/memory/schemas';
 
 describe('DriverRuntimeAgentExecutionFacade', () => {
+  it('returns a maintenance ref only after the BufferSnapshot is durable', async () => {
+    const buffer = new InMemoryBufferRepository();
+    const enqueued: Parameters<MemoryMaintenanceQueue['enqueue']>[0][] = [];
+    const maintenance: MemoryMaintenanceQueue = {
+      async enqueue(input) {
+        expect(await buffer.getPendingBuffer(input.role_id, input.buffer_seq)).toBeDefined();
+        enqueued.push(input);
+        return { ref: 'memory_maintenance_test_001' };
+      },
+    };
+    const { facade } = createFacade(
+      new CapturingDriver('succeeded'),
+      buffer,
+      invokeDriverLlm(),
+      new InMemoryRepository(),
+      maintenance,
+    );
+
+    const result = await facade.runAgent(request('task_maintenance', 'proposer_a'));
+
+    expect(enqueued).toEqual([
+      {
+        role_id: 'proposer_a',
+        buffer_seq: 1,
+        task_id: 'task_maintenance',
+        run_id: 'run_task_maintenance',
+      },
+    ]);
+    expect(result.memory_maintenance_ref).toBe('memory_maintenance_test_001');
+  });
+
+  it('does not enqueue maintenance for a non-durable zero sequence', async () => {
+    const enqueue = vi.fn<MemoryMaintenanceQueue['enqueue']>();
+    const { facade } = createFacade(
+      new CapturingDriver('succeeded'),
+      new ZeroSequenceBufferRepository(),
+      invokeDriverLlm(),
+      new InMemoryRepository(),
+      { enqueue },
+    );
+
+    const result = await facade.runAgent(request('task_zero_sequence', 'proposer_a'));
+
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(result.memory_maintenance_ref).toBeUndefined();
+  });
+
   it('runs the real driver through the public B runtime and preserves the execution result', async () => {
     const driver = new CapturingDriver('succeeded');
     const { facade, buffer } = createFacade(driver);
@@ -704,6 +752,7 @@ function createFacade(
   buffer: InMemoryBufferRepository = new InMemoryBufferRepository(),
   llm: ToolCallingClient = invokeDriverLlm(),
   repository: InMemoryRepository = new InMemoryRepository(),
+  memoryMaintenance?: MemoryMaintenanceQueue,
 ) {
   return {
     facade: new DriverRuntimeAgentExecutionFacade({
@@ -711,9 +760,19 @@ function createFacade(
       repository,
       bufferRepository: buffer,
       llm,
+      ...(memoryMaintenance ? { memoryMaintenance } : {}),
     }),
     buffer,
   };
+}
+
+class ZeroSequenceBufferRepository extends InMemoryBufferRepository {
+  override async saveBufferSnapshot(
+    ...args: Parameters<InMemoryBufferRepository['saveBufferSnapshot']>
+  ): ReturnType<InMemoryBufferRepository['saveBufferSnapshot']> {
+    const saved = await super.saveBufferSnapshot(...args);
+    return { ...saved, seq: 0 };
+  }
 }
 
 class FailOnceOnReloadRepository extends InMemoryRepository {

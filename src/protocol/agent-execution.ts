@@ -48,6 +48,7 @@ export interface AgentExecutionResult {
   diagnostics: AgentExecutionDiagnostics;
   status: AgentExecutionStatus;
   memory_buffer_ref?: string;
+  memory_maintenance_ref?: string;
   created_at: Timestamp;
   schema_version: SchemaVersion;
 }
