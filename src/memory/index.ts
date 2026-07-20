@@ -42,7 +42,7 @@ export * as schemas from './schemas';
 
 // ════════════════════════════════════════════════════════
 //  2. 存储适配器
-//     生产：PgMemoryRepository + FileBufferRepository
+//     生产：SqliteMemoryRepository / PgMemoryRepository + FileBufferRepository
 //     测试：InMemoryRepository + InMemoryBufferRepository
 // ════════════════════════════════════════════════════════
 
@@ -53,6 +53,10 @@ export {
   type PgMemoryRepositoryOptions,
 } from './adapters/pg-memory-repository';
 export { ensurePgMemorySchema } from './adapters/pg-memory-schema';
+export {
+  SqliteMemoryRepository,
+  type SqliteMemoryRepositoryOptions,
+} from './adapters/sqlite-memory-repository';
 export {
   FileBufferRepository,
   type FileBufferRepositoryOptions,
