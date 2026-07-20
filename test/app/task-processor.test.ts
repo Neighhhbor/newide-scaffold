@@ -78,6 +78,32 @@ describe('TaskProcessor', () => {
     store.close();
   });
 
+  it('replays the full task event history when subscribe has no cursor', () => {
+    const { processor, store } = createProcessor();
+    processor.beginRun({
+      task_id: 'task_replay',
+      run_id: 'run_replay',
+      task_request: taskRequest,
+      workspace_path: '/workspace',
+      mode: 'single_agent',
+    });
+    processor.recordRunEvent(
+      'run_replay',
+      stageEvent('event_market_replay', 'market.selected', 'task_replay', 'run_replay'),
+    );
+
+    expect(processor.listTaskEvents('task_replay')).toEqual([
+      expect.objectContaining({ type: 'task.created' }),
+      expect.objectContaining({ type: 'run.created' }),
+      expect.objectContaining({ type: 'run.started' }),
+      expect.objectContaining({
+        event_id: 'event_market_replay',
+        type: 'market.selected',
+      }),
+    ]);
+    store.close();
+  });
+
   it('persists a completed snapshot that survives a new processor instance', () => {
     const { databasePath, processor, store } = createProcessor();
     processor.beginRun({

@@ -787,12 +787,16 @@ export class TaskProcessor {
   }
 
   listTaskEvents(taskId: string, afterEventId?: string): AppRunEvent[] {
-    if (!afterEventId) return [];
     const aggregate = this.store.getTaskAggregate(taskId);
     if (!aggregate) throw new TaskProcessorTaskNotFoundError(taskId);
-    const cursorIndex = aggregate.events.findIndex((event) => event.event_id === afterEventId);
-    if (cursorIndex < 0) throw new TaskEventCursorNotFoundError(taskId, afterEventId);
-    return aggregate.events.slice(cursorIndex + 1).map((event) => ({
+    const events = afterEventId
+      ? (() => {
+          const cursorIndex = aggregate.events.findIndex((event) => event.event_id === afterEventId);
+          if (cursorIndex < 0) throw new TaskEventCursorNotFoundError(taskId, afterEventId);
+          return aggregate.events.slice(cursorIndex + 1);
+        })()
+      : aggregate.events;
+    return events.map((event) => ({
       event_id: event.event_id,
       sequence: event.sequence,
       run_id: event.run_id ?? event.subject_id,
