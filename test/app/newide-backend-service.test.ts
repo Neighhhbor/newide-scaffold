@@ -7,6 +7,8 @@ import { NewideBackendService } from '../../src/app/newide-backend-service';
 import { InMemoryRunRegistry, type AppRunEvent } from '../../src/app/run-registry';
 import { FileRunAuditWriter } from '../../src/app/run-audit-writer';
 import { FileRunTerminalOutputWriter } from '../../src/app/run-terminal-output-writer';
+import { FileRunRequestStore } from '../../src/app/run-request-store';
+import type { TaskProcessor } from '../../src/app/task-processor';
 import { IntegrationV0CoordinatorRunner } from '../../src/coordinator/coordinator-runner';
 import { runSnapshotSchema } from '../../src/protocol/run-snapshot';
 
@@ -454,6 +456,163 @@ describe('NewideBackendService', () => {
     } finally {
       await rm(runsRoot, { recursive: true, force: true });
     }
+  });
+
+  it('waits for active runners before closing runtime resources', async () => {
+    const runsRoot = await mkdtemp(path.join(os.tmpdir(), 'backend-service-close-'));
+    let runnerStopped = false;
+    let runtimeCloseCount = 0;
+    const service = new NewideBackendService(
+      {
+        run: async (request) => {
+          request.onRunCreated?.({ run_id: 'run_close', task_id: 'task_close' });
+          await new Promise((_, reject) => {
+            request.signal?.addEventListener(
+              'abort',
+              () => {
+                runnerStopped = true;
+                reject(request.signal?.reason);
+              },
+              { once: true },
+            );
+          });
+          throw new Error('unreachable');
+        },
+      },
+      new InMemoryRunRegistry(),
+      new FileRunAuditWriter(runsRoot),
+      new FileRunTerminalOutputWriter(runsRoot),
+      new FileRunRequestStore(runsRoot),
+      undefined,
+      undefined,
+      Promise.resolve(),
+      async () => {
+        expect(runnerStopped).toBe(true);
+        runtimeCloseCount += 1;
+      },
+    );
+
+    try {
+      await service.createRun({ prompt: 'Close safely' });
+      await Promise.all([service.close(), service.close()]);
+
+      expect(service.getSnapshot('run_close')).toMatchObject({ status: 'cancelled' });
+      expect(runtimeCloseCount).toBe(1);
+      await expect(service.createRun({ prompt: 'Too late' })).rejects.toThrow(
+        'Backend service is closing',
+      );
+    } finally {
+      await rm(runsRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('aborts a pending start and rejects delayed identity after close begins', async () => {
+    const registry = new InMemoryRunRegistry();
+    let reportIdentity!: () => void;
+    let runnerSignal: AbortSignal | undefined;
+    let runtimeClosed = false;
+    let beginRunCalls = 0;
+    const taskProcessor = {
+      beginRun: () => {
+        beginRunCalls += 1;
+      },
+    } as unknown as TaskProcessor;
+    const service = new NewideBackendService(
+      {
+        run: (request) => {
+          runnerSignal = request.signal;
+          return new Promise<IntegrationV0Result>((resolve, reject) => {
+            reportIdentity = () => {
+              try {
+                request.onRunCreated?.({
+                  run_id: 'run_delayed_identity',
+                  task_id: 'task_delayed_identity',
+                });
+                resolve(completedResult('run_delayed_identity', 'task_delayed_identity'));
+              } catch (error) {
+                reject(error);
+              }
+            };
+          });
+        },
+      },
+      registry,
+      undefined,
+      undefined,
+      undefined,
+      taskProcessor,
+      undefined,
+      Promise.resolve(),
+      async () => {
+        runtimeClosed = true;
+      },
+    );
+
+    const creating = service.createRun({ prompt: 'Delay identity until shutdown' });
+    const closing = service.close();
+    let closeSettled = false;
+    void closing.then(() => {
+      closeSettled = true;
+    });
+    await Promise.resolve();
+
+    expect(runnerSignal?.aborted).toBe(true);
+    expect(closeSettled).toBe(false);
+    expect(runtimeClosed).toBe(false);
+
+    reportIdentity();
+
+    await expect(creating).rejects.toThrow('Backend service is closing');
+    await closing;
+    expect(runtimeClosed).toBe(true);
+    expect(registry.listSnapshots()).toEqual([]);
+    expect(beginRunCalls).toBe(0);
+  });
+
+  it('waits for mailbox recovery before runtime close and aggregates both failures', async () => {
+    const order: string[] = [];
+    const recoveryFailure = new Error('mailbox recovery failed');
+    const runtimeFailure = new Error('runtime close failed');
+    let rejectRecovery!: (error: Error) => void;
+    const mailboxRecovery = new Promise<void>((_resolve, reject) => {
+      rejectRecovery = reject;
+    }).then(
+      () => order.push('mailbox recovery settled'),
+      (error: unknown) => {
+        order.push('mailbox recovery settled');
+        throw error;
+      },
+    );
+    const service = new NewideBackendService(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      mailboxRecovery,
+      async () => {
+        order.push('runtime closed');
+        throw runtimeFailure;
+      },
+    );
+
+    const closing = service.close();
+    await Promise.resolve();
+    expect(order).toEqual([]);
+
+    rejectRecovery(recoveryFailure);
+
+    let failure: unknown;
+    try {
+      await closing;
+    } catch (error) {
+      failure = error;
+    }
+    expect(order).toEqual(['mailbox recovery settled', 'runtime closed']);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([recoveryFailure, runtimeFailure]);
   });
 
   it('projects a real council run into snapshot and append-only audit events', async () => {

@@ -71,8 +71,13 @@ export class SqliteCoordinationStore implements CoordinationStateStore, MailboxS
   constructor(databasePath: string) {
     if (databasePath !== ':memory:') mkdirSync(path.dirname(databasePath), { recursive: true });
     this.database = new DatabaseSync(databasePath);
-    this.configure();
-    this.migrate();
+    try {
+      this.configure();
+      this.migrate();
+    } catch (error) {
+      this.database.close();
+      throw error;
+    }
   }
 
   commitState(input: CoordinationStateCommit): PersistedCoordinationEvent[] {

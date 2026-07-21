@@ -61,6 +61,14 @@ import type {
   PersistedMailboxEnvelope,
   SaveMailboxReplyResult,
 } from '../persistence';
+import type {
+  AgentBoardAgentView,
+  AgentBoardListItem,
+  ExperienceView,
+  SkillView,
+} from '../memory';
+import type { BMemoryMaintenanceEvidence } from './b-memory-maintenance-runner';
+import type { BMemoryBackendService } from './b-memory-backend-service';
 
 export interface RunCreateParams {
   prompt: string;
@@ -146,10 +154,18 @@ interface RunLineage {
   requested_resume_cursor?: TaskResumeCursor;
 }
 
+interface PendingRunStart {
+  controller: AbortController;
+  settled: Promise<void>;
+}
+
 export class NewideBackendService {
   private readonly terminalRuns = new Map<string, Promise<void>>();
   private readonly runWorkspaces = new Map<string, string>();
   private readonly taskListeners = new Map<string, Set<(event: AppRunEvent) => void>>();
+  private readonly pendingRunStarts = new Set<PendingRunStart>();
+  private closing = false;
+  private closePromise?: Promise<void>;
 
   constructor(
     private readonly runner: CoordinatorRunner = new IntegrationV0CoordinatorRunner(),
@@ -160,7 +176,17 @@ export class NewideBackendService {
     private readonly taskProcessor?: TaskProcessor,
     private readonly mailboxService?: PersistentMailboxService,
     private readonly mailboxRecovery: Promise<unknown> = Promise.resolve(),
+    private readonly closeRuntime: () => Promise<void> | void = () => undefined,
+    private readonly bMemoryService?: BMemoryBackendService,
   ) {}
+
+  close(): Promise<void> {
+    if (!this.closePromise) {
+      this.closing = true;
+      this.closePromise = this.closeGracefully();
+    }
+    return this.closePromise;
+  }
 
   async sendMailboxMessage(input: MailboxSendInput): Promise<MailboxSendResult> {
     await this.mailboxRecovery;
@@ -186,6 +212,33 @@ export class NewideBackendService {
   async replyMailboxMessage(input: MailboxReplyInput): Promise<SaveMailboxReplyResult> {
     await this.mailboxRecovery;
     return this.requireMailboxService().reply(input);
+  }
+
+  listMemoryAgents(): Promise<AgentBoardListItem[]> {
+    return this.requireBMemoryService().listAgents();
+  }
+
+  getMemoryAgent(roleId: string): Promise<AgentBoardAgentView> {
+    return this.requireBMemoryService().getAgent(roleId);
+  }
+
+  listMemorySkills(roleId: string): Promise<SkillView[]> {
+    return this.requireBMemoryService().listSkills(roleId);
+  }
+
+  listMemoryExperiences(roleId: string): Promise<ExperienceView[]> {
+    return this.requireBMemoryService().listExperiences(roleId);
+  }
+
+  listMemoryMaintenance(roleId?: string): Promise<BMemoryMaintenanceEvidence[]> {
+    return this.requireBMemoryService().listMaintenance(roleId);
+  }
+
+  promoteMemorySkills(
+    roleId: string,
+    requestedBy: string,
+  ): Promise<BMemoryMaintenanceEvidence> {
+    return this.requireBMemoryService().promoteSkills(roleId, requestedBy);
   }
 
   createRun(params: RunCreateParams): Promise<RunCreateResult> {
@@ -374,14 +427,29 @@ export class NewideBackendService {
     return { ...created, restarted_from_run_id: runId };
   }
 
-  private startRun(
-    params: RunCreateParams,
-    lineage?: RunLineage,
-  ): Promise<RunCreateResult> {
+  private startRun(params: RunCreateParams, lineage?: RunLineage): Promise<RunCreateResult> {
+    if (this.closing) {
+      return Promise.reject(new Error('Backend service is closing'));
+    }
     const mode = params.mode ?? 'single_agent';
     const workspacePath = normalizeWorkspacePath(params.workspace_path ?? process.cwd());
     const taskRequest = params.task_request ?? createDefaultTaskRequest(params.prompt);
     const controller = new AbortController();
+    let resolvePendingStart!: () => void;
+    const pendingStart: PendingRunStart = {
+      controller,
+      settled: new Promise<void>((resolve) => {
+        resolvePendingStart = resolve;
+      }),
+    };
+    let pendingStartSettled = false;
+    const settlePendingStart = (): void => {
+      if (pendingStartSettled) return;
+      pendingStartSettled = true;
+      this.pendingRunStarts.delete(pendingStart);
+      resolvePendingStart();
+    };
+    this.pendingRunStarts.add(pendingStart);
     return new Promise<RunCreateResult>((resolve, reject) => {
       let resolveTerminal!: () => void;
       const terminalRun = new Promise<void>((resolveRun) => {
@@ -428,7 +496,14 @@ export class NewideBackendService {
           },
           onRunCreated: (created) => {
             if (identity) return;
+            if (this.closing) {
+              const error = new Error('Backend service is closing');
+              controller.abort(error);
+              reject(error);
+              throw error;
+            }
             identity = created;
+            settlePendingStart();
             this.terminalRuns.set(created.run_id, terminalRun);
             this.runWorkspaces.set(created.run_id, workspacePath);
             this.registry.create({ ...created, mode, controller });
@@ -448,7 +523,7 @@ export class NewideBackendService {
                 run_intent: lineage?.run_intent ?? { type: 'create' },
                 ...(params.session_id ? { session_id: params.session_id } : {}),
                 ...(lineage?.restarted_from_run_id &&
-                  lineage.persist_restarted_from_run_id !== false
+                lineage.persist_restarted_from_run_id !== false
                   ? { restarted_from_run_id: lineage.restarted_from_run_id }
                   : {}),
                 ...(lineage?.resume_checkpoint_id
@@ -505,6 +580,7 @@ export class NewideBackendService {
           },
         });
       } catch (error) {
+        settlePendingStart();
         reject(toError(error));
         return;
       }
@@ -547,10 +623,51 @@ export class NewideBackendService {
           });
           if (staged) await this.persistTerminal(identity.run_id, staged);
         })
-        .then(resolveTerminal, resolveTerminal);
+        .then(
+          () => {
+            settlePendingStart();
+            resolveTerminal();
+          },
+          () => {
+            settlePendingStart();
+            resolveTerminal();
+          },
+        );
       void terminalRun.then(() => this.terminalRuns.delete(identity?.run_id ?? ''));
       void terminalRun.then(() => this.runWorkspaces.delete(identity?.run_id ?? ''));
     });
+  }
+
+  private async closeGracefully(): Promise<void> {
+    const pendingStarts = [...this.pendingRunStarts];
+    const closeReason = new Error('Backend service is closing');
+    for (const pendingStart of pendingStarts) pendingStart.controller.abort(closeReason);
+
+    const recoveryResult = await Promise.allSettled([this.mailboxRecovery]);
+    const cancellationResults = await Promise.allSettled(
+      this.registry
+        .listSnapshots()
+        .filter((run) => run.status === 'running')
+        .map((run) => this.cancelRun(run.run_id)),
+    );
+    await Promise.allSettled(pendingStarts.map((pendingStart) => pendingStart.settled));
+    await Promise.allSettled([...this.terminalRuns.values()]);
+
+    let runtimeFailure: unknown;
+    try {
+      await this.closeRuntime();
+    } catch (error) {
+      runtimeFailure = error;
+    }
+
+    const failures = [...recoveryResult, ...cancellationResults]
+      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+      .map((result) => result.reason);
+    if (runtimeFailure !== undefined) failures.push(runtimeFailure);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, 'Failed to close backend service cleanly');
+    }
   }
 
   private hasPersistedRun(runId: string): boolean {
@@ -614,6 +731,11 @@ export class NewideBackendService {
       throw new Error('Mailbox service is not configured');
     }
     return this.mailboxService;
+  }
+
+  private requireBMemoryService(): BMemoryBackendService {
+    if (!this.bMemoryService) throw new Error('B memory service is unavailable');
+    return this.bMemoryService;
   }
 
   private notifyTaskListeners(taskId: string, event: AppRunEvent): void {

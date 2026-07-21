@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DriverRuntimeAgentExecutionFacade } from '../../src/app/driver-runtime-agent-execution-facade';
 import { FileAgentExecutionEvidenceStore } from '../../src/app/agent-execution-evidence-store';
+import type { BMemoryMaintenancePort } from '../../src/app/b-memory-maintenance-runner';
 import { SCHEMA_VERSION, nowTimestamp, type ArtifactRef } from '../../src/core';
 import {
   MockDriver,
@@ -22,6 +23,78 @@ import {
 import type { ExperienceRecord, SkillRecord } from '../../src/memory/schemas';
 
 describe('DriverRuntimeAgentExecutionFacade', () => {
+  it('projects app-owned B maintenance evidence into execution diagnostics', async () => {
+    const requests: Parameters<BMemoryMaintenancePort['scheduleBuffer']>[0][] = [];
+    const memoryMaintenance: BMemoryMaintenancePort = {
+      async scheduleBuffer(input) {
+        requests.push(input);
+        return {
+          maintenance_ref: 'b_maintenance_test',
+          kind: 'experience_extraction',
+          status: 'scheduled',
+          ...input,
+          experiences: [],
+          skills: [],
+          warnings: [],
+          created_at: '2026-07-21T00:00:00.000Z',
+          completed_at: '2026-07-21T00:00:01.000Z',
+          schema_version: SCHEMA_VERSION,
+        };
+      },
+    };
+    const { facade } = createFacade(
+      new CapturingDriver('succeeded'),
+      new InMemoryBufferRepository(),
+      invokeDriverLlm(),
+      new InMemoryRepository(),
+      memoryMaintenance,
+    );
+
+    const result = await facade.runAgent(request('task_maintenance', 'proposer_a'));
+
+    expect(requests).toEqual([
+      {
+        task_id: 'task_maintenance',
+        run_id: 'run_task_maintenance',
+        role_id: 'proposer_a',
+        buffer_seq: 1,
+      },
+    ]);
+    expect(result.diagnostics.memory_maintenance).toMatchObject({
+      maintenance_ref: 'b_maintenance_test',
+      status: 'scheduled',
+    });
+  });
+
+  it('preserves a completed Agent execution when B maintenance scheduling fails', async () => {
+    const memoryMaintenance: BMemoryMaintenancePort = {
+      async scheduleBuffer() {
+        throw new Error('maintenance evidence store unavailable');
+      },
+    };
+    const { facade } = createFacade(
+      new CapturingDriver('succeeded'),
+      new InMemoryBufferRepository(),
+      invokeDriverLlm(),
+      new InMemoryRepository(),
+      memoryMaintenance,
+    );
+
+    const result = await facade.runAgent(request('task_maintenance_failure', 'proposer_a'));
+
+    expect(result.status).toBe('completed');
+    expect(result.diagnostics.memory_maintenance).toMatchObject({
+      maintenance_ref: expect.stringMatching(/^b_maintenance_/),
+      kind: 'experience_extraction',
+      status: 'failed',
+      task_id: 'task_maintenance_failure',
+      run_id: 'run_task_maintenance_failure',
+      role_id: 'proposer_a',
+      buffer_seq: 1,
+      error: 'maintenance evidence store unavailable',
+    });
+  });
+
   it('runs the real driver through the public B runtime and preserves the execution result', async () => {
     const driver = new CapturingDriver('succeeded');
     const { facade, buffer } = createFacade(driver);
@@ -704,6 +777,7 @@ function createFacade(
   buffer: InMemoryBufferRepository = new InMemoryBufferRepository(),
   llm: ToolCallingClient = invokeDriverLlm(),
   repository: InMemoryRepository = new InMemoryRepository(),
+  memoryMaintenance?: BMemoryMaintenancePort,
 ) {
   return {
     facade: new DriverRuntimeAgentExecutionFacade({
@@ -711,6 +785,7 @@ function createFacade(
       repository,
       bufferRepository: buffer,
       llm,
+      ...(memoryMaintenance ? { memoryMaintenance } : {}),
     }),
     buffer,
   };

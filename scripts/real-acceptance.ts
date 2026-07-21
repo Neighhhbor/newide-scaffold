@@ -1,7 +1,7 @@
 /**
  * 真实链路验收脚本（不注入 fake B LLM，不使用 fake ACP runner）。
  *
- * 用真实 production composition（createProductionBackendService 经 `pnpm backend:rpc`
+ * 用真实 production composition（createProductionBackendService 经 Node stdio backend
  * 子进程）执行四个场景：market / council / subagent / restart。
  * 结果打印到控制台，并留档到 .newide/acceptance/<timestamp>/。
  *
@@ -587,14 +587,18 @@ interface BackendClient {
 }
 
 async function startBackend(label: string): Promise<BackendClient> {
-  const child: ChildProcess = spawn('pnpm', ['backend:rpc'], {
+  const child: ChildProcess = spawn(
+    process.execPath,
+    ['--import', 'tsx', 'src/app/backend-rpc-stdio.ts'],
+    {
     cwd: repoRoot,
     env: {
       ...process.env,
       ACP_DRIVER_TIMEOUT_MS: process.env.ACP_DRIVER_TIMEOUT_MS ?? '300000',
     },
     stdio: ['pipe', 'pipe', 'pipe'],
-  });
+    },
+  );
   const stderr: string[] = [];
   child.stderr?.on('data', (chunk: Buffer) => stderr.push(String(chunk)));
   const closed = new Promise<number | null>((resolve) => {
@@ -612,7 +616,7 @@ async function startBackend(label: string): Promise<BackendClient> {
     try {
       message = JSON.parse(line) as JsonRpcMessage;
     } catch {
-      return; // pnpm banner 或非 JSON 行
+      return; // Ignore any unexpected non-JSON line.
     }
     messages.push(message);
     for (const waiter of waiters) {

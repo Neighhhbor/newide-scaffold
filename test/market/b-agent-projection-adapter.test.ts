@@ -79,6 +79,64 @@ describe('BAgentProjectionAdapter', () => {
     ).resolves.toEqual([]);
   });
 
+  it('projects and bootstraps only agents in the explicit candidate allowlist', async () => {
+    const competitionQuery = competition([
+      claim('role_ts_engineer'),
+      claim('proposer_a'),
+      claim('reviewer'),
+      claim('unknown_role'),
+    ]);
+    const boardQuery = board();
+    const ensureAgent = vi.fn(async () => undefined);
+    const adapter = new BAgentProjectionAdapter({
+      competitionQuery,
+      boardQuery,
+      ensureAgent,
+      allowedAgentIds: ['role_ts_engineer'],
+      now: () => NOW,
+    });
+
+    const projections = await adapter.projectCandidates(
+      { task_id: 'task_allowlist', spec: 'Implement a TypeScript backend.' },
+      { bootstrap_agent_ids: ['reviewer', 'role_ts_engineer', 'unknown_role'] },
+    );
+
+    expect(ensureAgent).toHaveBeenCalledTimes(1);
+    expect(ensureAgent).toHaveBeenCalledWith('role_ts_engineer');
+    expect(projections.map((projection) => projection.agent_id)).toEqual([
+      'role_ts_engineer',
+    ]);
+    expect(boardQuery.getAgent).not.toHaveBeenCalledWith('proposer_a');
+    expect(boardQuery.getAgent).not.toHaveBeenCalledWith('reviewer');
+    expect(boardQuery.getAgent).not.toHaveBeenCalledWith('unknown_role');
+  });
+
+  it('short-circuits an explicitly empty candidate allowlist', async () => {
+    const collectCompetitionClaims = vi.fn();
+    const boardQuery = board();
+    const ensureAgent = vi.fn(async () => undefined);
+    const adapter = new BAgentProjectionAdapter({
+      competitionQuery: { collectCompetitionClaims },
+      boardQuery,
+      ensureAgent,
+      allowedAgentIds: [],
+      now: () => NOW,
+    });
+
+    await expect(
+      adapter.projectCandidates(
+        { task_id: 'task_empty_allowlist', spec: 'Do work.' },
+        { bootstrap_agent_ids: ['role_ts_engineer'] },
+      ),
+    ).resolves.toEqual([]);
+
+    expect(ensureAgent).not.toHaveBeenCalled();
+    expect(collectCompetitionClaims).not.toHaveBeenCalled();
+    expect(boardQuery.getAgent).not.toHaveBeenCalled();
+    expect(boardQuery.listSkills).not.toHaveBeenCalled();
+    expect(boardQuery.listExperiences).not.toHaveBeenCalled();
+  });
+
   it('requires the B ensure hook when bootstrap candidates are requested', async () => {
     const adapter = new BAgentProjectionAdapter({
       competitionQuery: competition([]),

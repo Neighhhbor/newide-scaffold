@@ -5,43 +5,251 @@ import { createInterface } from 'node:readline';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
-import { createProductionBackendService, parseDriverEnv } from '../../src/app/backend-rpc-stdio';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  createProductionBackendService,
+  parseDriverEnv,
+  startBackendRpcServer,
+} from '../../src/app/backend-rpc-stdio';
+import type { NewideBackendService } from '../../src/app/newide-backend-service';
 import type { AppRunEvent } from '../../src/app/run-registry';
 import { TaskProcessor } from '../../src/app/task-processor';
-import type { ToolCallingClient } from '../../src/memory';
+import {
+  InMemoryBufferRepository,
+  InMemoryRepository,
+  type LlmClient,
+  type ToolCallingClient,
+} from '../../src/memory';
 import { SqliteCoordinationStore } from '../../src/persistence';
+import type { BackendBRuntime } from '../../src/app/production-b-runtime';
+import {
+  BMemoryMaintenanceRunner,
+  FileBMemoryMaintenanceEvidenceStore,
+} from '../../src/app/b-memory-maintenance-runner';
 
 describe('backend RPC stdio entrypoint', () => {
-  it('fails fast when the configured ACP runner directory does not exist', () => {
+  it('fails fast when the configured ACP runner directory does not exist', async () => {
     const runnerDir = path.join(process.cwd(), '.newide', 'missing-acp-runner');
 
-    expect(() =>
-      createProductionBackendService({
-        ACP_DRIVER_RUNNER_DIR: runnerDir,
-        ACP_AGENT_ID: 'claude',
-      }),
-    ).toThrow(`ACP driver runner directory not found: ${runnerDir}`);
+    await expect(
+      createProductionBackendService(
+        {
+          ACP_DRIVER_RUNNER_DIR: runnerDir,
+          ACP_AGENT_ID: 'claude',
+        },
+        { bRuntime: createInMemoryBRuntime() },
+      ),
+    ).rejects.toThrow(`ACP driver runner directory not found: ${runnerDir}`);
   });
 
-  it('rejects a file and a package without the driver:run script as ACP runners', () => {
+  it('rejects a file and a package without the driver:run script as ACP runners', async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), 'newide-acp-runner-'));
     const runnerFile = path.join(root, 'runner');
     writeFileSync(runnerFile, 'not a directory');
-    expect(() => createProductionBackendService({ ACP_DRIVER_RUNNER_DIR: runnerFile })).toThrow(
-      `ACP driver runner path is not a directory: ${runnerFile}`,
-    );
+    await expect(
+      createProductionBackendService(
+        { ACP_DRIVER_RUNNER_DIR: runnerFile },
+        { bRuntime: createInMemoryBRuntime() },
+      ),
+    ).rejects.toThrow(`ACP driver runner path is not a directory: ${runnerFile}`);
 
     writeFileSync(path.join(root, 'package.json'), '{"scripts":{}}');
-    expect(() => createProductionBackendService({ ACP_DRIVER_RUNNER_DIR: root })).toThrow(
-      `ACP driver runner has no driver:run script: ${root}`,
-    );
+    await expect(
+      createProductionBackendService(
+        { ACP_DRIVER_RUNNER_DIR: root },
+        { bRuntime: createInMemoryBRuntime() },
+      ),
+    ).rejects.toThrow(`ACP driver runner has no driver:run script: ${root}`);
     writeFileSync(path.join(root, 'package.json'), '{"scripts":{"driver:run":"   "}}');
-    expect(() => createProductionBackendService({ ACP_DRIVER_RUNNER_DIR: root })).toThrow(
-      `ACP driver runner has no driver:run script: ${root}`,
-    );
+    await expect(
+      createProductionBackendService(
+        { ACP_DRIVER_RUNNER_DIR: root },
+        { bRuntime: createInMemoryBRuntime() },
+      ),
+    ).rejects.toThrow(`ACP driver runner has no driver:run script: ${root}`);
     rmSync(root, { recursive: true });
+  });
+
+  it('accepts an explicitly injected in-memory B runtime without a database URL', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'newide-explicit-b-runtime-'));
+    const close = vi.fn(async () => undefined);
+    try {
+      writeFileSync(path.join(root, 'package.json'), '{"scripts":{"driver:run":"exit 0"}}');
+
+      const service = await createProductionBackendService(
+        {
+          ACP_DRIVER_RUNNER_DIR: root,
+          NEWIDE_COORDINATION_DB: ':memory:',
+        },
+        { bRuntime: createInMemoryBRuntime(close), agentLlm: invokeDriverLlm() },
+      );
+
+      await service.close();
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['empty', []],
+    ['blank', ['role_ts_engineer', ' ']],
+    ['duplicate', ['role_ts_engineer', 'role_ts_engineer']],
+  ])('rejects %s market_agent_ids from an injected B runtime', async (_label, marketAgentIds) => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'newide-invalid-market-catalog-'));
+    const close = vi.fn(async () => undefined);
+    const runtime = {
+      ...createInMemoryBRuntime(close),
+      market_agent_ids: marketAgentIds,
+    } as unknown as BackendBRuntime;
+    try {
+      writeFileSync(path.join(root, 'package.json'), '{"scripts":{"driver:run":"exit 0"}}');
+
+      await expect(
+        createProductionBackendService(
+          { ACP_DRIVER_RUNNER_DIR: root, NEWIDE_COORDINATION_DB: ':memory:' },
+          { bRuntime: runtime, agentLlm: invokeDriverLlm() },
+        ),
+      ).rejects.toThrow('Production B runtime must provide non-empty, unique market_agent_ids');
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('waits for app-owned B maintenance to become idle before closing the B runtime', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'newide-b-maintenance-shutdown-'));
+    const bRuntime = createInMemoryBRuntime(vi.fn(async () => undefined));
+    const maintenance = new BMemoryMaintenanceRunner({
+      repository: bRuntime.repository,
+      bufferRepository: bRuntime.bufferRepository,
+      llm: maintenanceLlm(),
+      evidenceStore: new FileBMemoryMaintenanceEvidenceStore(path.join(root, 'maintenance')),
+    });
+    let markWaitEntered!: () => void;
+    const waitEntered = new Promise<void>((resolve) => {
+      markWaitEntered = resolve;
+    });
+    let releaseIdle!: () => void;
+    const idle = new Promise<void>((resolve) => {
+      releaseIdle = resolve;
+    });
+    const waitForIdle = vi.spyOn(maintenance, 'waitForIdle').mockImplementation(async () => {
+      markWaitEntered();
+      await idle;
+    });
+    vi.spyOn(maintenance, 'replayPending').mockResolvedValue([]);
+
+    try {
+      writeFileSync(path.join(root, 'package.json'), '{"scripts":{"driver:run":"exit 0"}}');
+      const service = await createProductionBackendService(
+        { ACP_DRIVER_RUNNER_DIR: root, NEWIDE_COORDINATION_DB: ':memory:' },
+        { bRuntime, memoryMaintenance: maintenance, agentLlm: invokeDriverLlm() },
+      );
+
+      const closing = service.close();
+      await waitEntered;
+      expect(bRuntime.close).not.toHaveBeenCalled();
+      releaseIdle();
+      await closing;
+
+      expect(waitForIdle).toHaveBeenCalledOnce();
+      expect(bRuntime.close).toHaveBeenCalledOnce();
+    } finally {
+      releaseIdle();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('waits for the injected B repository before returning a ready service', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'newide-delayed-b-runtime-'));
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let markEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    class DelayedRepository extends InMemoryRepository {
+      override async listAgentIds(): Promise<string[]> {
+        markEntered();
+        await ready;
+        return super.listAgentIds();
+      }
+    }
+    try {
+      writeFileSync(path.join(root, 'package.json'), '{"scripts":{"driver:run":"exit 0"}}');
+      let settled = false;
+      const servicePromise = createProductionBackendService(
+        { ACP_DRIVER_RUNNER_DIR: root, NEWIDE_COORDINATION_DB: ':memory:' },
+        {
+          bRuntime: {
+            repository: new DelayedRepository(),
+            bufferRepository: new InMemoryBufferRepository(),
+            app_state_root: path.join(root, '.newide'),
+            market_agent_ids: ['role_fullstack_engineer', 'role_ts_engineer'],
+            close: async () => undefined,
+          },
+          agentLlm: invokeDriverLlm(),
+        },
+      ).then((service) => {
+        settled = true;
+        return service;
+      });
+
+      await entered;
+      expect(settled).toBe(false);
+      release();
+      const service = await servicePromise;
+      await service.close();
+    } finally {
+      release();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('sanitizes a failure from the B Agent manager readiness check', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'newide-b-manager-failure-'));
+    const secret = 'postgres://user:secret@localhost/newide';
+    const close = vi.fn(async () => undefined);
+    class FailingRepository extends InMemoryRepository {
+      override async listAgentIds(): Promise<string[]> {
+        throw new Error(`connection failed: ${secret}`);
+      }
+    }
+    try {
+      writeFileSync(path.join(root, 'package.json'), '{"scripts":{"driver:run":"exit 0"}}');
+
+      let failure: unknown;
+      try {
+        await createProductionBackendService(
+          { ACP_DRIVER_RUNNER_DIR: root, NEWIDE_COORDINATION_DB: ':memory:' },
+          {
+            bRuntime: {
+              repository: new FailingRepository(),
+              bufferRepository: new InMemoryBufferRepository(),
+              app_state_root: path.join(root, '.newide'),
+              market_agent_ids: ['role_fullstack_engineer', 'role_ts_engineer'],
+              close,
+            },
+            agentLlm: invokeDriverLlm(),
+          },
+        );
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(String(failure)).toContain('Production B Agent manager readiness check failed');
+      expect(String(failure)).not.toContain(secret);
+      expect(String(failure)).not.toContain('secret');
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('parses only valid env assignments and preserves equals signs in values', () => {
@@ -55,6 +263,7 @@ describe('backend RPC stdio entrypoint', () => {
     const runnerDir = path.join(root, 'runner');
     const databasePath = path.join(root, 'coordination.sqlite');
     const workspacePath = path.join(root, 'workspace');
+    let service: Awaited<ReturnType<typeof createProductionBackendService>> | undefined;
     try {
       mkdirSync(runnerDir, { recursive: true });
       writeFileSync(path.join(runnerDir, 'package.json'), '{"scripts":{"driver:run":"exit 99"}}');
@@ -73,10 +282,13 @@ describe('backend RPC stdio entrypoint', () => {
       });
       seedStore.close();
 
-      const service = createProductionBackendService({
-        ACP_DRIVER_RUNNER_DIR: runnerDir,
-        NEWIDE_COORDINATION_DB: databasePath,
-      });
+      service = await createProductionBackendService(
+        {
+          ACP_DRIVER_RUNNER_DIR: runnerDir,
+          NEWIDE_COORDINATION_DB: databasePath,
+        },
+        { bRuntime: createInMemoryBRuntime() },
+      );
 
       await expect(service.getTask('task_interrupted')).resolves.toMatchObject({
         task: { status: 'blocked' },
@@ -98,6 +310,7 @@ describe('backend RPC stdio entrypoint', () => {
       });
       evidenceStore.close();
     } finally {
+      await service?.close();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -109,20 +322,34 @@ describe('backend RPC stdio entrypoint', () => {
     let councilCreated: { run_id: string; task_id: string } | undefined;
     let failedCouncilCreated: { run_id: string; task_id: string } | undefined;
     let marketEvidenceDirectory: string | undefined;
+    let service: Awaited<ReturnType<typeof createProductionBackendService>> | undefined;
     try {
+      const bRuntime = createInMemoryBRuntime();
+      await bRuntime.repository.initializeAgent({
+        role_id: 'reviewer',
+        name: 'Council Reviewer',
+        tags: ['council_only'],
+        persona_seed: 'Review Council proposals only.',
+      });
+      await bRuntime.bufferRepository.ensureAgent('reviewer');
       writeFileSync(
         path.join(runnerDir, 'package.json'),
         '{"scripts":{"driver:run":"node fake-driver.mjs"}}',
       );
       writeFileSync(
+        path.join(runnerDir, '.env'),
+        'NEWIDE_B_DATABASE_URL=postgres://should-not-reach-acp-child\n',
+      );
+      writeFileSync(
         path.join(runnerDir, 'fake-driver.mjs'),
         `import { appendFileSync, existsSync } from 'node:fs';
-let body='';
-process.stdin.on('data', chunk => body += chunk);
-process.stdin.on('end', () => {
-  const invocationLog = new URL('./invocations.log', import.meta.url);
-  appendFileSync(invocationLog, 'invoke\\n');
-  const input = JSON.parse(body);
+	let body='';
+	process.stdin.on('data', chunk => body += chunk);
+	process.stdin.on('end', () => {
+	  const invocationLog = new URL('./invocations.log', import.meta.url);
+	  appendFileSync(invocationLog, 'invoke\\n');
+	  appendFileSync(new URL('./b-env.log', import.meta.url), Object.hasOwn(process.env, 'NEWIDE_B_DATABASE_URL') ? 'present\\n' : 'absent\\n');
+	  const input = JSON.parse(body);
   appendFileSync(new URL('./prompts.log', import.meta.url), input.prompt + '\\n');
   const created_at = new Date().toISOString();
   const reviewerFailed = existsSync(new URL('./fail-reviewer', import.meta.url)) && input.prompt.includes('Review the isolated proposal inputs');
@@ -133,12 +360,16 @@ process.stdin.on('end', () => {
 `,
       );
 
-      const service = createProductionBackendService(
+      service = await createProductionBackendService(
         {
           ACP_DRIVER_RUNNER_DIR: runnerDir,
           NEWIDE_COORDINATION_DB: path.join(runnerDir, 'coordination.sqlite'),
         },
-        { agentLlm: invokeDriverLlm() },
+        {
+          agentLlm: invokeDriverLlm(),
+          memoryLlm: maintenanceLlm(),
+          bRuntime,
+        },
       );
       created = await service.createRun({
         prompt: 'Exercise production composition.',
@@ -282,6 +513,9 @@ process.stdin.on('end', () => {
       expect(
         readFileSync(path.join(runnerDir, 'invocations.log'), 'utf8').trim().split('\n'),
       ).toHaveLength(6);
+      expect(readFileSync(path.join(runnerDir, 'b-env.log'), 'utf8').trim().split('\n')).toEqual(
+        Array.from({ length: 6 }, () => 'absent'),
+      );
       const driverPrompts = readFileSync(path.join(runnerDir, 'prompts.log'), 'utf8');
       expect(driverPrompts).toContain('Exercise production composition.');
       expect(driverPrompts).toContain('Produce proposal A for:');
@@ -328,6 +562,7 @@ process.stdin.on('end', () => {
         expect.arrayContaining(['council.failed', 'council.completed', 'run.completed']),
       );
     } finally {
+      await service?.close();
       rmSync(runnerDir, { recursive: true, force: true });
       rmSync(workspaceDir, { recursive: true, force: true });
       if (marketEvidenceDirectory) {
@@ -363,10 +598,10 @@ process.stdin.on('end', () => {
     }
   }, 15_000);
 
-  it('answers ping over a real child process and exits on stdin EOF', async () => {
+  it('answers ping over a child fixture and exits on stdin EOF', async () => {
     const runnerDir = mkdtempSync(path.join(os.tmpdir(), 'newide-acp-runner-'));
     writeFileSync(path.join(runnerDir, 'package.json'), '{"scripts":{"driver:run":"exit 0"}}');
-    const child = spawn('pnpm', ['backend:rpc'], {
+    const child = spawn(process.execPath, ['--import', 'tsx', 'test/fixtures/task-rpc-server.ts'], {
       cwd: process.cwd(),
       env: {
         ...process.env,
@@ -390,14 +625,63 @@ process.stdin.on('end', () => {
     expect(code).toBe(0);
     rmSync(runnerDir, { recursive: true });
   }, 15_000);
+
+  it('does not start stdio before the production B runtime is ready', async () => {
+    const runnerDir = mkdtempSync(path.join(os.tmpdir(), 'newide-production-readiness-'));
+    writeFileSync(path.join(runnerDir, 'package.json'), '{"scripts":{"driver:run":"exit 0"}}');
+    const child = spawn(process.execPath, ['--import', 'tsx', 'src/app/backend-rpc-stdio.ts'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        ACP_DRIVER_RUNNER_DIR: runnerDir,
+        NEWIDE_B_DATABASE_URL: '   ',
+        NEWIDE_COORDINATION_DB: path.join(runnerDir, 'coordination.sqlite'),
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => (stdout += String(chunk)));
+    child.stderr.on('data', (chunk) => (stderr += String(chunk)));
+
+    const [code] = await once(child, 'exit');
+
+    expect(code).toBe(1);
+    expect(stdout).toBe('');
+    expect(stderr).toContain('NEWIDE_B_DATABASE_URL is required for the production B runtime');
+    rmSync(runnerDir, { recursive: true, force: true });
+  }, 15_000);
+
+  it('closes the service only once across explicit close and input EOF', async () => {
+    const input = new PassThrough();
+    const close = vi.fn(async () => undefined);
+    const service = { close } as unknown as NewideBackendService;
+    const server = startBackendRpcServer({ input, writeLine: () => undefined, service });
+
+    const firstClose = server.close();
+    input.end();
+    await Promise.all([firstClose, server.close(), server.closed]);
+
+    expect(close).toHaveBeenCalledOnce();
+  });
 });
 
 async function waitForTerminal(
-  service: ReturnType<typeof createProductionBackendService>,
+  service: Awaited<ReturnType<typeof createProductionBackendService>>,
   runId: string,
 ) {
   await service.waitForTerminal(runId);
   return service.getSnapshot(runId);
+}
+
+function createInMemoryBRuntime(close = async () => undefined): BackendBRuntime {
+  return {
+    repository: new InMemoryRepository(),
+    bufferRepository: new InMemoryBufferRepository(),
+    app_state_root: path.join(process.cwd(), '.newide'),
+    market_agent_ids: ['role_fullstack_engineer', 'role_ts_engineer'],
+    close,
+  };
 }
 
 function invokeDriverLlm(): ToolCallingClient {
@@ -425,6 +709,24 @@ function invokeDriverLlm(): ToolCallingClient {
           },
         ],
       };
+    },
+  };
+}
+
+function maintenanceLlm(): LlmClient {
+  return {
+    async complete() {
+      return JSON.stringify({
+        experiences: [
+          {
+            description: 'Production composition evidence',
+            content: 'The backend completed a task through B and A.',
+            type: 'positive',
+            confidence: 0.9,
+            tags: ['acceptance'],
+          },
+        ],
+      });
     },
   };
 }

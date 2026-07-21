@@ -34,6 +34,14 @@ describe('Task-first JSON-RPC child process acceptance', () => {
       expect(firstTerminal.task.status).toBe('completed');
       expect(firstTerminal.run_history).toHaveLength(1);
       collectEvidence(firstTerminal, createdRunIds, marketDirectories);
+      const firstExperiences = await waitForExperiences(
+        client,
+        'role_ts_engineer',
+        created.task.task_id,
+      );
+      expect(firstExperiences).toMatchObject({
+        experiences: [expect.objectContaining({ source_task_id: created.task.task_id })],
+      });
       await client.call('task.subscribe', { task_id: created.task.task_id });
 
       const councilStarted = await client.call<TaskSnapshot>('task.startCouncil', {
@@ -59,6 +67,61 @@ describe('Task-first JSON-RPC child process acceptance', () => {
       expect(readFileSync(path.join(workspace, 'council-output.txt'), 'utf-8')).toContain(
         'COUNCIL_FINAL',
       );
+
+      const agents = await client.call<{ agents: Array<{ role_id: string }> }>(
+        'memory.listAgents',
+        {},
+      );
+      expect(agents.agents.map((agent) => agent.role_id)).toEqual(
+        expect.arrayContaining([
+          'role_ts_engineer',
+          'proposer_a',
+          'proposer_b',
+          'reviewer',
+          'synthesizer',
+        ]),
+      );
+      const maintenance = await waitForMaintenance(client, [
+        'role_ts_engineer',
+        'proposer_a',
+        'proposer_b',
+        'reviewer',
+        'synthesizer',
+      ]);
+      expect(maintenance.maintenance.map((item) => item.role_id)).toEqual(
+        expect.arrayContaining([
+          'role_ts_engineer',
+          'proposer_a',
+          'proposer_b',
+          'reviewer',
+          'synthesizer',
+        ]),
+      );
+      expect(maintenance.maintenance).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ status: 'completed', evidence_uri: expect.stringMatching(/^file:/) }),
+        ]),
+      );
+      await expect(
+        client.call('memory.promoteSkills', {
+          role_id: 'role_ts_engineer',
+          requested_by: 'acceptance',
+        }),
+      ).resolves.toMatchObject({
+        maintenance: {
+          status: 'completed',
+          skills: expect.arrayContaining([
+            expect.objectContaining({ review_status: 'pending' }),
+          ]),
+        },
+      });
+      await expect(
+        client.call('memory.listSkills', { role_id: 'role_ts_engineer' }),
+      ).resolves.toMatchObject({
+        skills: expect.arrayContaining([
+          expect.objectContaining({ review_status: 'pending' }),
+        ]),
+      });
 
       const liveCouncilEvents = client.taskEvents(created.task.task_id);
       const replayCursor = liveCouncilEvents.find((event) => event.type === 'run.created');
@@ -375,6 +438,7 @@ function spawnBackend(runnerDir: string): ChildProcessWithoutNullStreams {
         ...process.env,
         ACP_DRIVER_RUNNER_DIR: runnerDir,
         NEWIDE_COORDINATION_DB: path.join(runnerDir, 'coordination.sqlite'),
+        NEWIDE_B_APP_STATE_ROOT: path.join(runnerDir, 'b-state'),
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     },
@@ -389,6 +453,47 @@ async function waitForTerminalTask(client: RpcChildClient, taskId: string): Prom
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error(`Task ${taskId} did not reach terminal state`);
+}
+
+async function waitForExperiences(
+  client: RpcChildClient,
+  roleId: string,
+  sourceTaskId: string,
+): Promise<{ experiences: Array<{ source_task_id: string }> }> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const result = await client.call<{ experiences: Array<{ source_task_id: string }> }>(
+      'memory.listExperiences',
+      { role_id: roleId },
+    );
+    if (result.experiences.some((experience) => experience.source_task_id === sourceTaskId)) {
+      return result;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for B Experience from ${sourceTaskId}`);
+}
+
+async function waitForMaintenance(
+  client: RpcChildClient,
+  roleIds: readonly string[],
+): Promise<{
+  maintenance: Array<{ role_id: string; status: string; evidence_uri?: string }>;
+}> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const result = await client.call<{
+      maintenance: Array<{ role_id: string; status: string; evidence_uri?: string }>;
+    }>('memory.listMaintenance', {});
+    const completedRoles = new Set(
+      result.maintenance
+        .filter((item) => item.status === 'completed')
+        .map((item) => item.role_id),
+    );
+    if (roleIds.every((roleId) => completedRoles.has(roleId))) return result;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for B maintenance for ${roleIds.join(', ')}`);
 }
 
 async function waitForFile(filePath: string): Promise<void> {

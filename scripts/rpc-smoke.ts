@@ -9,7 +9,12 @@ import {
   startBackendRpcServer,
   type BackendRpcServer,
 } from '../src/app/backend-rpc-stdio';
-import type { ToolCallingClient } from '../src/memory';
+import {
+  InMemoryBufferRepository,
+  InMemoryRepository,
+  type LlmClient,
+  type ToolCallingClient,
+} from '../src/memory';
 import type { RunSnapshot } from '../src/protocol/run-snapshot';
 
 interface JsonRpcMessage {
@@ -50,9 +55,19 @@ if (usesTemporaryRunner) {
   localServer = startBackendRpcServer({
     input,
     writeLine: (line) => localOutput!.write(`${line}\n`),
-    service: createProductionBackendService(
+    service: await createProductionBackendService(
       { ...process.env, ACP_DRIVER_RUNNER_DIR: runnerDir },
-      { agentLlm: invokeDriverLlm() },
+      {
+        agentLlm: invokeDriverLlm(),
+        memoryLlm: deterministicMaintenanceLlm(),
+        bRuntime: {
+          repository: new InMemoryRepository(),
+          bufferRepository: new InMemoryBufferRepository(),
+          app_state_root: process.env.NEWIDE_B_APP_STATE_ROOT ?? path.join(process.cwd(), '.newide'),
+          market_agent_ids: ['role_fullstack_engineer', 'role_ts_engineer'],
+          close: async () => undefined,
+        },
+      },
     ),
   });
   backendInput = input;
@@ -360,7 +375,7 @@ async function waitForCancellationEffects(): Promise<void> {
 
 async function waitForBackendClose(): Promise<number | null> {
   if (!child || !childClosed) {
-    localServer?.close();
+    await localServer?.close();
     localOutput?.end();
     return 0;
   }
@@ -404,6 +419,24 @@ function invokeDriverLlm(): ToolCallingClient {
           },
         ],
       };
+    },
+  };
+}
+
+function deterministicMaintenanceLlm(): LlmClient {
+  return {
+    async complete() {
+      return JSON.stringify({
+        experiences: [
+          {
+            description: 'RPC smoke execution lesson',
+            content: 'Keep production RPC composition behind explicit ports.',
+            type: 'positive',
+            confidence: 0.9,
+            tags: ['rpc'],
+          },
+        ],
+      });
     },
   };
 }

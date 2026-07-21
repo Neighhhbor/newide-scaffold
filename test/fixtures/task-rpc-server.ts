@@ -2,18 +2,33 @@ import {
   createProductionBackendService,
   startBackendRpcServer,
 } from '../../src/app/backend-rpc-stdio';
-import type { ToolCallingClient } from '../../src/memory';
+import {
+  InMemoryBufferRepository,
+  InMemoryRepository,
+  type LlmClient,
+  type ToolCallingClient,
+} from '../../src/memory';
+import path from 'node:path';
 
-const service = createProductionBackendService(process.env, {
+const service = await createProductionBackendService(process.env, {
   agentLlm: deterministicInvokeDriverLlm(),
+  memoryLlm: deterministicMaintenanceLlm(),
+  bRuntime: {
+    repository: new InMemoryRepository(),
+    bufferRepository: new InMemoryBufferRepository(),
+    app_state_root: process.env.NEWIDE_B_APP_STATE_ROOT ?? path.join(process.cwd(), '.newide'),
+    market_agent_ids: ['role_fullstack_engineer', 'role_ts_engineer'],
+    close: async () => undefined,
+  },
 });
 
-startBackendRpcServer({
+const server = startBackendRpcServer({
   input: process.stdin,
   writeLine: (line) => process.stdout.write(`${line}\n`),
   service,
   logError: (message) => process.stderr.write(`${message}\n`),
 });
+await server.closed;
 
 function deterministicInvokeDriverLlm(): ToolCallingClient {
   let sequence = 0;
@@ -41,6 +56,24 @@ function deterministicInvokeDriverLlm(): ToolCallingClient {
           },
         ],
       };
+    },
+  };
+}
+
+function deterministicMaintenanceLlm(): LlmClient {
+  return {
+    async complete() {
+      return JSON.stringify({
+        experiences: [
+          {
+            description: 'Child-process execution lesson',
+            content: 'Use durable task events and explicit application ports.',
+            type: 'positive',
+            confidence: 0.99,
+            tags: ['rpc'],
+          },
+        ],
+      });
     },
   };
 }

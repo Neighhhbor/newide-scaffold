@@ -23,21 +23,30 @@ export interface BAgentProjectionAdapterOptions {
   competitionQuery: AgentCompetitionQuery;
   boardQuery: AgentBoardQuery;
   ensureAgent?: (agentId: string) => Promise<void>;
+  allowedAgentIds?: readonly string[];
   now?: () => number;
 }
 
 export class BAgentProjectionAdapter implements AgentProjectionSource {
   private readonly now: () => number;
+  private readonly allowedAgentIds: ReadonlySet<string> | undefined;
 
   constructor(private readonly options: BAgentProjectionAdapterOptions) {
     this.now = options.now ?? Date.now;
+    this.allowedAgentIds = options.allowedAgentIds
+      ? new Set(options.allowedAgentIds)
+      : undefined;
   }
 
   async projectCandidates(
     task: AgentTaskRequest,
     projectionOptions?: AgentProjectionOptions,
   ): Promise<AgentProjection[]> {
-    const bootstrapAgentIds = [...new Set(projectionOptions?.bootstrap_agent_ids ?? [])].sort();
+    if (this.allowedAgentIds?.size === 0) return [];
+
+    const bootstrapAgentIds = [...new Set(projectionOptions?.bootstrap_agent_ids ?? [])]
+      .filter((agentId) => this.isAllowed(agentId))
+      .sort();
     if (bootstrapAgentIds.length > 0 && !this.options.ensureAgent) {
       throw new Error('B Agent ensure hook is required for bootstrap candidates');
     }
@@ -46,7 +55,12 @@ export class BAgentProjectionAdapter implements AgentProjectionSource {
     }
     const batch = await this.options.competitionQuery.collectCompetitionClaims(task);
     const eligible = batch.claims
-      .filter((claim) => claim.decision === 'participate' && claim.availability.busy !== true)
+      .filter(
+        (claim) =>
+          this.isAllowed(claim.role_id) &&
+          claim.decision === 'participate' &&
+          claim.availability.busy !== true,
+      )
       .sort((left, right) => left.role_id.localeCompare(right.role_id));
 
     return Promise.all(
@@ -59,6 +73,10 @@ export class BAgentProjectionAdapter implements AgentProjectionSource {
         return toProjection(agent, skills, experiences, this.now());
       }),
     );
+  }
+
+  private isAllowed(agentId: string): boolean {
+    return this.allowedAgentIds?.has(agentId) ?? true;
   }
 }
 

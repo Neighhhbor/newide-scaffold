@@ -46,6 +46,10 @@ import type {
   AgentContextPackEvidence,
   AgentExecutionEvidenceStore,
 } from './agent-execution-evidence-store';
+import type {
+  BMemoryMaintenanceEvidence,
+  BMemoryMaintenancePort,
+} from './b-memory-maintenance-runner';
 
 export interface DriverRuntimeAgentExecutionFacadeOptions {
   driver: DriverRuntimeHandle;
@@ -53,6 +57,7 @@ export interface DriverRuntimeAgentExecutionFacadeOptions {
   bufferRepository: BufferRepository;
   llm: ToolCallingClient;
   evidenceStore?: AgentExecutionEvidenceStore;
+  memoryMaintenance?: BMemoryMaintenancePort;
 }
 
 interface InvocationContext {
@@ -95,6 +100,10 @@ export class DriverRuntimeAgentExecutionFacade
   constructor(private readonly options: DriverRuntimeAgentExecutionFacadeOptions) {
     this.invokeDriverRuntime = createDriverRuntimeInvoker(options.driver);
     this.manager = this.createManager();
+  }
+
+  async ready(): Promise<void> {
+    await this.manager;
   }
 
   private createManager(): Promise<AgentManager> {
@@ -323,12 +332,18 @@ export class DriverRuntimeAgentExecutionFacade
     driverAttempts: number,
     driverInvocationContext: DriverRuntimeInvokerInput['driver_context'] | undefined,
   ): Promise<AgentExecutionResult> {
+    const memoryMaintenance = await this.processMemoryMaintenance(
+      input,
+      runtimeRoleId,
+      dispatched.cycle.buffer_seq,
+    );
     if (!execution) {
       return this.buildNoExecutionResult(
         input,
         dispatched,
         runtimeRoleId,
         driverInvocationContext,
+        memoryMaintenance,
       );
     }
 
@@ -372,6 +387,7 @@ export class DriverRuntimeAgentExecutionFacade
           skills: dispatched.cycle.retrieval.skills.length,
         },
         promotion: dispatched.cycle.promotion.check,
+        ...(memoryMaintenance ? { memory_maintenance: memoryMaintenance } : {}),
         context_pack_persisted: contextEvidence.persisted,
         ...(contextEvidence.uri ? { context_pack_uri: contextEvidence.uri } : {}),
         ...(execution.error
@@ -392,6 +408,7 @@ export class DriverRuntimeAgentExecutionFacade
     dispatched: DispatchTaskResult,
     runtimeRoleId: string,
     driverInvocationContext: DriverRuntimeInvokerInput['driver_context'] | undefined,
+    memoryMaintenance: BMemoryMaintenanceEvidence | undefined,
   ): Promise<AgentExecutionResult> {
     const created_at = nowTimestamp();
     const errorCode = `B_${dispatched.status.toUpperCase()}`;
@@ -441,6 +458,7 @@ export class DriverRuntimeAgentExecutionFacade
           experiences: dispatched.cycle.retrieval.experiences.length,
           skills: dispatched.cycle.retrieval.skills.length,
         },
+        ...(memoryMaintenance ? { memory_maintenance: memoryMaintenance } : {}),
         context_pack_persisted: contextEvidence.persisted,
         ...(contextEvidence.uri ? { context_pack_uri: contextEvidence.uri } : {}),
       },
@@ -449,6 +467,40 @@ export class DriverRuntimeAgentExecutionFacade
       created_at,
       schema_version: SCHEMA_VERSION,
     };
+  }
+
+  private async processMemoryMaintenance(
+    input: AgentExecutionRequest,
+    runtimeRoleId: string,
+    bufferSeq: number,
+  ): Promise<BMemoryMaintenanceEvidence | undefined> {
+    if (!this.options.memoryMaintenance) return undefined;
+    try {
+      return await this.options.memoryMaintenance.scheduleBuffer({
+        task_id: input.task_id,
+        run_id: input.run_id,
+        role_id: runtimeRoleId,
+        buffer_seq: bufferSeq,
+      });
+    } catch (error) {
+      const completedAt = nowTimestamp();
+      return {
+        maintenance_ref: createId('b_maintenance'),
+        kind: 'experience_extraction',
+        status: 'failed',
+        task_id: input.task_id,
+        run_id: input.run_id,
+        role_id: runtimeRoleId,
+        buffer_seq: bufferSeq,
+        experiences: [],
+        skills: [],
+        warnings: ['Memory maintenance could not be scheduled; Agent execution was preserved.'],
+        error: error instanceof Error ? error.message : String(error),
+        created_at: completedAt,
+        completed_at: completedAt,
+        schema_version: SCHEMA_VERSION,
+      };
+    }
   }
 
   private async persistContextEvidence(

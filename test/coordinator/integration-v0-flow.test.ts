@@ -871,6 +871,52 @@ describe('runIntegrationV0Flow', () => {
     );
   });
 
+  it.each([
+    ['scheduled', 'memory.maintenance_scheduled'],
+    ['running', 'memory.maintenance_running'],
+    ['completed', 'memory.maintenance_completed'],
+    ['skipped', 'memory.maintenance_skipped'],
+    ['failed', 'memory.maintenance_failed'],
+  ] as const)('publishes %s B maintenance evidence as %s', async (status, eventType) => {
+    const delegate = successfulAgentFacade([]);
+    const agentExecutionFacade: AgentExecutionFacade = {
+      async runAgent(input, options) {
+        const result = await delegate.runAgent(input, options);
+        return {
+          ...result,
+          diagnostics: {
+            ...result.diagnostics,
+            memory_maintenance: {
+              maintenance_ref: 'b_maintenance_event_001',
+              kind: 'experience_extraction',
+              status,
+              role_id: input.role_id,
+              buffer_seq: 1,
+              experiences: [],
+              skills: [],
+              warnings: [],
+            },
+          },
+        };
+      },
+    };
+
+    const result = await runFlow({ agentExecutionFacade });
+    const eventLog = (await readJson(`.newide/runs/${result.run_id}/event-log.json`)) as Array<{
+      event_type?: string;
+      subject_id?: string;
+    }>;
+
+    expect(eventLog).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event_type: eventType,
+          subject_id: 'b_maintenance_event_001',
+        }),
+      ]),
+    );
+  });
+
   it('completes a successful response-only Agent execution without changed files', async () => {
     const agentExecutionFacade: AgentExecutionFacade = {
       async runAgent(input) {

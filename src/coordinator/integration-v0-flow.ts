@@ -528,6 +528,22 @@ export async function runIntegrationV0Flow(
       },
     });
     timeline.push({ name: 'AgentExecutionCompleted', id: agentExecutionEvent.event_id });
+
+    const memoryMaintenance = agentExecutionResult.diagnostics.memory_maintenance;
+    if (memoryMaintenance && typeof memoryMaintenance === 'object') {
+      const maintenance = memoryMaintenance as Record<string, unknown>;
+      const maintenanceEvent = orchestrator.appendEvent({
+        event_type: memoryMaintenanceEventType(maintenance.status),
+        subject_id:
+          typeof maintenance.maintenance_ref === 'string'
+            ? maintenance.maintenance_ref
+            : agentExecutionResult.agent_run_id,
+        run_id: run.run_id,
+        task_id: task.task_id,
+        payload: { ...maintenance },
+      });
+      timeline.push({ name: 'MemoryMaintenanceRecorded', id: maintenanceEvent.event_id });
+    }
   }
 
   // 9. Mailbox: send driver.completed
@@ -1280,6 +1296,23 @@ export async function runIntegrationV0Flow(
     frontend_snapshot: frontendSnapshot,
     result_manifest: resultManifest,
   };
+}
+
+function memoryMaintenanceEventType(status: unknown): string {
+  switch (status) {
+    case 'scheduled':
+      return 'memory.maintenance_scheduled';
+    case 'running':
+      return 'memory.maintenance_running';
+    case 'completed':
+      return 'memory.maintenance_completed';
+    case 'skipped':
+      return 'memory.maintenance_skipped';
+    case 'failed':
+      return 'memory.maintenance_failed';
+    default:
+      return 'memory.maintenance_failed';
+  }
 }
 
 function buildIntegrationFailure(input: {
