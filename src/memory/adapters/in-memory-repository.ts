@@ -181,16 +181,7 @@ async function rankByVectorSimilarity<T extends SkillRecord | ExperienceRecord>(
 
   return scored
     .filter((entry) => entry.similarity >= (options.min_similarity ?? DEFAULT_MIN_SIMILARITY))
-    .sort((left, right) => {
-      const bySimilarity = right.similarity - left.similarity;
-      return bySimilarity || compareCodeUnits(left.item.id, right.item.id);
-    })
+    .sort((left, right) => right.similarity - left.similarity)
     .slice(0, options.top_k)
     .map((entry) => entry.item);
-}
-
-function compareCodeUnits(left: string, right: string): number {
-  if (left < right) return -1;
-  if (left > right) return 1;
-  return 0;
 }

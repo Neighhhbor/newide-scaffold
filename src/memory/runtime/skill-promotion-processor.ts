@@ -21,10 +21,6 @@ export type SkillPromotionHandler = (
   experiences: ExperienceRecord[],
 ) => Promise<PromotionOutcome>;
 
-export interface SkillPromotionPlan {
-  experience_ids: string[];
-}
-
 /** 晋升置信度门槛（与 ruleBasedSkillPromotion 一致） */
 const PROMOTION_CONFIDENCE_THRESHOLD = 0.95;
 /** 高置信度门槛（用于 PromotionTriggerPolicy 的 has_high_confidence 判断） */
@@ -65,51 +61,11 @@ export class SkillPromotionProcessor {
    * @returns 晋升结果列表；未触发时返回空数组
    */
   async checkAndPromote(memory: AgentMemoryScope): Promise<PromotionOutcome[]> {
-    const plan = await this.planPromotions(memory);
-    return this.executePromotionPlan(memory, plan);
-  }
-
-  async planPromotions(memory: AgentMemoryScope): Promise<SkillPromotionPlan> {
     const allExperiences = await memory.listExperiences();
-    return this.planEligiblePromotions(memory, this.filterEligible(allExperiences));
-  }
+    const eligible = this.filterEligible(allExperiences);
 
-  async executePromotionPlan(
-    memory: AgentMemoryScope,
-    plan: SkillPromotionPlan,
-    shouldContinue?: () => boolean,
-  ): Promise<PromotionOutcome[]> {
-    const byId = new Map(
-      (await memory.listExperiences()).map((experience) => [experience.id, experience]),
-    );
-    const results: PromotionOutcome[] = [];
-    for (const experienceId of plan.experience_ids) {
-      if (shouldContinue?.() === false) {
-        throw new Error('Skill promotion stopped at a maintenance boundary');
-      }
-      const experience = byId.get(experienceId);
-      if (!experience) {
-        throw new Error(`Promotion plan Experience not found: ${experienceId}`);
-      }
-      const outcome = await this.promoteOne(memory, experience);
-      if (shouldContinue?.() === false) {
-        throw new Error('Skill promotion stopped at a maintenance boundary');
-      }
-      if (!outcome.skill) {
-        throw new Error(`Promotion plan did not produce a Skill: ${experienceId}`);
-      }
-      results.push(outcome);
-    }
-
-    return results;
-  }
-
-  private async planEligiblePromotions(
-    memory: AgentMemoryScope,
-    eligible: ExperienceRecord[],
-  ): Promise<SkillPromotionPlan> {
     if (eligible.length === 0) {
-      return { experience_ids: [] };
+      return [];
     }
 
     const hasHighConfidence = eligible.some((e) => e.confidence > HIGH_CONFIDENCE_THRESHOLD);
@@ -123,10 +79,17 @@ export class SkillPromotionProcessor {
         last_promotion_at: lastPromotionAt,
       })
     ) {
-      return { experience_ids: [] };
+      return [];
     }
 
-    return { experience_ids: eligible.map((experience) => experience.id).sort() };
+    // 触发晋升
+    const results: PromotionOutcome[] = [];
+    for (const experience of eligible) {
+      const outcome = await this.promoteOne(memory, experience);
+      results.push(outcome);
+    }
+
+    return results;
   }
 
   /**
@@ -136,39 +99,6 @@ export class SkillPromotionProcessor {
     memory: AgentMemoryScope,
     experience: ExperienceRecord,
   ): Promise<PromotionOutcome> {
-    const existingSkill = (await memory.listSkills()).find(
-      (skill) => skill.promoted_from === experience.id,
-    );
-    if (existingSkill) {
-      assertPendingPromotion(memory.role_id, {
-        check: {
-          eligible: true,
-          auto_approved: false,
-          reasons: ['Recovered existing pending Skill promotion'],
-          blocking_rules: [],
-        },
-        skill: existingSkill,
-      });
-      if (experience.promoted_to !== existingSkill.id) {
-        await memory.updateExperience({ ...experience, promoted_to: existingSkill.id });
-      }
-      return {
-        check: {
-          eligible: true,
-          auto_approved: false,
-          reasons: ['Recovered existing pending Skill promotion'],
-          blocking_rules: [],
-        },
-        skill: existingSkill,
-      };
-    }
-
-    if (experience.promoted_to) {
-      throw new Error(
-        `Experience points to a missing promoted Skill: ${experience.id}:${experience.promoted_to}`,
-      );
-    }
-
     const dummyTask = {
       spec: 'skill-promotion',
       task_id: `promotion-${randomUUID()}`,
@@ -177,7 +107,6 @@ export class SkillPromotionProcessor {
     };
 
     const outcome = await this.promote(memory, dummyTask, [experience]);
-    assertPendingPromotion(memory.role_id, outcome);
     return outcome;
   }
 
@@ -213,18 +142,5 @@ export class SkillPromotionProcessor {
     }, null);
 
     return latest;
-  }
-}
-
-function assertPendingPromotion(roleId: string, outcome: PromotionOutcome): void {
-  if (outcome.check.auto_approved) {
-    throw new Error('Skill promotion must not be auto-approved');
-  }
-  if (!outcome.skill) return;
-  if (outcome.skill.review_status !== 'pending') {
-    throw new Error(`Promoted Skill must remain pending: ${outcome.skill.id}`);
-  }
-  if (outcome.skill.agent_id !== roleId) {
-    throw new Error(`Promoted Skill belongs to the wrong Agent: ${outcome.skill.id}`);
   }
 }

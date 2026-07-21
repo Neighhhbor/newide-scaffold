@@ -12,7 +12,6 @@ import {
   type DriverContext,
   type DriverTask,
   type MemoryRetrievalResult,
-  type MemoryMaintenanceQueue,
   type MemoryRepository,
   type ToolCallingClient,
 } from '../memory';
@@ -54,7 +53,6 @@ export interface DriverRuntimeAgentExecutionFacadeOptions {
   bufferRepository: BufferRepository;
   llm: ToolCallingClient;
   evidenceStore?: AgentExecutionEvidenceStore;
-  memoryMaintenance?: MemoryMaintenanceQueue;
 }
 
 interface InvocationContext {
@@ -74,6 +72,7 @@ interface InvocationContext {
 
 const AGENT_SYSTEM_PROMPT = [
   'You execute one role in a Coordinator-managed workflow.',
+  'You may call query_memory before delegating when prior context is useful.',
   'Call invoke_driver exactly once with the complete concrete task.',
   'After invoke_driver returns, do not call more tools. Summarize the result and include "[done]".',
 ].join('\n');
@@ -100,7 +99,6 @@ export class DriverRuntimeAgentExecutionFacade
 
   private createManager(): Promise<AgentManager> {
     return AgentManager.create(this.options.repository, this.options.bufferRepository, {
-      autoInjectQueryMemoryTool: false,
       tools: {
         llm: {
           completeWithTools: (input) => this.completeWithTools(input),
@@ -219,11 +217,10 @@ export class DriverRuntimeAgentExecutionFacade
     const existing = this.roleReady.get(role_id);
     if (existing) return existing;
 
-    const creating = this.manager
+    const manager = this.invalidatedRoles.has(role_id) ? this.createManager() : this.manager;
+    const creating = manager
       .then(async (manager) => {
-        if (this.invalidatedRoles.has(role_id)) {
-          await manager.reloadAgent(role_id);
-        } else if (!manager.getAgent(role_id)) {
+        if (!manager.getAgent(role_id)) {
           await manager.createAgent({ role_id, name: role_id, tags: [] });
         }
         this.invalidatedRoles.delete(role_id);
@@ -326,18 +323,12 @@ export class DriverRuntimeAgentExecutionFacade
     driverAttempts: number,
     driverInvocationContext: DriverRuntimeInvokerInput['driver_context'] | undefined,
   ): Promise<AgentExecutionResult> {
-    const memoryMaintenanceRef = await this.enqueueMemoryMaintenance(
-      input,
-      runtimeRoleId,
-      dispatched.cycle.buffer_seq,
-    );
     if (!execution) {
       return this.buildNoExecutionResult(
         input,
         dispatched,
         runtimeRoleId,
         driverInvocationContext,
-        memoryMaintenanceRef,
       );
     }
 
@@ -391,7 +382,6 @@ export class DriverRuntimeAgentExecutionFacade
       },
       status: mapStatus(dispatched.status, execution.status),
       memory_buffer_ref: contextEvidence.memory_buffer_ref,
-      ...(memoryMaintenanceRef ? { memory_maintenance_ref: memoryMaintenanceRef } : {}),
       created_at: nowTimestamp(),
       schema_version: SCHEMA_VERSION,
     };
@@ -402,7 +392,6 @@ export class DriverRuntimeAgentExecutionFacade
     dispatched: DispatchTaskResult,
     runtimeRoleId: string,
     driverInvocationContext: DriverRuntimeInvokerInput['driver_context'] | undefined,
-    memoryMaintenanceRef: string | undefined,
   ): Promise<AgentExecutionResult> {
     const created_at = nowTimestamp();
     const errorCode = `B_${dispatched.status.toUpperCase()}`;
@@ -457,25 +446,9 @@ export class DriverRuntimeAgentExecutionFacade
       },
       status: dispatched.status === 'cancelled' ? 'cancelled' : 'failed',
       memory_buffer_ref: contextEvidence.memory_buffer_ref,
-      ...(memoryMaintenanceRef ? { memory_maintenance_ref: memoryMaintenanceRef } : {}),
       created_at,
       schema_version: SCHEMA_VERSION,
     };
-  }
-
-  private async enqueueMemoryMaintenance(
-    input: AgentExecutionRequest,
-    runtimeRoleId: string,
-    bufferSeq: number,
-  ): Promise<string | undefined> {
-    if (!this.options.memoryMaintenance || bufferSeq <= 0) return undefined;
-    const receipt = await this.options.memoryMaintenance.enqueue({
-      role_id: runtimeRoleId,
-      buffer_seq: bufferSeq,
-      task_id: input.task_id,
-      run_id: input.run_id,
-    });
-    return receipt.ref;
   }
 
   private async persistContextEvidence(

@@ -17,59 +17,11 @@ import {
 import {
   InMemoryBufferRepository,
   InMemoryRepository,
-  type MemoryMaintenanceQueue,
   type ToolCallingClient,
 } from '../../src/memory';
 import type { ExperienceRecord, SkillRecord } from '../../src/memory/schemas';
 
 describe('DriverRuntimeAgentExecutionFacade', () => {
-  it('returns a maintenance ref only after the BufferSnapshot is durable', async () => {
-    const buffer = new InMemoryBufferRepository();
-    const enqueued: Parameters<MemoryMaintenanceQueue['enqueue']>[0][] = [];
-    const maintenance: MemoryMaintenanceQueue = {
-      async enqueue(input) {
-        expect(await buffer.getPendingBuffer(input.role_id, input.buffer_seq)).toBeDefined();
-        enqueued.push(input);
-        return { ref: 'memory_maintenance_test_001' };
-      },
-    };
-    const { facade } = createFacade(
-      new CapturingDriver('succeeded'),
-      buffer,
-      invokeDriverLlm(),
-      new InMemoryRepository(),
-      maintenance,
-    );
-
-    const result = await facade.runAgent(request('task_maintenance', 'proposer_a'));
-
-    expect(enqueued).toEqual([
-      {
-        role_id: 'proposer_a',
-        buffer_seq: 1,
-        task_id: 'task_maintenance',
-        run_id: 'run_task_maintenance',
-      },
-    ]);
-    expect(result.memory_maintenance_ref).toBe('memory_maintenance_test_001');
-  });
-
-  it('does not enqueue maintenance for a non-durable zero sequence', async () => {
-    const enqueue = vi.fn<MemoryMaintenanceQueue['enqueue']>();
-    const { facade } = createFacade(
-      new CapturingDriver('succeeded'),
-      new ZeroSequenceBufferRepository(),
-      invokeDriverLlm(),
-      new InMemoryRepository(),
-      { enqueue },
-    );
-
-    const result = await facade.runAgent(request('task_zero_sequence', 'proposer_a'));
-
-    expect(enqueue).not.toHaveBeenCalled();
-    expect(result.memory_maintenance_ref).toBeUndefined();
-  });
-
   it('runs the real driver through the public B runtime and preserves the execution result', async () => {
     const driver = new CapturingDriver('succeeded');
     const { facade, buffer } = createFacade(driver);
@@ -112,7 +64,7 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
     });
   });
 
-  it('exposes invoke_driver without the non-cancellable query_memory tool', async () => {
+  it('preserves B-owned query_memory alongside the app-owned driver tool', async () => {
     const exposedTools: string[][] = [];
     const delegate = invokeDriverLlm();
     const llm: ToolCallingClient = {
@@ -129,7 +81,7 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
 
     await facade.runAgent(request('task_tool_surface', 'tool_surface_role'));
 
-    expect(exposedTools[0]).toEqual(['invoke_driver']);
+    expect(exposedTools[0]).toEqual(['query_memory', 'invoke_driver']);
   });
 
   it('registers and projects a market candidate without executing A', async () => {
@@ -620,7 +572,7 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
     expect((await buffer.getBufferMeta('proposer_a')).total_processed).toBe(0);
   });
 
-  it('recovers a cancelled role inside the canonical manager', async () => {
+  it('recovers a cancelled role by rebuilding the app-owned manager instance', async () => {
     const roleId = 'canonical_recovery_role';
     const repository = new CountingManagerLoadRepository();
     const driver = new AbortOnceDriver();
@@ -651,7 +603,7 @@ describe('DriverRuntimeAgentExecutionFacade', () => {
       agent_id: roleId,
       memory_buffer_ref: `${roleId}:1`,
     });
-    expect(repository.managerLoadCount).toBe(1);
+    expect(repository.managerLoadCount).toBe(2);
   });
 
   it('continues a queued role execution after the active execution is aborted', async () => {
@@ -752,7 +704,6 @@ function createFacade(
   buffer: InMemoryBufferRepository = new InMemoryBufferRepository(),
   llm: ToolCallingClient = invokeDriverLlm(),
   repository: InMemoryRepository = new InMemoryRepository(),
-  memoryMaintenance?: MemoryMaintenanceQueue,
 ) {
   return {
     facade: new DriverRuntimeAgentExecutionFacade({
@@ -760,19 +711,9 @@ function createFacade(
       repository,
       bufferRepository: buffer,
       llm,
-      ...(memoryMaintenance ? { memoryMaintenance } : {}),
     }),
     buffer,
   };
-}
-
-class ZeroSequenceBufferRepository extends InMemoryBufferRepository {
-  override async saveBufferSnapshot(
-    ...args: Parameters<InMemoryBufferRepository['saveBufferSnapshot']>
-  ): ReturnType<InMemoryBufferRepository['saveBufferSnapshot']> {
-    const saved = await super.saveBufferSnapshot(...args);
-    return { ...saved, seq: 0 };
-  }
 }
 
 class FailOnceOnReloadRepository extends InMemoryRepository {

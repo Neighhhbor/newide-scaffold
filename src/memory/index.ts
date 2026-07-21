@@ -42,7 +42,7 @@ export * as schemas from './schemas';
 
 // ════════════════════════════════════════════════════════
 //  2. 存储适配器
-//     生产：SqliteMemoryRepository / PgMemoryRepository + FileBufferRepository
+//     生产：PgMemoryRepository + FileBufferRepository
 //     测试：InMemoryRepository + InMemoryBufferRepository
 // ════════════════════════════════════════════════════════
 
@@ -53,10 +53,6 @@ export {
   type PgMemoryRepositoryOptions,
 } from './adapters/pg-memory-repository';
 export { ensurePgMemorySchema } from './adapters/pg-memory-schema';
-export {
-  SqliteMemoryRepository,
-  type SqliteMemoryRepositoryOptions,
-} from './adapters/sqlite-memory-repository';
 export {
   FileBufferRepository,
   type FileBufferRepositoryOptions,
@@ -148,18 +144,7 @@ export {
 // ════════════════════════════════════════════════════════
 
 export { ExperienceExtractorProcessor } from './runtime/experience-extractor-processor';
-export {
-  SkillPromotionProcessor,
-  type SkillPromotionPlan,
-} from './runtime/skill-promotion-processor';
-export {
-  FileMemoryMaintenanceService,
-  memoryMaintenanceJobPath,
-  memoryMaintenanceRef,
-  type FileMemoryMaintenanceServiceOptions,
-  type MemoryMaintenanceCloseResult,
-  type MemoryMaintenanceJobRecord,
-} from './runtime/file-memory-maintenance-service';
+export { SkillPromotionProcessor } from './runtime/skill-promotion-processor';
 
 // ════════════════════════════════════════════════════════
 //  13. Tool-calling 运行时（Agent loop 工具调用模式）
@@ -236,15 +221,6 @@ export type { SkillMarketPort, SkillMarketSearchResult } from './ports/skill-mar
 export type { AgentContextCleaner, AgentContextCleanInput } from './ports/agent-context-cleaner';
 export type { BufferTriggerPolicy } from './ports/buffer-trigger-policy';
 export type { PromotionTriggerPolicy } from './ports/promotion-trigger-policy';
-export type {
-  MemoryMaintenanceEnqueueRequest,
-  MemoryMaintenanceQueue,
-  MemoryMaintenanceReceipt,
-  MemoryMaintenanceStatus,
-  MemoryMaintenanceStatusQuery,
-  MemoryMaintenanceStatusView,
-} from './ports/memory-maintenance-queue';
-export { MEMORY_MAINTENANCE_STATUSES } from './ports/memory-maintenance-queue';
 export type {
   AgentBoardQuery,
   AgentBoardListItem,

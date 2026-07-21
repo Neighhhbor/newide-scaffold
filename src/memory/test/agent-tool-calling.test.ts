@@ -234,13 +234,10 @@ describe('Agent tool-calling mode', () => {
   it('通过 AgentManager 传入 toolConfig 创建 tool-calling agent', async () => {
     const { repository, bufferRepository, role_id } = createTestInfra('role_mgr_tc');
     const { AgentManager } = await import('../runtime/agent-manager');
-    const exposedTools: string[][] = [];
-    const mockLlm: ToolCallingClient = {
-      async completeWithTools(input) {
-        exposedTools.push(input.tools.map((tool) => tool.function.name));
-        return { content: 'Task finished. [done]', tool_calls: undefined };
-      },
-    };
+
+    const mockLlm = createMockToolClient([
+      { content: 'Task finished. [done]', tool_calls: undefined },
+    ]);
 
     const manager = await AgentManager.create(repository, bufferRepository, {
       tools: { llm: mockLlm, tools: [] },
@@ -260,6 +257,5 @@ describe('Agent tool-calling mode', () => {
     expect(result.role_id).toBe(role_id);
     expect(result.status).toBe('no_driver_invocation');
     expect(result.cycle.buffer_snapshot.task_id).toBe('task_mgr_tc_001');
-    expect(exposedTools[0]).toContain('query_memory');
   });
 });

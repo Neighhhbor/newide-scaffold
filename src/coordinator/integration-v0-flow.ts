@@ -520,9 +520,6 @@ export async function runIntegrationV0Flow(
         status: agentExecutionResult.status,
         context_pack_ref: agentExecutionResult.context_pack_ref,
         memory_buffer_ref: agentExecutionResult.memory_buffer_ref,
-        ...(agentExecutionResult.memory_maintenance_ref
-          ? { memory_maintenance_ref: agentExecutionResult.memory_maintenance_ref }
-          : {}),
         driver_run_result_id: agentExecutionResult.driver_run_result_id,
         session_id: agentExecutionResult.session_id,
         artifact_refs: agentExecutionResult.artifact_refs.map((artifact) => artifact.artifact_id),

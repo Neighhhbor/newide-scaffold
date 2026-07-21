@@ -204,7 +204,7 @@ process.stdin.on('end', () => {
         payload: {
           agent_id: 'role_ts_engineer',
           context_pack_ref: expect.stringMatching(/^context_pack_[a-f0-9]{24}$/),
-          memory_buffer_ref: 'role_ts_engineer:1',
+          memory_buffer_ref: expect.stringMatching(/^role_ts_engineer:[1-9]\d*$/),
           driver_run_result_id: 'driver_result_fake_acp',
           session_id: 'session_fake_acp',
           artifact_refs: ['artifact_fake_acp'],

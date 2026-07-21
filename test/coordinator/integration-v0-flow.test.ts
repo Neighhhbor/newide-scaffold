@@ -748,7 +748,6 @@ describe('runIntegrationV0Flow', () => {
           },
           status: 'completed',
           memory_buffer_ref: 'memory_buffer_001',
-          memory_maintenance_ref: 'memory_maintenance_001',
           created_at: new Date().toISOString(),
           schema_version: SCHEMA_VERSION,
         };
@@ -815,36 +814,9 @@ describe('runIntegrationV0Flow', () => {
           subject_id: 'agent_run_001',
           run_id: result.run_id,
           task_id: result.task_id,
-          payload: expect.objectContaining({
-            memory_maintenance_ref: 'memory_maintenance_001',
-          }),
         }),
       ]),
     );
-  });
-
-  it('publishes the memory maintenance ref in Agent completion evidence', async () => {
-    const delegate = successfulAgentFacade([]);
-    const agentExecutionFacade: AgentExecutionFacade = {
-      async runAgent(input, options) {
-        return {
-          ...(await delegate.runAgent(input, options)),
-          memory_maintenance_ref: 'memory_maintenance_event_001',
-        };
-      },
-    };
-
-    const result = await runFlow({ agentExecutionFacade });
-    const eventLog = (await readJson(`.newide/runs/${result.run_id}/event-log.json`)) as Array<{
-      event_type?: string;
-      payload?: Record<string, unknown>;
-    }>;
-
-    expect(
-      eventLog.find((event) => event.event_type === 'agent.execution_completed'),
-    ).toMatchObject({
-      payload: { memory_maintenance_ref: 'memory_maintenance_event_001' },
-    });
   });
 
   it('dispatches an ordinary task to the persisted AgentMarket winner', async () => {

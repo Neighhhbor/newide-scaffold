@@ -53,7 +53,6 @@ function createAgentExecutionResult(input: AgentExecutionRequest): AgentExecutio
     diagnostics: { driver_id: 'driver_001' },
     status: 'completed',
     memory_buffer_ref: 'memory_buffer_001',
-    memory_maintenance_ref: 'memory_maintenance_001',
     created_at: '2026-07-07T00:00:00.000Z',
     schema_version: SCHEMA_VERSION,
   };
