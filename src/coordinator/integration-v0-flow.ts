@@ -990,8 +990,16 @@ export async function runIntegrationV0Flow(
       : [...materializationResult.changed_files];
   const hasChangedFiles = workspaceChangedFiles.length > 0 || hasMaterializedChanges;
   const responseOnlyCompleted = !hasChangedFiles && !hasMaterializableArtifact && hasResponse;
+  const driverRecoveredByCouncil =
+    !driverSucceeded &&
+    selectionResult.council_result !== undefined &&
+    councilDelivery !== undefined &&
+    materializationResult.status === 'completed' &&
+    hasChangedFiles;
   const flowCompleted =
-    driverSucceeded && gatesPassed && (hasChangedFiles || responseOnlyCompleted);
+    (driverSucceeded || driverRecoveredByCouncil) &&
+    gatesPassed &&
+    (hasChangedFiles || responseOnlyCompleted);
   const outcome: IntegrationV0Summary['outcome'] = flowCompleted
     ? hasChangedFiles
       ? 'completed_files'
@@ -1005,6 +1013,7 @@ export async function runIntegrationV0Flow(
     hasMaterializableArtifact,
     hasResponse,
     hasChangedFiles,
+    driverRecoveredByCouncil,
     materializationResult,
   });
 
@@ -1034,7 +1043,8 @@ export async function runIntegrationV0Flow(
   if (hasResponse) doneSteps.push('agent response available');
 
   const blockedOn: string[] = [];
-  if (!driverSucceeded) blockedOn.push('driver execution failed');
+  if (!driverSucceeded && !driverRecoveredByCouncil) blockedOn.push('driver execution failed');
+  if (driverRecoveredByCouncil) doneSteps.push('driver failure recovered by Council delivery');
   if (!gatesPassed) blockedOn.push('gates blocked or not evaluated');
   if (!hasChangedFiles && !hasResponse) blockedOn.push('no deliverable output');
   if (hasMaterializableArtifact && !hasMaterializedChanges && workspaceChangedFiles.length === 0) {
@@ -1323,9 +1333,10 @@ function buildIntegrationFailure(input: {
   hasMaterializableArtifact: boolean;
   hasResponse: boolean;
   hasChangedFiles: boolean;
+  driverRecoveredByCouncil: boolean;
   materializationResult: MaterializationResult;
 }): IntegrationV0Failure | undefined {
-  if (input.driverResult.status !== 'succeeded') {
+  if (input.driverResult.status !== 'succeeded' && !input.driverRecoveredByCouncil) {
     return {
       code: 'DRIVER_FAILED',
       message: input.driverResult.error?.message ?? 'Driver execution failed',
