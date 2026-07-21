@@ -11,6 +11,9 @@ coverage/
 .env.*
 !.env.example
 
+# 本地读码/Agent 交接笔记，不入仓
+agent_context.json
+
 # 本地状态 / 会话转储 / 归档
 .newide/
 *.session.json

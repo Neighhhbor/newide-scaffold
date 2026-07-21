@@ -55,9 +55,25 @@ function createRunId(instanceId: string): string {
   return `${stamp}_${instanceId}`;
 }
 
+function resolveInstanceDatasetPath(
+  manifest: ReturnType<typeof loadManifest>,
+  options: Pick<RunInstanceOptions, 'datasetPath' | 'datasetSubset'>,
+): string {
+  if (options.datasetPath?.trim()) {
+    return resolveDatasetJsonl(manifest, options.datasetPath);
+  }
+  if (options.datasetSubset) {
+    const subset = loadDatasetSubset(manifest, options.datasetSubset);
+    if (subset.source_jsonl?.trim()) {
+      return resolveDatasetJsonl(manifest, subset.source_jsonl);
+    }
+  }
+  return resolveDatasetJsonl(manifest);
+}
+
 export async function runEvalInstance(options: RunInstanceOptions): Promise<RunInstanceResult> {
   const manifest = loadManifest();
-  const datasetPath = resolveDatasetJsonl(manifest, options.datasetPath);
+  const datasetPath = resolveInstanceDatasetPath(manifest, options);
   const instances = indexDatasetById(await loadDataset(datasetPath));
   const instance = getInstanceOrThrow(instances, options.instanceId);
 
@@ -231,6 +247,7 @@ export async function runEvalSmoke(options: RunSmokeOptions = {}): Promise<RunIn
   const subsetId = options.datasetSubset ?? manifest.default_subset ?? 'v0-smoke';
   const subset = options.instanceIds ? undefined : loadDatasetSubset(manifest, subsetId);
   const instanceIds = options.instanceIds ?? subset?.instance_ids ?? manifest.smoke_instance_ids;
+  const datasetPath = options.datasetPath?.trim() || subset?.source_jsonl?.trim() || undefined;
   const runId = options.runId ?? `smoke_${new Date().toISOString().replace(/[:.]/g, '-')}`;
   const results: RunInstanceResult[] = [];
 
@@ -251,8 +268,8 @@ export async function runEvalSmoke(options: RunSmokeOptions = {}): Promise<RunIn
     if (options.modelName) {
       instanceOptions.modelName = options.modelName;
     }
-    if (options.datasetPath) {
-      instanceOptions.datasetPath = options.datasetPath;
+    if (datasetPath) {
+      instanceOptions.datasetPath = datasetPath;
     }
     if (options.datasetSubset) {
       instanceOptions.datasetSubset = options.datasetSubset;
