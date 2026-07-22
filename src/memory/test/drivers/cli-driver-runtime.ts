@@ -54,6 +54,11 @@ export interface CliDriverRuntimeOptions {
   timeoutMs?: number;
   /** Driver ID（默认 'cli-driver'） */
   driverId?: string;
+  /**
+   * CLI 进程的工作目录。必须设置，否则默认 process.cwd() 会导致 AI driver
+   * 生成的文件污染项目根目录。集成测试应传入临时目录并在测试后清理。
+   */
+  cwd: string;
 }
 
 // ──────────────────────────────────────────────
@@ -75,17 +80,19 @@ export class CliDriverRuntime implements DriverRuntimeHandle {
   private readonly args: readonly string[];
   private readonly promptArgs: string[];
   private readonly timeoutMs: number;
+  private readonly cwd: string;
   /** 最近一次 CLI 输出的原始文本 */
   private lastStdout = '';
   private lastTaskId = '';
 
-  constructor(options?: CliDriverRuntimeOptions) {
+  constructor(options: CliDriverRuntimeOptions) {
     this.driver_id = options?.driverId ?? 'cli-driver';
     this.session_id = `${this.driver_id}:session`;
     this.cliCommand = options?.cliCommand ?? 'claude';
     this.args = options?.args ?? [];
     this.promptArgs = options?.promptArgs ?? [];
     this.timeoutMs = options?.timeoutMs ?? 120_000;
+    this.cwd = options.cwd;
   }
 
   /**
@@ -107,6 +114,7 @@ export class CliDriverRuntime implements DriverRuntimeHandle {
         // 用 spawnSync 避免 shell 转义问题
         const args = [...this.args, ...this.promptArgs, input.prompt];
         const spawned = spawnSync(this.cliCommand, args, {
+          cwd: this.cwd,
           encoding: 'utf-8',
           timeout: this.timeoutMs,
           maxBuffer: 1024 * 1024,
@@ -121,6 +129,7 @@ export class CliDriverRuntime implements DriverRuntimeHandle {
       } else {
         // CLI 通过 stdin 接收 prompt（默认，如 claude）
         const spawned = spawnSync(this.cliCommand, [...this.args], {
+          cwd: this.cwd,
           input: input.prompt,
           encoding: 'utf-8',
           timeout: this.timeoutMs,

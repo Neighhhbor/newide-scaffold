@@ -9,7 +9,9 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { LiteLLMClient } from '../../../litellm/contract';
 import { LiteLLMEmbeddingProvider } from '../../adapters/litellm-embedding-provider';
+import { cosineSimilarity } from '../../utils/vector';
 
 // ──────────────────────────────────────────────
 // .env 加载
@@ -47,7 +49,8 @@ const hasKey = !!(
 const suite = hasKey ? describe : describe.skip;
 
 suite('LiteLLMEmbeddingProvider 基础验证', () => {
-  const provider = new LiteLLMEmbeddingProvider();
+  const client = new LiteLLMClient().loadConfig();
+  const provider = new LiteLLMEmbeddingProvider(client);
 
   it('embed() 返回正确维度的向量', async () => {
     const input = '你好世界';
@@ -75,7 +78,7 @@ suite('LiteLLMEmbeddingProvider 基础验证', () => {
     const text = '机器学习是人工智能的子领域';
     const a = await provider.embed(text);
     const b = await provider.embed(text);
-    const sim = provider.cosineSimilarity(a, b);
+    const sim = cosineSimilarity(a, b);
     console.log(`\n📝 输入A: "${text}"`);
     console.log(`📝 输入B: "${text}"`);
     console.log(`📈 cosineSimilarity: ${sim.toFixed(6)}`);
@@ -91,8 +94,8 @@ suite('LiteLLMEmbeddingProvider 基础验证', () => {
     const vecB = await provider.embed(textB);
     const vecC = await provider.embed(textC);
 
-    const simRelated = provider.cosineSimilarity(vecA, vecB);
-    const simUnrelated = provider.cosineSimilarity(vecA, vecC);
+    const simRelated = cosineSimilarity(vecA, vecB);
+    const simUnrelated = cosineSimilarity(vecA, vecC);
 
     console.log(`\n📝 A: "${textA}"`);
     console.log(`📝 B: "${textB}" (语义相近)`);

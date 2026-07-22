@@ -9,10 +9,11 @@
  * 需要本地安装 claude 命令行工具（无需 API key）。
  * 无 claude 命令时自动跳过。
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { execSync } from 'node:child_process';
-import { readFileSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolve, join } from 'node:path';
 import { AgentManager } from '../../runtime/agent-manager';
 import { InMemoryRepository } from '../../adapters/in-memory-repository';
 import { InMemoryBufferRepository } from '../../adapters/in-memory-buffer-repository';
@@ -80,6 +81,20 @@ describe('Agent loop with real LLM Driver (Claude CLI)', () => {
     console.warn(`⚠ 缺少依赖: ${missing.join(', ')} — real LLM driver test 已跳过。`);
   }
 
+  // 临时工作目录：避免 AI driver 生成的文件污染项目根目录
+  const tempDir = mkdtempSync(join(tmpdir(), 'newide-real-driver-test-'));
+  const originalAcpWorkspace = process.env.ACP_WORKSPACE;
+  process.env.ACP_WORKSPACE = tempDir;
+
+  afterAll(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+    if (originalAcpWorkspace) {
+      process.env.ACP_WORKSPACE = originalAcpWorkspace;
+    } else {
+      delete process.env.ACP_WORKSPACE;
+    }
+  });
+
   /**
    * 端到端集成测试：
    *
@@ -106,7 +121,7 @@ describe('Agent loop with real LLM Driver (Claude CLI)', () => {
       let driverCallCount = 0;
       let lastDriverInstruction = '';
 
-      const driverHandler = createLlmDriver({ mode: 'cli' });
+      const driverHandler = createLlmDriver({ mode: 'cli', cwd: tempDir });
 
       const driverTool = new InvokeDriverTool(async (task) => {
         driverCallCount++;

@@ -30,6 +30,8 @@ import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
 import { LiteLLMEmbeddingProvider } from '../../adapters/litellm-embedding-provider';
+import { LiteLLMClient } from '../../../litellm/contract';
+import { cosineSimilarity } from '../../utils/vector';
 import { PgMemoryRepository } from '../../adapters/pg-memory-repository';
 import { ensurePgMemorySchema } from '../../adapters/pg-memory-schema';
 import { FileBufferRepository } from '../../adapters/file-buffer-repository';
@@ -168,7 +170,8 @@ let fileRepo: FileBufferRepository;
 describeE2E('Real Embedding Provider E2E (PG + LiteLLM)', () => {
   beforeAll(async () => {
     // 真实 Embedding Provider
-    embedding = new LiteLLMEmbeddingProvider();
+    const embedClient = new LiteLLMClient().loadConfig();
+    embedding = new LiteLLMEmbeddingProvider(embedClient);
 
     // PG 连接 + schema 创建（使用真实 embedding 维度）
     pool = new Pool({ connectionString: pgTestUrl });
@@ -211,11 +214,11 @@ describeE2E('Real Embedding Provider E2E (PG + LiteLLM)', () => {
     const vecC = await embedding.embed('database migration with PostgreSQL');
 
     // 语义相似的句子应有较高相似度
-    const simSimilar = embedding.cosineSimilarity(vecA, vecB);
+    const simSimilar = cosineSimilarity(vecA, vecB);
     expect(simSimilar).toBeGreaterThan(0.5);
 
     // 语义不相关的句子应有较低相似度
-    const simDissimilar = embedding.cosineSimilarity(vecA, vecC);
+    const simDissimilar = cosineSimilarity(vecA, vecC);
     expect(simDissimilar).toBeLessThan(simSimilar);
   }, 60_000);
 
@@ -370,8 +373,8 @@ describeE2E('Real Embedding Provider E2E (PG + LiteLLM)', () => {
     const realVec1 = await embedding.embed(text1);
     const realVec2 = await embedding.embed(text2);
     const realVec3 = await embedding.embed(text3);
-    const realSimSimilar = embedding.cosineSimilarity(realVec1, realVec2);
-    const realSimDissimilar = embedding.cosineSimilarity(realVec1, realVec3);
+    const realSimSimilar = cosineSimilarity(realVec1, realVec2);
+    const realSimDissimilar = cosineSimilarity(realVec1, realVec3);
 
     // 语义相似的应该比不相关的更相似
     expect(realSimSimilar).toBeGreaterThan(realSimDissimilar);

@@ -23,6 +23,7 @@ import { PgMemoryRepository } from '../../adapters/pg-memory-repository';
 import { ensurePgMemorySchema } from '../../adapters/pg-memory-schema';
 import { FileBufferRepository } from '../../adapters/file-buffer-repository';
 import { LiteLLMEmbeddingProvider } from '../../adapters/litellm-embedding-provider';
+import { LiteLLMClient } from '../../../litellm/contract';
 import { RuleBasedExperienceExtractor } from '../../adapters/rule-based-experience-extractor';
 import { createAgentMemoryScope } from '../../adapters/agent-memory-scope';
 import { RepositoryAgentBoardQuery } from '../../adapters/agent-board-query';
@@ -422,7 +423,8 @@ suiteFull('E2E: 向量检索验证 (PG + Embedding)', () => {
     pool = new Pool({ connectionString: pgTestUrl });
     repository = new PgMemoryRepository({ pool });
     bufferRepo = new FileBufferRepository({ agentStateRoot: tempDir });
-    embedding = new LiteLLMEmbeddingProvider();
+    const embedClient = new LiteLLMClient().loadConfig();
+    embedding = new LiteLLMEmbeddingProvider(embedClient);
 
     await ensurePgMemorySchema(pool, embedding.dimensions);
     await repository.initializeAgent({

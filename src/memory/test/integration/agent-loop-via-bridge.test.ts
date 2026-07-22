@@ -23,10 +23,11 @@
  * - claude CLI 命令（本地测试用，无需 API key）
  * - DEEPSEEK_API_KEY（LiteLLMToolCallingClient 需要）
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { execSync } from 'node:child_process';
-import { readFileSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolve, join } from 'node:path';
 import { AgentManager } from '../../runtime/agent-manager';
 import { InMemoryRepository } from '../../adapters/in-memory-repository';
 import { InMemoryBufferRepository } from '../../adapters/in-memory-buffer-repository';
@@ -107,6 +108,20 @@ describe('Agent loop via DriverBridge (A-side driver → Bridge → B-side tool)
     console.warn(`⚠ 缺少依赖: ${missing.join(', ')} — Bridge 集成测试已跳过。`);
   }
 
+  // 临时工作目录：避免 AI driver 生成的文件污染项目根目录
+  const tempDir = mkdtempSync(join(tmpdir(), 'newide-bridge-test-'));
+  const originalAcpWorkspace = process.env.ACP_WORKSPACE;
+  process.env.ACP_WORKSPACE = tempDir;
+
+  afterAll(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+    if (originalAcpWorkspace) {
+      process.env.ACP_WORKSPACE = originalAcpWorkspace;
+    } else {
+      delete process.env.ACP_WORKSPACE;
+    }
+  });
+
   /**
    * 端到端集成测试 — 完整 Bridge 管线
    *
@@ -140,6 +155,7 @@ describe('Agent loop via DriverBridge (A-side driver → Bridge → B-side tool)
         args: preferredCli!.includes('kimi') ? [] : ['--dangerously-skip-permissions'],
         promptArgs: preferredCli!.includes('kimi') ? ['-p'] : [],
         driverId: preferredCli!.includes('kimi') ? 'kimi-driver' : 'cli-driver',
+        cwd: tempDir,
       });
 
       const bridge = new DriverBridge({ driver: cliDriver });
