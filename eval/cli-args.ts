@@ -30,12 +30,14 @@ export function buildRunInstanceOptions(args: {
   harnessReportPath?: string;
   patchFile?: string;
   worktreePath?: string;
+  ephemeralFrom?: string;
+  allowDirtyWorktree?: boolean;
+  keepWorktree?: boolean;
   backendSummaryPath?: string;
   runSweEvoHarness: boolean;
   harnessDryRun: boolean;
   sweEvoRoot?: string;
   harnessMaxWorkers?: number;
-  skipScaffold: boolean;
 }): RunInstanceOptions {
   const options: RunInstanceOptions = {
     instanceId: args.instanceId,
@@ -67,6 +69,15 @@ export function buildRunInstanceOptions(args: {
   if (args.worktreePath) {
     options.worktreePath = args.worktreePath;
   }
+  if (args.ephemeralFrom) {
+    options.ephemeralFrom = args.ephemeralFrom;
+  }
+  if (args.allowDirtyWorktree) {
+    options.allowDirtyWorktree = true;
+  }
+  if (args.keepWorktree) {
+    options.keepWorktree = true;
+  }
   if (args.backendSummaryPath) {
     options.backendSummaryPath = args.backendSummaryPath;
   }
@@ -82,9 +93,6 @@ export function buildRunInstanceOptions(args: {
   if (args.harnessMaxWorkers) {
     options.harnessMaxWorkers = args.harnessMaxWorkers;
   }
-  if (args.skipScaffold) {
-    options.skipScaffold = true;
-  }
 
   return options;
 }
@@ -98,7 +106,6 @@ export function buildRunSmokeOptions(args: {
   datasetSubset?: string;
   outRoot?: string;
   patchFile?: string;
-  skipScaffold: boolean;
 }): RunSmokeOptions {
   const options: RunSmokeOptions = {
     predictionMode: args.mode,
@@ -122,9 +129,6 @@ export function buildRunSmokeOptions(args: {
   }
   if (args.patchFile) {
     options.patchFile = args.patchFile;
-  }
-  if (args.skipScaffold) {
-    options.skipScaffold = true;
   }
 
   return options;

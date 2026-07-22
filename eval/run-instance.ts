@@ -6,7 +6,13 @@ async function main(): Promise<void> {
   const instanceId = readFlag('--instance-id');
   if (!instanceId) {
     console.error(
-      'Usage: pnpm eval:instance -- --instance-id <id> [--mode stub|oracle|real] [--patch-file <path> | --worktree-path <dir> | --backend-summary <summary.json>] [--run-harness] [--harness-dry-run] [--swe-evo-root <dir>] [--max-workers 4] [--ablation B0|B1|B2|B3] [--subset <id>] [--run-id <id>] [--skip-scaffold] [--harness-report <path>]',
+      [
+        'Usage: pnpm eval:instance -- --instance-id <id> [--mode stub|oracle|real]',
+        '[--patch-file <path> | --worktree-path <dir> | --backend-summary <summary.json> | --ephemeral-from <repo>]',
+        '[--allow-dirty-worktree] [--keep-worktree]',
+        '[--run-harness] [--harness-dry-run] [--swe-evo-root <dir>] [--max-workers 4]',
+        '[--ablation B0|B1|B2|B3] [--subset <id>] [--run-id <id>] [--model <name>] [--harness-report <path>]',
+      ].join(' '),
     );
     process.exitCode = 1;
     return;
@@ -20,7 +26,6 @@ async function main(): Promise<void> {
       instanceId,
       mode,
       ablation,
-      skipScaffold: hasFlag('--skip-scaffold'),
       ...(readFlag('--run-id') ? { runId: readFlag('--run-id')! } : {}),
       ...(readFlag('--model') ? { modelName: readFlag('--model')! } : {}),
       ...(readFlag('--dataset') ? { datasetPath: readFlag('--dataset')! } : {}),
@@ -29,6 +34,9 @@ async function main(): Promise<void> {
       ...(readFlag('--harness-report') ? { harnessReportPath: readFlag('--harness-report')! } : {}),
       ...(readFlag('--patch-file') ? { patchFile: readFlag('--patch-file')! } : {}),
       ...(readFlag('--worktree-path') ? { worktreePath: readFlag('--worktree-path')! } : {}),
+      ...(readFlag('--ephemeral-from') ? { ephemeralFrom: readFlag('--ephemeral-from')! } : {}),
+      allowDirtyWorktree: hasFlag('--allow-dirty-worktree'),
+      keepWorktree: hasFlag('--keep-worktree'),
       ...(readFlag('--backend-summary')
         ? { backendSummaryPath: readFlag('--backend-summary')! }
         : {}),
@@ -50,6 +58,9 @@ async function main(): Promise<void> {
     console.log(`[F-Eval] harness_command=${result.harness.commandPath}`);
     console.log(`[F-Eval] harness_report=${result.harness.harnessReportPath}`);
   }
+  console.log(
+    `[F-Eval] resolved=${result.summary.resolved_count} applied=${result.summary.applied_count} unresolved=${result.summary.unresolved_count}`,
+  );
 }
 
 function readPositiveInteger(flag: string): number {

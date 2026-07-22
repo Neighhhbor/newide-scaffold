@@ -1,14 +1,8 @@
 export type MemoryAblation = 'B0' | 'B1' | 'B2' | 'B3';
 
-export type PredictionMode = 'stub' | 'oracle' | 'gold' | 'real';
+export type PredictionMode = 'stub' | 'oracle' | 'real';
 
-export type PatchSource =
-  | 'stub'
-  | 'oracle'
-  | 'model_patch'
-  | 'patch_file'
-  | 'worktree_git_diff'
-  | 'harness_import';
+export type PatchSource = 'stub' | 'oracle' | 'patch_file' | 'worktree_git_diff' | 'harness_import';
 
 export interface EvalDatasetSubset {
   subset_id: string;
@@ -25,7 +19,8 @@ export interface EvalManifest {
   dataset_jsonl: string;
   dataset_hf_dir?: string;
   default_subset?: string;
-  smoke_instance_ids: string[];
+  /** @deprecated Prefer `subsets` + `default_subset`; kept optional for unit fixtures. */
+  smoke_instance_ids?: string[];
   subsets?: Record<string, string>;
   default_model_name: string;
 }
@@ -75,7 +70,6 @@ export interface EvalRunMeta {
   worktree_path?: string;
   backend_summary_path?: string;
   started_at: string;
-  scaffold_baseline: boolean;
 }
 
 export interface EvalSummary {

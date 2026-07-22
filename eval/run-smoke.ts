@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { buildRunSmokeOptions, hasFlag, readFlag, runEvalSmoke } from './cli-args';
+import { buildRunSmokeOptions, readFlag, runEvalSmoke } from './cli-args';
 import { parseMemoryAblation, parsePredictionMode } from './validation';
 
 async function main(): Promise<void> {
@@ -10,7 +10,6 @@ async function main(): Promise<void> {
     buildRunSmokeOptions({
       mode,
       ablation,
-      skipScaffold: hasFlag('--skip-scaffold'),
       ...(readFlag('--run-id') ? { runId: readFlag('--run-id')! } : {}),
       ...(readFlag('--model') ? { modelName: readFlag('--model')! } : {}),
       ...(readFlag('--dataset') ? { datasetPath: readFlag('--dataset')! } : {}),

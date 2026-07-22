@@ -17,11 +17,13 @@ export function buildPrediction(
   realPatch?: string,
 ): SweBenchPrediction {
   let model_patch: string;
-  if (mode === 'oracle' || mode === 'gold') {
+  if (mode === 'oracle') {
     model_patch = instance.patch;
   } else if (mode === 'real') {
     if (!realPatch) {
-      throw new Error('Prediction mode "real" requires --patch-file or a model patch.');
+      throw new Error(
+        'Prediction mode "real" requires --patch-file or a collected worktree patch.',
+      );
     }
     model_patch = realPatch;
   } else {

@@ -1,6 +1,6 @@
 import type { MemoryAblation, PatchSource, PredictionMode } from './types';
 
-const PREDICTION_MODES = ['stub', 'oracle', 'gold', 'real'] as const;
+const PREDICTION_MODES = ['stub', 'oracle', 'real'] as const;
 const MEMORY_ABLATIONS = ['B0', 'B1', 'B2', 'B3'] as const;
 
 export function parsePredictionMode(value: string | undefined): PredictionMode {
@@ -31,8 +31,4 @@ export function describePredictionMode(mode: PredictionMode, patchSource?: Patch
       : 'caller_supplied_model_patch';
   }
   return 'oracle_gold_patch_replay';
-}
-
-export function normalizePredictionMode(mode: PredictionMode): PredictionMode {
-  return mode === 'gold' ? 'oracle' : mode;
 }

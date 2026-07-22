@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { getInstanceReport, hasP2pRegression } from '../../eval/harness-report';
 import { indexDatasetById, loadDataset } from '../../eval/load-dataset';
 import { buildPrediction, writePredictionsJsonl } from '../../eval/prediction-writer';
+import { assertWorktreeClean } from '../../eval/prepare-worktree';
 import { runEvalInstance, runEvalSmoke } from '../../eval/run-instance-core';
 import { runSweEvoHarnessAdapter } from '../../eval/sweevo-harness-adapter';
 import type { SweEvoInstance } from '../../eval/types';
@@ -94,7 +95,7 @@ describe('F eval utilities', () => {
     expect(hasP2pRegression(report)).toBe(true);
   });
 
-  it('runs eval instance with scaffold baseline telemetry and oracle prediction', async () => {
+  it('runs eval instance with oracle prediction without mock scaffold flow', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'f-eval-run-'));
     tempDirs.push(dir);
     const datasetPath = join(dir, 'test.jsonl');
@@ -116,15 +117,10 @@ describe('F eval utilities', () => {
       prediction_semantics: string;
       dataset_manifest_path: string;
     };
-    const telemetryLines = readFileSync(result.summary.telemetry_path, 'utf-8')
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line) as { event_type: string });
 
-    expect(summary.telemetry_event_types).toContain('task.created');
-    expect(summary.telemetry_event_types).toContain('coord.checkpoint_observed');
+    expect(summary.telemetry_event_types).toEqual([]);
     expect(summary.prediction_semantics).toBe('oracle_gold_patch_replay');
-    expect(telemetryLines.some((record) => record.event_type === 'task.created')).toBe(true);
+    expect(readFileSync(result.summary.telemetry_path, 'utf-8')).toBe('');
     expect(readFileSync(summary.dataset_manifest_path, 'utf-8')).toContain(
       SAMPLE_INSTANCE.instance_id,
     );
@@ -145,12 +141,50 @@ describe('F eval utilities', () => {
       runId: 'unit_stub_run',
       datasetPath,
       outRoot,
-      skipScaffold: true,
     });
 
     const predictions = readFileSync(result.summary.predictions_path, 'utf-8');
     expect(result.summary.prediction_mode).toBe('stub');
     expect(predictions).toContain('F-direction pipeline stub');
+  });
+
+  it('folds an existing harness report into summary after predictions', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'f-eval-harness-report-'));
+    tempDirs.push(dir);
+    const datasetPath = join(dir, 'test.jsonl');
+    const outRoot = join(dir, 'runs');
+    const harnessReportPath = join(dir, 'report.json');
+    writeFileSync(datasetPath, `${JSON.stringify(SAMPLE_INSTANCE)}\n`, 'utf-8');
+    writeFileSync(
+      harnessReportPath,
+      JSON.stringify({
+        [SAMPLE_INSTANCE.instance_id]: {
+          resolved: true,
+          patch_successfully_applied: true,
+          tests_status: {
+            FAIL_TO_PASS: { 'tests/test_demo.py::test_fix': 'PASSED' },
+            PASS_TO_PASS: { 'tests/test_demo.py::test_existing': 'PASSED' },
+          },
+        },
+      }),
+      'utf-8',
+    );
+
+    const result = await runEvalInstance({
+      instanceId: SAMPLE_INSTANCE.instance_id,
+      runId: 'unit_harness_fold',
+      datasetPath,
+      outRoot,
+      predictionMode: 'oracle',
+      modelName: 'oracle-check',
+      harnessReportPath,
+    });
+
+    expect(result.summary.resolved_count).toBe(1);
+    expect(result.summary.applied_count).toBe(1);
+    expect(result.summary.unresolved_count).toBe(0);
+    expect(result.summary.harness_report_path).toBe(harnessReportPath);
+    expect(result.summary.telemetry_event_types).toContain('harness.swe_evo_evaluated');
   });
 
   it('collects a backend worktree diff and prepares the SWE-EVO harness automatically', async () => {
@@ -209,7 +243,7 @@ describe('F eval utilities', () => {
       outRoot,
       predictionMode: 'real',
       backendSummaryPath,
-      skipScaffold: true,
+      allowDirtyWorktree: true,
       runSweEvoHarness: true,
       harnessDryRun: true,
       sweEvoRoot: dir,
@@ -288,7 +322,6 @@ describe('F eval utilities', () => {
       datasetPath,
       outRoot,
       instanceIds: [SAMPLE_INSTANCE.instance_id],
-      skipScaffold: true,
       predictionMode: 'stub',
     });
 
@@ -301,5 +334,126 @@ describe('F eval utilities', () => {
       'deterministic_stub_baseline',
     );
     expect(readFileSync(join(runDir, 'telemetry.jsonl'), 'utf-8')).toBe('');
+  });
+
+  it('rejects dirty worktrees unless allowDirtyWorktree is set', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'f-eval-dirty-'));
+    tempDirs.push(dir);
+    const worktreePath = join(dir, 'worktree');
+    const datasetPath = join(dir, 'test.jsonl');
+    const outRoot = join(dir, 'runs');
+    mkdirSync(worktreePath, { recursive: true });
+    execFileSync('git', ['init'], { cwd: worktreePath });
+    writeFileSync(join(worktreePath, 'README.md'), 'before\n', 'utf-8');
+    execFileSync('git', ['add', '.'], { cwd: worktreePath });
+    execFileSync(
+      'git',
+      ['-c', 'user.name=F Eval', '-c', 'user.email=f-eval@example.test', 'commit', '-m', 'base'],
+      { cwd: worktreePath },
+    );
+    const baseCommit = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+    }).trim();
+    writeFileSync(join(worktreePath, 'README.md'), 'dirty\n', 'utf-8');
+
+    const instance = { ...SAMPLE_INSTANCE, base_commit: baseCommit };
+    writeFileSync(datasetPath, `${JSON.stringify(instance)}\n`, 'utf-8');
+    mkdirSync(join(dir, 'eval'), { recursive: true });
+    writeFileSync(
+      join(dir, 'eval', 'manifest.json'),
+      JSON.stringify({
+        dataset_version: 'unit',
+        dataset_jsonl: 'test.jsonl',
+        smoke_instance_ids: [instance.instance_id],
+        default_model_name: 'mock',
+      }),
+      'utf-8',
+    );
+    process.env.NEWIDE_SCAFFOLD_ROOT = dir;
+
+    await expect(assertWorktreeClean(worktreePath)).rejects.toThrow(/Worktree is dirty/);
+
+    await expect(
+      runEvalInstance({
+        instanceId: instance.instance_id,
+        runId: 'dirty_reject',
+        datasetPath,
+        outRoot,
+        predictionMode: 'real',
+        worktreePath,
+      }),
+    ).rejects.toThrow(/Worktree is dirty/);
+  });
+
+  it('seeds an ephemeral worktree from a patch file and collects the diff', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'f-eval-ephemeral-'));
+    tempDirs.push(dir);
+    const sourceRepo = join(dir, 'source');
+    const datasetPath = join(dir, 'test.jsonl');
+    const patchFile = join(dir, 'seed.patch');
+    const outRoot = join(dir, 'runs');
+    mkdirSync(sourceRepo, { recursive: true });
+    execFileSync('git', ['init'], { cwd: sourceRepo });
+    writeFileSync(join(sourceRepo, 'README.md'), 'before\n', 'utf-8');
+    execFileSync('git', ['add', '.'], { cwd: sourceRepo });
+    execFileSync(
+      'git',
+      ['-c', 'user.name=F Eval', '-c', 'user.email=f-eval@example.test', 'commit', '-m', 'base'],
+      { cwd: sourceRepo },
+    );
+    const baseCommit = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: sourceRepo,
+      encoding: 'utf-8',
+    }).trim();
+
+    writeFileSync(
+      patchFile,
+      [
+        'diff --git a/README.md b/README.md',
+        'index 1111111..2222222 100644',
+        '--- a/README.md',
+        '+++ b/README.md',
+        '@@ -1 +1 @@',
+        '-before',
+        '+after',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const instance = { ...SAMPLE_INSTANCE, base_commit: baseCommit };
+    writeFileSync(datasetPath, `${JSON.stringify(instance)}\n`, 'utf-8');
+    mkdirSync(join(dir, 'eval'), { recursive: true });
+    writeFileSync(
+      join(dir, 'eval', 'manifest.json'),
+      JSON.stringify({
+        dataset_version: 'unit',
+        dataset_jsonl: 'test.jsonl',
+        smoke_instance_ids: [instance.instance_id],
+        default_model_name: 'mock',
+      }),
+      'utf-8',
+    );
+    process.env.NEWIDE_SCAFFOLD_ROOT = dir;
+
+    const result = await runEvalInstance({
+      instanceId: instance.instance_id,
+      runId: 'ephemeral_seed',
+      datasetPath,
+      outRoot,
+      predictionMode: 'real',
+      ephemeralFrom: sourceRepo,
+      patchFile,
+    });
+
+    const prediction = JSON.parse(
+      readFileSync(result.summary.predictions_path, 'utf-8').trim(),
+    ) as { model_patch: string };
+    expect(prediction.model_patch).toContain('README.md');
+    expect(prediction.model_patch).toContain('+after');
+    expect(result.summary.patch_source).toBe('worktree_git_diff');
+    // Default cleanup removes the ephemeral repo directory.
+    await expect(assertWorktreeClean(sourceRepo)).resolves.toBeUndefined();
   });
 });
