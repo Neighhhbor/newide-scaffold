@@ -22,6 +22,7 @@ import { Pool } from 'pg';
 import { PgMemoryRepository } from '../../adapters/pg-memory-repository';
 import { ensurePgMemorySchema } from '../../adapters/pg-memory-schema';
 import { FileBufferRepository } from '../../adapters/file-buffer-repository';
+import { HashEmbeddingProvider } from '../../adapters/hash-embedding-provider';
 import { LiteLLMEmbeddingProvider } from '../../adapters/litellm-embedding-provider';
 import { LiteLLMClient } from '../../../litellm/contract';
 import { RuleBasedExperienceExtractor } from '../../adapters/rule-based-experience-extractor';
@@ -156,10 +157,11 @@ suitePg('E2E: FileBuffer → 提取 → PG 入库 → BoardQuery', () => {
 
     console.log(`\n📁 临时状态目录: ${tempDir}`);
 
-    // 2. 连接 PG，建表
+    // 2. 连接 PG，建表（使用 HashEmbeddingProvider 确保写入维度与 schema 一致）
     pool = new Pool({ connectionString: pgTestUrl });
-    repository = new PgMemoryRepository({ pool });
-    await ensurePgMemorySchema(pool, 1024);
+    const hashEmbedding = new HashEmbeddingProvider(1024);
+    repository = new PgMemoryRepository({ pool, embedding: hashEmbedding });
+    await ensurePgMemorySchema(pool, hashEmbedding.dimensions);
 
     // 3. 创建 FileBufferRepository
     bufferRepo = new FileBufferRepository({ agentStateRoot: tempDir });
@@ -421,10 +423,10 @@ suiteFull('E2E: 向量检索验证 (PG + Embedding)', () => {
   beforeAll(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'memory-e2e-vec-'));
     pool = new Pool({ connectionString: pgTestUrl });
-    repository = new PgMemoryRepository({ pool });
-    bufferRepo = new FileBufferRepository({ agentStateRoot: tempDir });
     const embedClient = new LiteLLMClient().loadConfig();
     embedding = new LiteLLMEmbeddingProvider(embedClient);
+    repository = new PgMemoryRepository({ pool, embedding });
+    bufferRepo = new FileBufferRepository({ agentStateRoot: tempDir });
 
     await ensurePgMemorySchema(pool, embedding.dimensions);
     await repository.initializeAgent({
